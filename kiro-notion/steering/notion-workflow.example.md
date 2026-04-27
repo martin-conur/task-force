@@ -25,5 +25,5 @@ Customize these to match your Notion database schema:
 Use the task name as prefix: `<Task name>: <description>`
 
 ### Shell Commands
-- `fd-work <notion-url-or-slug>` — create worktree + zellij tab + worker agent
-- `fd-done` — from within worktree: show diff, print PR command, cleanup
+- `task-work <notion-url-or-slug>` — create worktree + zellij tab + worker agent
+- `task-done` — from within worktree: show diff, print PR command, cleanup

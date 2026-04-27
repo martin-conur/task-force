@@ -1,38 +1,43 @@
-# kiro-agents
+# agentic-workflow
 
-Parallel coding agents for [Kiro CLI](https://kiro.dev) using Notion as task tracker and Zellij as terminal multiplexer.
+Parallel coding agents for terminal-based AI assistants, using task trackers and terminal multiplexers.
 
-Inspired by [How I run 4–8 parallel coding agents](https://schipper.ai/posts/parallel-coding-agents/) — adapted from Claude Code + Jira + tmux to Kiro CLI + Notion + Zellij.
+Inspired by [How I run 4–8 parallel coding agents](https://schipper.ai/posts/parallel-coding-agents/).
 
-## Prerequisites
+## Implementations
+
+| Folder | AI Agent | Task Tracker | Multiplexer |
+|--------|----------|-------------|-------------|
+| `kiro-notion/` | Kiro CLI | Notion | Zellij |
+
+More coming: `claude-notion/`, `claude-jira/`, etc.
+
+## Quick Start (kiro-notion)
+
+### Prerequisites
 
 - [Kiro CLI](https://kiro.dev) with Notion MCP configured
-- [Zellij](https://zellij.dev) terminal multiplexer
-- [gh](https://cli.github.com) (GitHub CLI) for PRs
+- [Zellij](https://zellij.dev)
+- [gh](https://cli.github.com) for PRs
 - Git
 
-## Install
+### Install
 
 ```bash
-git clone <this-repo> ~/kiro-agents
-cd ~/kiro-agents
+git clone <this-repo> ~/agentic-workflow
+cd ~/agentic-workflow/kiro-notion
 ./install.sh
 ```
 
-This symlinks agents to `~/.kiro/agents/` and scripts to `~/.local/bin/`.
-
-## Setup per project
-
-Copy the steering file template into your project:
+### Setup per project
 
 ```bash
 mkdir -p .kiro/steering
-cp ~/kiro-agents/steering/notion-workflow.example.md .kiro/steering/notion-workflow.md
+cp ~/agentic-workflow/kiro-notion/steering/notion-workflow.example.md .kiro/steering/notion-workflow.md
+# Edit with your Notion database IDs
 ```
 
-Edit it with your Notion database IDs (use `notion-fetch` on your board URL to find them).
-
-## Agents
+### Agents
 
 | Agent | Shortcut | Role |
 |-------|----------|------|
@@ -40,19 +45,12 @@ Edit it with your Notion database IDs (use `notion-fetch` on your board URL to f
 | `planner` | `ctrl+shift+l` | Reads code, designs solutions, writes specs to Notion |
 | `worker` | `ctrl+shift+w` | Implements from Notion spec, tests, commits |
 
-## Scripts
+### Scripts
 
-**`fd-work <notion-url-or-slug>`** — Start working on a task:
-- Creates a git worktree + branch (`task/<slug>`)
-- Opens a new Zellij tab
-- Launches `kiro-cli chat --agent worker` in the worktree
+- **`task-work <notion-url-or-slug>`** — Creates worktree + branch, opens Zellij tab, launches worker agent
+- **`task-done`** — Shows diff, prints `gh pr create` command, cleans up worktree + tab
 
-**`fd-done`** — Finish a task (run from within the worktree):
-- Shows diff summary
-- Prints `gh pr create` command
-- Removes worktree and closes Zellij tab
-
-## Workflow
+### Workflow
 
 ```
 Zellij Tab 1 (permanent, main branch):
@@ -62,10 +60,10 @@ Zellij Tab 1 (permanent, main branch):
   "create task for X"                → creates in Notion
   /agent swap planner                → switch to planner
   "plan task X"                      → reads code, writes spec to Notion
-  "start work on task X"             → runs fd-work, new tab appears
+  "start work on task X"             → runs task-work, new tab appears
   /agent swap pm                     → back to PM
 
-Zellij Tab 2+ (auto-created by fd-work):
+Zellij Tab 2+ (auto-created by task-work):
   kiro-cli chat --agent worker       → in worktree, reads spec, implements
-  fd-done                            → PR, cleanup, close tab
+  task-done                          → PR, cleanup, close tab
 ```

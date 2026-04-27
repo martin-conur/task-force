@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: fd-done [--force]"
+  echo "Usage: task-done [--force]"
   echo ""
   echo "Run from within a worktree to:"
   echo "  1. Show the diff and print gh PR command"

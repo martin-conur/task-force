@@ -2,14 +2,14 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: fd-work <notion-task-url-or-slug>"
+  echo "Usage: task-work <notion-task-url-or-slug>"
   echo ""
   echo "Creates a git worktree + branch for a task and opens a new zellij tab"
   echo "with a worker agent."
   echo ""
   echo "Examples:"
-  echo "  fd-work https://www.notion.so/My-Task-abc123def456"
-  echo "  fd-work add-store-filtering"
+  echo "  task-work https://www.notion.so/My-Task-abc123def456"
+  echo "  task-work add-store-filtering"
   exit 1
 }
 
@@ -82,3 +82,4 @@ zellij action new-tab --name "$SLUG"
 launch_kiro "$WORKTREE_DIR" "$SLUG"
 
 echo "Worker started in $WORKTREE_DIR (branch: $BRANCH)"
+"

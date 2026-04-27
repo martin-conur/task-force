@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing kiro-agents..."
+echo "Installing kiro-notion agents..."
 
 # Agents → ~/.kiro/agents/
 mkdir -p ~/.kiro/agents

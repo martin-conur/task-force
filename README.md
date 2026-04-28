@@ -9,8 +9,9 @@ Inspired by [How I run 4–8 parallel coding agents](https://schipper.ai/posts/p
 | Folder | AI Agent | Task Tracker | Multiplexer |
 |--------|----------|-------------|-------------|
 | `kiro-notion/` | Kiro CLI | Notion | Zellij |
+| `claude-jira/` | Claude Code | Jira (Atlassian MCP) | Zellij |
 
-More coming: `claude-notion/`, `claude-jira/`, etc.
+More coming: `claude-notion/`, etc.
 
 ## Quick Start (kiro-notion)
 
@@ -66,4 +67,56 @@ Zellij Tab 1 (permanent, main branch):
 Zellij Tab 2+ (auto-created by task-work):
   kiro-cli chat --agent worker       → in worktree, reads spec, implements
   task-done                          → PR, cleanup, close tab
+```
+
+## Quick Start (claude-jira)
+
+### Prerequisites
+
+- [Claude Code](https://docs.claude.com/claude-code) with the Atlassian Remote MCP configured (`claude mcp list` shows `atlassian`)
+- [Zellij](https://zellij.dev)
+- [gh](https://cli.github.com) for PRs
+- Git
+
+### Install
+
+```bash
+git clone <this-repo> ~/agentic-workflow
+cd ~/agentic-workflow/claude-jira
+./install.sh
+```
+
+This symlinks `pm` / `planner` / `worker` slash commands into `~/.claude/commands/` and `task-work` / `task-done` into `~/.local/bin/`.
+
+### Setup per project
+
+From the repo root:
+
+```bash
+task-init --site https://acme.atlassian.net --key PROJ --board "My Board"
+```
+
+`task-init` creates `.claude/jira-workflow.md` from the template (substituting your values), and adds `@.claude/jira-workflow.md` to `CLAUDE.md` so every Claude Code session auto-loads it. Run with no flags to drop in placeholders you can fill manually, or `--force` to overwrite.
+
+### Roles
+
+| Role | Invocation | Purpose |
+|------|------------|---------|
+| `/pm` | typed in main tab | Backlog grooming, issue creation, prioritization |
+| `/planner` | typed in main tab | Reads code, designs solutions, writes specs into Jira |
+| `/worker` | auto-launched by `task-work` | Implements from Jira spec in an isolated worktree |
+
+### Workflow
+
+```
+Zellij Tab 1 (permanent, main branch):
+  claude
+  /pm show me the backlog              → reads Jira
+  /pm create issue for X
+  /planner plan PROJ-123                → reads code, writes spec to Jira
+  task-work PROJ-123                    → new tab appears
+
+Zellij Tab 2+ (auto-created by task-work):
+  claude "/worker Implement Jira issue: PROJ-123"  → reads spec, implements
+  task-done                                          → PR command, cleanup, close tab
 ```

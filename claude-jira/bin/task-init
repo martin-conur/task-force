@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: task-init [--site URL] [--key PROJ] [--board NAME] [--force]"
+  echo ""
+  echo "Set up the current repo for the claude-jira workflow:"
+  echo "  - Create .claude/jira-workflow.md from the bundled template"
+  echo "  - Substitute site / project key / board name if provided (placeholders left otherwise)"
+  echo "  - Add @.claude/jira-workflow.md to CLAUDE.md so it auto-loads in every session"
+  echo ""
+  echo "Options:"
+  echo "  --site URL       e.g. https://acme.atlassian.net"
+  echo "  --key  PROJ      Jira project key (e.g. ML)"
+  echo "  --board NAME     Board name (quote if it has spaces)"
+  echo "  --force          Overwrite .claude/jira-workflow.md if present"
+  exit 1
+}
+
+SITE=""
+KEY=""
+BOARD=""
+FORCE=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --site)    SITE="$2"; shift 2;;
+    --key)     KEY="$2"; shift 2;;
+    --board)   BOARD="$2"; shift 2;;
+    --force)   FORCE=true; shift;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
+  esac
+done
+
+# Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
+TEMPLATE="$SCRIPT_DIR/../steering/jira-workflow.example.md"
+
+if [[ ! -f "$TEMPLATE" ]]; then
+  echo "Error: template not found at $TEMPLATE"
+  exit 1
+fi
+
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo"; exit 1; }
+REPO_ROOT=$(git rev-parse --show-toplevel)
+TARGET="$REPO_ROOT/.claude/jira-workflow.md"
+CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
+
+mkdir -p "$REPO_ROOT/.claude"
+
+if [[ -f "$TARGET" && "$FORCE" != true ]]; then
+  echo "$TARGET already exists. Use --force to overwrite."
+  exit 1
+fi
+
+sed_args=()
+[[ -n "$SITE"  ]] && sed_args+=(-e "s|https://<your-domain>.atlassian.net|$SITE|g")
+[[ -n "$KEY"   ]] && sed_args+=(-e "s/PROJ/$KEY/g")
+[[ -n "$BOARD" ]] && sed_args+=(-e "s|<Your Board Name>|$BOARD|g")
+
+if [[ ${#sed_args[@]} -gt 0 ]]; then
+  sed "${sed_args[@]}" "$TEMPLATE" > "$TARGET"
+else
+  cp "$TEMPLATE" "$TARGET"
+fi
+echo "✓ Wrote $TARGET"
+
+IMPORT_LINE="@.claude/jira-workflow.md"
+if [[ -f "$CLAUDE_MD" ]]; then
+  if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
+    echo "✓ CLAUDE.md already references jira-workflow.md"
+  else
+    printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
+    echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
+  fi
+else
+  printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
+  echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+fi
+
+echo ""
+echo "Done. Open .claude/jira-workflow.md to fill in remaining placeholders."

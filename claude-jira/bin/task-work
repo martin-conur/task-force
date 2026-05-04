@@ -52,15 +52,14 @@ launch_worker() {
   zellij action write 10  # Enter
 }
 
-# Worktree already exists?
+# Worktree already exists for this Jira key? Spin up a parallel session
+# with a short hash suffix so multiple agents can iterate on the same ticket.
 if [[ -d "$WORKTREE_DIR" ]]; then
-  echo "Worktree already exists at $WORKTREE_DIR"
-  zellij action go-to-tab-name "$SLUG" 2>/dev/null || {
-    echo "Tab not found. Opening new tab..."
-    zellij action new-tab --name "$SLUG"
-    launch_worker "$WORKTREE_DIR"
-  }
-  exit 0
+  HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5)
+  SLUG="${SLUG}-${HASH}"
+  BRANCH="task/${SLUG}"
+  WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
+  echo "Existing worktree found for that Jira key — creating a parallel session: $SLUG"
 fi
 
 mkdir -p "$WORKTREE_BASE"

@@ -10,15 +10,17 @@ Refer to the project's `.claude/jira-workflow.md` for the Jira site, project key
 Workflow:
 1. Identify which issue to implement. If `$ARGUMENTS` contains a Jira key or URL, use it; otherwise ask.
 2. Fetch the issue from Jira and read the spec (Problem, Solution, Files to Modify, Verification).
-3. Implement the solution following the spec.
-4. Write tests for new features or bug fixes.
-5. Run tests to verify.
-6. Commit with the issue key as a prefix, e.g. `PROJ-123: <short description>`.
+3. Transition the issue to the **Status when starting work** value from `.claude/jira-workflow.md`. Call `getTransitionsForJiraIssue` to find the transition whose target name matches that value, then call `transitionJiraIssue`. If no matching transition is available from the current status, note it and continue.
+4. Implement the solution following the spec.
+5. Write tests for new features or bug fixes.
+6. Run tests to verify.
+7. Commit with the issue key as a prefix, e.g. `PROJ-123: <short description>`.
+8. Transition the issue to the **Status when done** value from `.claude/jira-workflow.md` (same lookup pattern as step 3).
 
 Always run tests after changes. If tests fail, fix before committing.
 Stay focused on the spec — don't add features beyond what's specified.
 If the spec is unclear or missing, ask before proceeding.
 
-When the implementation is complete and committed, run `task-done` from this worktree.
+After step 8, run `task-done` from this worktree.
 
 $ARGUMENTS

@@ -21,11 +21,25 @@ for script in "$SCRIPT_DIR"/bin/*; do
   echo "  ✓ Script: $name"
 done
 
-# Check PATH
-if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-  echo ""
-  echo "⚠ ~/.local/bin is not in your PATH. Add to your shell rc:"
-  echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+# Ensure ~/.local/bin is on PATH
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+MARKER='# added by kiro-notion install.sh'
+
+if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+  echo "  ✓ ~/.local/bin already on PATH"
+else
+  case "${SHELL:-}" in
+    */zsh)  rc="$HOME/.zshrc" ;;
+    */bash) rc="$HOME/.bashrc" ;;
+    *)      rc="$HOME/.profile" ;;
+  esac
+  if [[ -f "$rc" ]] && grep -qF "$MARKER" "$rc"; then
+    echo "  ✓ PATH already configured in $rc"
+  else
+    printf '\n%s\n%s\n' "$MARKER" "$PATH_LINE" >> "$rc"
+    echo "  ✓ Added ~/.local/bin to PATH in $rc"
+    echo "    Run: source $rc   (or open a new terminal)"
+  fi
 fi
 
 echo ""

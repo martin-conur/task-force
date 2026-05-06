@@ -2,28 +2,53 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-work <slug> [notion-url]"
+  echo "Usage:"
+  echo "  task-work <slug> <notion-url>     # explicit slug + URL (preferred when an agent kicks it off)"
+  echo "  task-work <notion-url>            # slug derived from the URL's title segment"
+  echo "  task-work <free-form-slug>        # ad-hoc, no Notion URL"
   echo ""
   echo "Creates a git worktree + branch for a task and opens a new zellij tab"
-  echo "with a worker agent."
+  echo "with a worker agent. If a worktree for that slug already exists, a"
+  echo "5-char hash is appended so multiple agents can work the same task in parallel."
   echo ""
   echo "Examples:"
-  echo "  task-work add-store-filtering https://www.notion.so/My-Task-abc123def456"
-  echo "  task-work refactor-auth"
-  echo "  task-work GDI-BOT-fix-embeddings"
+  echo "  task-work add-store-filtering \"https://www.notion.so/abc123def456\""
+  echo "  task-work https://www.notion.so/My-Task-abc123def456"
+  echo "  task-work add-store-filtering"
   exit 1
 }
 
 [[ $# -lt 1 || "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
 
-SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
-SLUG="${SLUG:0:50}"
-NOTION_URL="${2:-}"
+is_notion_url() {
+  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* ]]
+}
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo"; exit 1; }
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
+NOTION_URL=""
+SLUG=""
+
+# Two-arg form: explicit slug + Notion URL
+if [[ $# -ge 2 ]] && ! is_notion_url "$1" && is_notion_url "$2"; then
+  SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+  NOTION_URL="$2"
+elif is_notion_url "$1"; then
+  NOTION_URL="$1"
+  LAST_SEG=$(echo "$1" | sed 's|.*/||' | sed 's|?.*||')
+  if [[ "$LAST_SEG" =~ ^[a-f0-9]{32}$ ]]; then
+    SLUG="${LAST_SEG:0:8}"
+  else
+    SLUG=$(echo "$LAST_SEG" | sed 's/-[a-f0-9]\{32\}$//' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+  fi
+else
+  SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+fi
+
+[[ -z "$SLUG" ]] && { echo "Error: could not derive a slug from input"; exit 1; }
+SLUG="${SLUG:0:50}"
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
@@ -39,13 +64,14 @@ launch_kiro() {
   zellij action write 10  # Enter
 }
 
-# Worktree already exists? Spin up a parallel session with a hash suffix.
+# Worktree already exists? Spin up a parallel session with a short hash suffix
+# so multiple agents can iterate on the same task at the same time.
 if [[ -d "$WORKTREE_DIR" ]]; then
   HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5)
   SLUG="${SLUG}-${HASH}"
   BRANCH="task/${SLUG}"
   WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
-  echo "Existing worktree found — creating parallel session: $SLUG"
+  echo "Existing worktree found — creating a parallel session: $SLUG"
 fi
 
 mkdir -p "$WORKTREE_BASE"
@@ -59,6 +85,6 @@ git worktree add "$WORKTREE_DIR" -b "$BRANCH" 2>/dev/null || {
 
 echo "Opening zellij tab '$SLUG'..."
 zellij action new-tab --name "$SLUG"
-launch_kiro "$WORKTREE_DIR" "$SLUG"
+launch_kiro "$WORKTREE_DIR"
 
 echo "Worker started in $WORKTREE_DIR (branch: $BRANCH)"

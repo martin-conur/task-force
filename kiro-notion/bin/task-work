@@ -3,10 +3,14 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: task-work <slug> [notion-url] [options]
+Usage:
+  task-work <slug> <notion-url> [options]    # explicit slug + URL (preferred when an agent kicks it off)
+  task-work <notion-url> [options]           # slug derived from the URL's title segment
+  task-work <free-form-slug> [options]       # ad-hoc, no Notion URL
 
 Creates a git worktree + branch for a task and opens a new zellij tab
-with a worker agent.
+with a worker agent. If a worktree for that slug already exists, a
+5-char hash is appended so multiple agents can work the same task in parallel.
 
 Options:
   -m, --model MODEL   Model to pass to kiro-cli (e.g. claude-opus-4.6,
@@ -25,9 +29,9 @@ Environment:
   TASK_WORK_TRUST_ALL     If set to 1/true, defaults --trust-all on
 
 Examples:
-  task-work add-store-filtering https://www.notion.so/My-Task-abc123def456
-  task-work refactor-auth -m claude-opus-4.6
-  task-work fix-stuff https://www.notion.so/xyz --trust-all
+  task-work add-store-filtering "https://www.notion.so/abc123def456"
+  task-work https://www.notion.so/My-Task-abc123def456
+  task-work refactor-auth -m claude-opus-4.6 --trust-all
   task-work spike-idea --no-launch
   TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing https://...
 EOF
@@ -61,38 +65,55 @@ done
 
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
 
-SLUG=$(echo "${POSITIONAL[0]}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
-SLUG="${SLUG:0:50}"
-NOTION_URL="${POSITIONAL[1]:-}"
+is_notion_url() {
+  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* ]]
+}
 
-[[ -z "$SLUG" ]] && { echo "Error: slug is empty after sanitization" >&2; exit 1; }
+derive_slug_from_url() {
+  local url="$1"
+  local last_seg
+  last_seg=$(echo "$url" | sed 's|.*/||' | sed 's|?.*||')
+  if [[ "$last_seg" =~ ^[a-f0-9]{32}$ ]]; then
+    echo "${last_seg:0:8}"
+  else
+    echo "$last_seg" | sed 's/-[a-f0-9]\{32\}$//' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g'
+  fi
+}
+
+sanitize_slug() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g'
+}
+
+# Resolve SLUG and NOTION_URL from positional args:
+#   1 arg,  URL           → derive slug from URL
+#   1 arg,  not URL       → slug only, no URL
+#   2 args, URL in either → other one is the slug
+NOTION_URL=""
+SLUG=""
+P0="${POSITIONAL[0]}"
+P1="${POSITIONAL[1]:-}"
+
+if [[ ${#POSITIONAL[@]} -ge 2 ]] && ! is_notion_url "$P0" && is_notion_url "$P1"; then
+  SLUG=$(sanitize_slug "$P0")
+  NOTION_URL="$P1"
+elif [[ ${#POSITIONAL[@]} -ge 2 ]] && is_notion_url "$P0" && ! is_notion_url "$P1"; then
+  NOTION_URL="$P0"
+  SLUG=$(sanitize_slug "$P1")
+elif is_notion_url "$P0"; then
+  NOTION_URL="$P0"
+  SLUG=$(derive_slug_from_url "$P0")
+else
+  SLUG=$(sanitize_slug "$P0")
+fi
+
+[[ -z "$SLUG" ]] && { echo "Error: could not derive a slug from input" >&2; exit 1; }
+SLUG="${SLUG:0:50}"
 
 # ---------------- repo discovery ----------------
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
-NOTION_URL=""
-SLUG=""
-
-# Two-arg form: explicit slug + Notion URL
-if [[ $# -ge 2 ]] && ! is_notion_url "$1" && is_notion_url "$2"; then
-  SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
-  NOTION_URL="$2"
-elif is_notion_url "$1"; then
-  NOTION_URL="$1"
-  LAST_SEG=$(echo "$1" | sed 's|.*/||' | sed 's|?.*||')
-  if [[ "$LAST_SEG" =~ ^[a-f0-9]{32}$ ]]; then
-    SLUG="${LAST_SEG:0:8}"
-  else
-    SLUG=$(echo "$LAST_SEG" | sed 's/-[a-f0-9]\{32\}$//' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-  fi
-else
-  SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
-fi
-
-[[ -z "$SLUG" ]] && { echo "Error: could not derive a slug from input"; exit 1; }
-SLUG="${SLUG:0:50}"
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
@@ -128,7 +149,8 @@ launch_in_tab() {
 }
 
 # ---------------- worktree creation ----------------
-# Worktree already exists? Spin up a parallel session with a hash suffix.
+# Worktree already exists? Spin up a parallel session with a hash suffix
+# so multiple agents can iterate on the same task at the same time.
 if [[ -d "$WORKTREE_DIR" ]]; then
   HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5)
   SLUG="${SLUG}-${HASH}"

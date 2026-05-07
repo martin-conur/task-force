@@ -2,43 +2,111 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-work <slug> [notion-url]"
-  echo ""
-  echo "Creates a git worktree + branch for a task and opens a new zellij tab"
-  echo "with a worker agent."
-  echo ""
-  echo "Examples:"
-  echo "  task-work add-store-filtering https://www.notion.so/My-Task-abc123def456"
-  echo "  task-work refactor-auth"
-  echo "  task-work GDI-BOT-fix-embeddings"
-  exit 1
+  cat <<'EOF'
+Usage: task-work <slug> [notion-url] [options]
+
+Creates a git worktree + branch for a task and opens a new zellij tab
+with a worker agent.
+
+Options:
+  -m, --model MODEL   Model to pass to kiro-cli (e.g. claude-opus-4.6,
+                      claude-sonnet-4.5). Defaults to $TASK_WORK_MODEL if set,
+                      else kiro-cli's own default (auto).
+  -a, --trust-all     Pass --trust-all-tools to kiro-cli so the worker can run
+                      commands without per-tool confirmation. Defaults to
+                      $TASK_WORK_TRUST_ALL=1 if set.
+      --no-launch     Create the worktree and open the tab at its directory,
+                      but do NOT start kiro-cli. Use this when you want to
+                      pick the command/model interactively.
+  -h, --help          Show this help.
+
+Environment:
+  TASK_WORK_MODEL         Default model (overridable with --model)
+  TASK_WORK_TRUST_ALL     If set to 1/true, defaults --trust-all on
+
+Examples:
+  task-work add-store-filtering https://www.notion.so/My-Task-abc123def456
+  task-work refactor-auth -m claude-opus-4.6
+  task-work fix-stuff https://www.notion.so/xyz --trust-all
+  task-work spike-idea --no-launch
+  TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing https://...
+EOF
+  exit "${1:-1}"
 }
 
-[[ $# -lt 1 || "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
+# ---------------- arg parsing ----------------
+POSITIONAL=()
+MODEL="${TASK_WORK_MODEL:-}"
+TRUST_ALL=""
+NO_LAUNCH=""
 
-SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+# Treat TASK_WORK_TRUST_ALL=1 / true / yes as enabled
+case "${TASK_WORK_TRUST_ALL:-}" in
+  1|true|TRUE|yes|YES) TRUST_ALL="1" ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    -m|--model)
+      [[ $# -ge 2 ]] || { echo "Error: --model requires a value" >&2; exit 1; }
+      MODEL="$2"; shift 2 ;;
+    -a|--trust-all) TRUST_ALL="1"; shift ;;
+    --no-launch) NO_LAUNCH="1"; shift ;;
+    --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
+    -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+[[ ${#POSITIONAL[@]} -lt 1 ]] && usage
+
+SLUG=$(echo "${POSITIONAL[0]}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
 SLUG="${SLUG:0:50}"
-NOTION_URL="${2:-}"
+NOTION_URL="${POSITIONAL[1]:-}"
 
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo"; exit 1; }
+[[ -z "$SLUG" ]] && { echo "Error: slug is empty after sanitization" >&2; exit 1; }
+
+# ---------------- repo discovery ----------------
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
-launch_kiro() {
-  local dir="$1"
-  sleep 0.5
+# ---------------- command builder ----------------
+build_kiro_cmd() {
+  local cmd="kiro-cli chat --agent worker"
+  [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
+  [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
   if [[ -n "$NOTION_URL" ]]; then
-    zellij action write-chars "cd $dir && kiro-cli chat --agent worker \"Implement task: $NOTION_URL\""
+    cmd+=" \"Implement task: $NOTION_URL\""
+  fi
+  echo "$cmd"
+}
+
+# ---------------- zellij tab launch ----------------
+launch_in_tab() {
+  local dir="$1"
+  # Explicitly focus the new tab by name — idempotent, defeats the race
+  # where `write-chars` could otherwise target the previously-focused pane.
+  zellij action go-to-tab-name "$SLUG"
+  sleep 0.3
+
+  if [[ -n "$NO_LAUNCH" ]]; then
+    # Just cd into the worktree, leave the user at a shell prompt
+    zellij action write-chars "cd $dir"
   else
-    zellij action write-chars "cd $dir && kiro-cli chat --agent worker"
+    # Always cd explicitly — zellij's `new-tab --cwd` doesn't reliably
+    # propagate to the spawned shell across all zellij versions.
+    zellij action write-chars "cd $dir && $(build_kiro_cmd)"
   fi
   sleep 0.1
   zellij action write 10  # Enter
 }
 
+# ---------------- worktree creation ----------------
 # Worktree already exists? Spin up a parallel session with a hash suffix.
 if [[ -d "$WORKTREE_DIR" ]]; then
   HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5)
@@ -52,13 +120,20 @@ mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
 git worktree add "$WORKTREE_DIR" -b "$BRANCH" 2>/dev/null || {
   git worktree add "$WORKTREE_DIR" "$BRANCH" 2>/dev/null || {
-    echo "Error: could not create worktree. Check if branch '$BRANCH' exists elsewhere."
+    echo "Error: could not create worktree. Check if branch '$BRANCH' exists elsewhere." >&2
     exit 1
   }
 }
 
 echo "Opening zellij tab '$SLUG'..."
-zellij action new-tab --name "$SLUG"
-launch_kiro "$WORKTREE_DIR" "$SLUG"
+zellij action new-tab --name "$SLUG" --cwd "$WORKTREE_DIR"
+launch_in_tab "$WORKTREE_DIR"
 
-echo "Worker started in $WORKTREE_DIR (branch: $BRANCH)"
+if [[ -n "$NO_LAUNCH" ]]; then
+  echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH) — kiro NOT launched (--no-launch)."
+else
+  desc="worker"
+  [[ -n "$MODEL" ]] && desc+=" [model=$MODEL]"
+  [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
+  echo "Started $desc in $WORKTREE_DIR (branch: $BRANCH)"
+fi

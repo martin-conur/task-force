@@ -30,5 +30,17 @@ Customize these to match your Notion database schema:
 Use the task name as prefix: `<Task name>: <description>`
 
 ### Shell Commands
-- `task-work <notion-url-or-slug>` — create worktree + zellij tab + worker agent
-- `task-done` — from within worktree: show diff, print PR command, cleanup
+
+`task-work <slug> [notion-url] [options]` — create worktree + zellij tab + worker agent
+- `-m, --model MODEL` — pick a specific kiro model (e.g. `claude-opus-4.6`, `claude-sonnet-4.6`). Falls back to `$TASK_WORK_MODEL`, else kiro's default (`auto`).
+- `-a, --trust-all` — pass `--trust-all-tools` so the worker runs commands without per-tool confirmation. Defaults to `$TASK_WORK_TRUST_ALL=1` if set.
+- `--no-launch` — open the worktree's tab but do NOT start kiro (lets you type the command yourself).
+
+Examples:
+```bash
+task-work add-store-filtering https://www.notion.so/My-Task-abc123def456
+task-work refactor-auth -m claude-opus-4.6 --trust-all
+task-work spike-idea --no-launch
+```
+
+`task-done` — from within worktree: show diff, print PR command, cleanup

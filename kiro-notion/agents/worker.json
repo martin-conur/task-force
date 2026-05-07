@@ -22,7 +22,11 @@
   "mcpServers": {
     "notion": {
       "url": "https://mcp.notion.com/mcp"
-    }
+    },
+     "chrome-devtools": {
+      "command": "npx",
+      "args": ["@anthropic-ai/chrome-devtools-mcp"]
+    } 
   },
   "keyboardShortcut": "ctrl+shift+w",
   "welcomeMessage": "Worker mode. Give me a task URL or name and I'll implement it from the spec."

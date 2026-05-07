@@ -72,6 +72,27 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in 
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
+NOTION_URL=""
+SLUG=""
+
+# Two-arg form: explicit slug + Notion URL
+if [[ $# -ge 2 ]] && ! is_notion_url "$1" && is_notion_url "$2"; then
+  SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+  NOTION_URL="$2"
+elif is_notion_url "$1"; then
+  NOTION_URL="$1"
+  LAST_SEG=$(echo "$1" | sed 's|.*/||' | sed 's|?.*||')
+  if [[ "$LAST_SEG" =~ ^[a-f0-9]{32}$ ]]; then
+    SLUG="${LAST_SEG:0:8}"
+  else
+    SLUG=$(echo "$LAST_SEG" | sed 's/-[a-f0-9]\{32\}$//' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+  fi
+else
+  SLUG=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+fi
+
+[[ -z "$SLUG" ]] && { echo "Error: could not derive a slug from input"; exit 1; }
+SLUG="${SLUG:0:50}"
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
@@ -113,7 +134,7 @@ if [[ -d "$WORKTREE_DIR" ]]; then
   SLUG="${SLUG}-${HASH}"
   BRANCH="task/${SLUG}"
   WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
-  echo "Existing worktree found — creating parallel session: $SLUG"
+  echo "Existing worktree found — creating a parallel session: $SLUG"
 fi
 
 mkdir -p "$WORKTREE_BASE"

@@ -15,6 +15,11 @@ To find these IDs:
 ### Task Lifecycle
 Not Started → In Progress → Done (or Archived)
 
+- **Status when starting work**: `In Progress`
+- **Status when done**: `Done`
+
+The worker reads these two values and updates the task's Status property accordingly: to "starting work" before implementing, and to "done" after committing (before running `task-done`).
+
 ### Task Properties
 Customize these to match your Notion database schema:
 - **Task name** (title), **Status**, **Priority**

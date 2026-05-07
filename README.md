@@ -48,7 +48,7 @@ cp ~/agentic-workflow/kiro-notion/steering/notion-workflow.example.md .kiro/stee
 
 ### Scripts
 
-- **`task-work <notion-url-or-slug>`** — Creates worktree + branch, opens Zellij tab, launches worker agent
+- **`task-work [<slug>] <notion-url-or-slug>`** — Creates worktree + branch, opens Zellij tab, launches worker agent. Pass an explicit slug as the first arg when the Notion URL is bare-hex (no title prefix); the agents do this automatically. If a worktree already exists for that slug, a 5-char hash is appended for a parallel session.
 - **`task-done`** — Shows diff, prints `gh pr create` command, cleans up worktree + tab
 
 ### Workflow

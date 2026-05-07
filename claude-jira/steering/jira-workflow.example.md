@@ -18,6 +18,11 @@ To Do → In Progress → In Review → Done
 
 (Replace with your project's actual workflow statuses.)
 
+- **Status when starting work**: `In Progress`
+- **Status when done**: `Done`
+
+The worker reads these two values and transitions the issue accordingly: to "starting work" before implementing, and to "done" after committing (before running `task-done`).
+
 ### Issue Fields
 
 Customize for your project:

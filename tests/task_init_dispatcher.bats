@@ -74,29 +74,63 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Interactive menu
+# New implementations — delegation
 # ---------------------------------------------------------------------------
 
-@test "interactive menu choice 3 delegates to claude-notion" {
-  run bash -c "echo 3 | \"$TASK_INIT_DISPATCHER\""
+@test "delegates to claude-gh with no passthrough args" {
+  run "$TASK_INIT_DISPATCHER" claude-gh
   assert_success
-  assert [ -f "$MAIN_REPO/.claude/notion-workflow.md" ]
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
 }
 
-@test "interactive menu choice 1 delegates to claude-jira" {
-  run bash -c "echo 1 | \"$TASK_INIT_DISPATCHER\""
+@test "delegates to kiro-gh with no passthrough args" {
+  run "$TASK_INIT_DISPATCHER" kiro-gh
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+}
+
+# ---------------------------------------------------------------------------
+# Interactive menu (two-step: tool then board)
+# ---------------------------------------------------------------------------
+
+@test "interactive menu: Claude Code + Jira (1 then 1)" {
+  run bash -c "printf '1\n1\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.claude/jira-workflow.md" ]
 }
 
-@test "interactive menu choice 2 delegates to kiro-notion" {
-  run bash -c "echo 2 | \"$TASK_INIT_DISPATCHER\""
+@test "interactive menu: Claude Code + Notion (1 then 2)" {
+  run bash -c "printf '1\n2\n' | \"$TASK_INIT_DISPATCHER\""
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/notion-workflow.md" ]
+}
+
+@test "interactive menu: Claude Code + GitHub Projects (1 then 3)" {
+  run bash -c "printf '1\n3\n' | \"$TASK_INIT_DISPATCHER\""
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+}
+
+@test "interactive menu: Kiro + Notion (2 then 1)" {
+  run bash -c "printf '2\n1\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.kiro/steering/notion-workflow.md" ]
 }
 
-@test "interactive menu invalid choice exits non-zero" {
+@test "interactive menu: Kiro + GitHub Projects (2 then 2)" {
+  run bash -c "printf '2\n2\n' | \"$TASK_INIT_DISPATCHER\""
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+}
+
+@test "interactive menu invalid tool choice exits non-zero" {
   run bash -c "echo 9 | \"$TASK_INIT_DISPATCHER\""
+  assert_failure
+  assert_output --partial "Invalid choice"
+}
+
+@test "interactive menu invalid board choice exits non-zero" {
+  run bash -c "printf '1\n9\n' | \"$TASK_INIT_DISPATCHER\""
   assert_failure
   assert_output --partial "Invalid choice"
 }

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Bats tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run tests
+        run: ./run_tests.sh
+
+  lint:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        run: |
+          shellcheck \
+            install.sh \
+            task-init \
+            run_tests.sh \
+            tests/helpers/common.bash \
+            claude-jira/install.sh \
+            claude-jira/bin/task-work \
+            claude-jira/bin/task-done \
+            claude-jira/bin/task-init \
+            kiro-notion/install.sh \
+            kiro-notion/bin/task-work \
+            kiro-notion/bin/task-done \
+            kiro-notion/bin/task-init \
+            claude-notion/install.sh \
+            claude-notion/bin/task-work \
+            claude-notion/bin/task-done \
+            claude-notion/bin/task-init

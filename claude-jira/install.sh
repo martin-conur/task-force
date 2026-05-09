@@ -26,6 +26,7 @@ done
 ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
 echo "  ✓ Script: task-init (unified)"
 
+# shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 MARKER='# added by claude-jira install.sh'
 

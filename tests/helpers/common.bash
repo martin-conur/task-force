@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared setup/teardown helpers for all test suites.
 # Source this from the setup() / teardown() functions in each .bats file.
+# shellcheck disable=SC2034  # path vars are used by the .bats files that load this helper
 
 REPO_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 KIRO_TASK_WORK="$REPO_ROOT_REAL/kiro-notion/bin/task-work"

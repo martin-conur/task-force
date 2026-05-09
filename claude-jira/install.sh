@@ -13,13 +13,18 @@ for cmd in "$SCRIPT_DIR"/commands/*.md; do
   echo "  ✓ Slash command: /$(basename "$name" .md)"
 done
 
-# Scripts → ~/.local/bin/
+# Scripts → ~/.local/bin/ (task-init handled separately via unified root script)
 mkdir -p ~/.local/bin
 for script in "$SCRIPT_DIR"/bin/*; do
   name=$(basename "$script")
+  [[ "$name" == "task-init" ]] && continue
   ln -sf "$script" ~/.local/bin/"$name"
   echo "  ✓ Script: $name"
 done
+
+# Unified task-init (always points to repo-root task-init regardless of which impl was installed last)
+ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
+echo "  ✓ Script: task-init (unified)"
 
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 MARKER='# added by claude-jira install.sh'
@@ -44,7 +49,6 @@ fi
 echo ""
 echo "Done. Next steps:"
 echo "  1. Verify the Atlassian MCP is configured: claude mcp list"
-echo "  2. Copy steering/jira-workflow.example.md to your project's .claude/jira-workflow.md"
-echo "  3. Fill in your Jira site, project key(s), and board name"
-echo "  4. Reference it from CLAUDE.md so it loads automatically (see steering example)"
-echo "  5. Start with: claude   (then type /pm)"
+echo "  2. In your project root, run: task-init claude-jira --site https://... --key PROJ"
+echo "  3. Fill in any remaining details in .claude/jira-workflow.md"
+echo "  4. Start with: claude   (then type /pm)"

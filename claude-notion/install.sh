@@ -3,14 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing kiro-notion agents..."
+echo "Installing claude-notion commands and scripts..."
 
-# Agents → ~/.kiro/agents/
-mkdir -p ~/.kiro/agents
-for agent in "$SCRIPT_DIR"/agents/*.json; do
-  name=$(basename "$agent")
-  ln -sf "$agent" ~/.kiro/agents/"$name"
-  echo "  ✓ Agent: $name"
+# Slash commands → ~/.claude/commands/
+mkdir -p ~/.claude/commands
+for cmd in "$SCRIPT_DIR"/commands/*.md; do
+  name=$(basename "$cmd")
+  ln -sf "$cmd" ~/.claude/commands/"$name"
+  echo "  ✓ Slash command: /$(basename "$name" .md)"
 done
 
 # Scripts → ~/.local/bin/ (task-init handled separately via unified root script)
@@ -28,7 +28,7 @@ echo "  ✓ Script: task-init (unified)"
 
 # Ensure ~/.local/bin is on PATH
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
-MARKER='# added by kiro-notion install.sh'
+MARKER='# added by claude-notion install.sh'
 
 if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
   echo "  ✓ ~/.local/bin already on PATH"
@@ -49,6 +49,8 @@ fi
 
 echo ""
 echo "Done. Next steps:"
-echo "  1. In your project root, run: task-init kiro-notion"
-echo "  2. Fill in your Notion database IDs in .kiro/steering/notion-workflow.md"
-echo "  3. Start with: kiro-cli chat --agent pm"
+echo "  1. Verify the Notion MCP is configured: claude mcp list"
+echo "     (If not: claude mcp add --transport http notion https://mcp.notion.com/mcp)"
+echo "  2. In your project root, run: task-init claude-notion"
+echo "  3. Fill in your Notion database IDs in .claude/notion-workflow.md"
+echo "  4. Start with: claude   (then type /pm)"

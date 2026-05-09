@@ -176,3 +176,88 @@ teardown() {
   run bash -c "echo y | $KIRO_TASK_DONE --force"
   assert_output --partial "Uncommitted changes"
 }
+
+# ---------------------------------------------------------------------------
+# claude-notion task-done (identical logic to kiro — no Jira uppercase slug)
+# ---------------------------------------------------------------------------
+
+@test "claude-notion: fails when run from main repo" {
+  cd "$MAIN_REPO"
+  run "$CLAUDE_NOTION_TASK_DONE"
+  assert_failure
+  assert_output --partial "main repo"
+}
+
+@test "claude-notion: shows branch and base branch" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_output --partial "Branch:   task/$SLUG"
+  assert_output --partial "Base:     main"
+}
+
+@test "claude-notion: reads custom BASE_BRANCH from .info file" {
+  printf 'BASE_BRANCH=develop\nSLUG=%s\nNOTION_URL=\n' "$SLUG" \
+    > "$WORKTREE_BASE/.$SLUG.info"
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_output --partial "Base:     develop"
+}
+
+@test "claude-notion: shows commit count ahead of base" {
+  touch "$WORKTREE_BASE/$SLUG/newfile.txt"
+  git -C "$WORKTREE_BASE/$SLUG" add newfile.txt
+  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "add file"
+
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_output --partial "Commits ahead of main: 1"
+}
+
+@test "claude-notion: shows gh pr create with correct --base when no PR exists" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_output --partial "gh pr create --base main --head task/$SLUG"
+}
+
+@test "claude-notion: shows existing PR URL instead of create command" {
+  export GH_STUB_PR_URL="https://github.com/org/repo/pull/42"
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_output --partial "PR: https://github.com/org/repo/pull/42"
+  refute_output --partial "gh pr create"
+}
+
+@test "claude-notion: --remove-worktree skips PR section" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --remove-worktree
+  refute_output --partial "gh pr create"
+  refute_output --partial "To create a PR"
+}
+
+@test "claude-notion: --remove-worktree --force skips all prompts" {
+  run "$CLAUDE_NOTION_TASK_DONE" --remove-worktree --force
+  assert_success
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}
+
+@test "claude-notion: removes worktree directory" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}
+
+@test "claude-notion: deletes .info file after removal" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert [ ! -f "$WORKTREE_BASE/.$SLUG.info" ]
+}
+
+@test "claude-notion: closes zellij tab" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_stub_called zellij "close-tab"
+}
+
+@test "claude-notion: no prompt when --force is set" {
+  run "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_success
+}
+
+@test "claude-notion: warns about uncommitted changes" {
+  echo "dirty" > "$WORKTREE_BASE/$SLUG/dirty.txt"
+  git -C "$WORKTREE_BASE/$SLUG" add dirty.txt
+
+  run bash -c "echo y | $CLAUDE_NOTION_TASK_DONE --force"
+  assert_output --partial "Uncommitted changes"
+}

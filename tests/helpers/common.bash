@@ -9,6 +9,12 @@ KIRO_TASK_DONE="$REPO_ROOT_REAL/kiro-notion/bin/task-done"
 JIRA_TASK_DONE="$REPO_ROOT_REAL/claude-jira/bin/task-done"
 JIRA_TASK_INIT="$REPO_ROOT_REAL/claude-jira/bin/task-init"
 JIRA_TEMPLATE="$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
+CLAUDE_NOTION_TASK_WORK="$REPO_ROOT_REAL/claude-notion/bin/task-work"
+CLAUDE_NOTION_TASK_DONE="$REPO_ROOT_REAL/claude-notion/bin/task-done"
+CLAUDE_NOTION_TASK_INIT="$REPO_ROOT_REAL/claude-notion/bin/task-init"
+CLAUDE_NOTION_TEMPLATE="$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
+KIRO_TASK_INIT="$REPO_ROOT_REAL/kiro-notion/bin/task-init"
+KIRO_TEMPLATE="$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
 
 # Creates a temp directory with a git repo, sets up $MAIN_REPO,
 # $REPO_NAME, and $WORKTREE_BASE.

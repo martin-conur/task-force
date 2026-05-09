@@ -67,9 +67,9 @@ teardown_all() {
     git -C "$MAIN_REPO" worktree prune 2>/dev/null || true
     rm -rf "$MAIN_REPO"
   fi
-  [[ -n "${WORKTREE_BASE:-}" ]] && rm -rf "$WORKTREE_BASE" || true
-  [[ -n "${STUB_BIN:-}"      ]] && rm -rf "$STUB_BIN"      || true
-  [[ -n "${STUB_CALLS_DIR:-}" ]] && rm -rf "$STUB_CALLS_DIR" || true
+  [[ -z "${WORKTREE_BASE:-}"  ]] || rm -rf "$WORKTREE_BASE"
+  [[ -z "${STUB_BIN:-}"       ]] || rm -rf "$STUB_BIN"
+  [[ -z "${STUB_CALLS_DIR:-}" ]] || rm -rf "$STUB_CALLS_DIR"
 }
 
 # Read the recorded calls for a stub command.

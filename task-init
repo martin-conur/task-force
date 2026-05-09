@@ -77,4 +77,4 @@ if [[ ! -x "$IMPL_INIT" ]]; then
   exit 1
 fi
 
-exec "$IMPL_INIT" $FORCE_FLAG "${PASSTHROUGH[@]}"
+exec "$IMPL_INIT" $FORCE_FLAG ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}

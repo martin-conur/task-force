@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub for zellij — records all invocations, silently succeeds.
+echo "zellij $*" >> "${STUB_CALLS_DIR}/zellij.calls"
+exit 0

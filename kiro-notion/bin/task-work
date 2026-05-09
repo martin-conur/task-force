@@ -19,6 +19,7 @@ Options:
   -a, --trust-all     Pass --trust-all-tools to kiro-cli so the worker can run
                       commands without per-tool confirmation. Defaults to
                       $TASK_WORK_TRUST_ALL=1 if set.
+  -b, --base BRANCH   Base branch for the PR (default: current branch at call time).
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start kiro-cli. Use this when you want to
                       pick the command/model interactively.
@@ -43,6 +44,7 @@ POSITIONAL=()
 MODEL="${TASK_WORK_MODEL:-}"
 TRUST_ALL=""
 NO_LAUNCH=""
+BASE_BRANCH_OVERRIDE=""
 
 # Treat TASK_WORK_TRUST_ALL=1 / true / yes as enabled
 case "${TASK_WORK_TRUST_ALL:-}" in
@@ -56,6 +58,9 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --model requires a value" >&2; exit 1; }
       MODEL="$2"; shift 2 ;;
     -a|--trust-all) TRUST_ALL="1"; shift ;;
+    -b|--base)
+      [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
+      BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
@@ -114,6 +119,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in 
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
+# Capture base branch now, before the worktree is created
+BASE_BRANCH="${BASE_BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
+
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
@@ -152,7 +160,7 @@ launch_in_tab() {
 # Worktree already exists? Spin up a parallel session with a hash suffix
 # so multiple agents can iterate on the same task at the same time.
 if [[ -d "$WORKTREE_DIR" ]]; then
-  HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5)
+  HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5 || :)
   SLUG="${SLUG}-${HASH}"
   BRANCH="task/${SLUG}"
   WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
@@ -168,15 +176,19 @@ git worktree add "$WORKTREE_DIR" -b "$BRANCH" 2>/dev/null || {
   }
 }
 
+# Write task info so the worker and task-done can read it (stored outside the working tree)
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+printf 'BASE_BRANCH=%s\nSLUG=%s\nNOTION_URL=%s\n' "$BASE_BRANCH" "$SLUG" "$NOTION_URL" > "$INFO_FILE"
+
 echo "Opening zellij tab '$SLUG'..."
 zellij action new-tab --name "$SLUG" --cwd "$WORKTREE_DIR"
 launch_in_tab "$WORKTREE_DIR"
 
 if [[ -n "$NO_LAUNCH" ]]; then
-  echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH) — kiro NOT launched (--no-launch)."
+  echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH) — kiro NOT launched (--no-launch)."
 else
   desc="worker"
   [[ -n "$MODEL" ]] && desc+=" [model=$MODEL]"
   [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
-  echo "Started $desc in $WORKTREE_DIR (branch: $BRANCH)"
+  echo "Started $desc in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
 fi

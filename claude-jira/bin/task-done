@@ -2,21 +2,31 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-done [--force]"
+  echo "Usage: task-done [--force] [--remove-worktree]"
   echo ""
   echo "Run from within a worktree to:"
-  echo "  1. Show the diff and print a gh PR command"
+  echo "  1. Show the diff summary and existing PR (or print gh pr create command)"
   echo "  2. Remove the worktree"
   echo "  3. Close the zellij tab"
   echo ""
   echo "Options:"
-  echo "  --force    Skip confirmation prompts"
+  echo "  --force            Skip confirmation prompts"
+  echo "  --remove-worktree  Skip PR section — just clean up the worktree and tab."
+  echo "                     Use after the worker has already created the PR."
   exit 1
 }
 
 FORCE=false
-[[ "${1:-}" == "--force" ]] && FORCE=true
-[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
+REMOVE_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force) FORCE=true; shift ;;
+    --remove-worktree) REMOVE_ONLY=true; shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown option: $1"; usage ;;
+  esac
+done
 
 WORKTREE_DIR=$(pwd)
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo"; exit 1; }
@@ -29,8 +39,19 @@ if [[ "$REPO_ROOT" == "$MAIN_WORKTREE" ]]; then
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+SLUG="${BRANCH#task/}"
+REPO_NAME=$(basename "$MAIN_WORKTREE")
+WORKTREE_BASE="${MAIN_WORKTREE}/../${REPO_NAME}-worktrees"
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+
+# Load base branch written by task-work; fall back to "main"
+BASE_BRANCH="main"
+# shellcheck source=/dev/null
+[[ -f "$INFO_FILE" ]] && source "$INFO_FILE"
+
 echo "Worktree: $WORKTREE_DIR"
 echo "Branch:   $BRANCH"
+echo "Base:     $BASE_BRANCH"
 echo ""
 
 # Uncommitted changes?
@@ -44,21 +65,29 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   fi
 fi
 
-COMMIT_COUNT=$(git rev-list --count main..HEAD 2>/dev/null || echo "?")
-echo "Commits ahead of main: $COMMIT_COUNT"
+COMMIT_COUNT=$(git rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "?")
+echo "Commits ahead of ${BASE_BRANCH}: $COMMIT_COUNT"
+DIFF_STAT=$(git diff --shortstat "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
+[[ -n "$DIFF_STAT" ]] && echo "Changes: $DIFF_STAT"
 echo ""
 
-# Build PR title — uppercase the slug if it looks like a Jira key
-SLUG="${BRANCH#task/}"
-if [[ "$SLUG" =~ ^([a-z][a-z0-9_]+-[0-9]+)$ ]]; then
-  PR_TITLE=$(echo "$SLUG" | tr '[:lower:]' '[:upper:]')
-else
-  PR_TITLE="$SLUG"
+if [[ "$REMOVE_ONLY" != true ]]; then
+  # Show existing PR URL, or print the creation command
+  PR_URL=$(gh pr view --json url -q .url 2>/dev/null || true)
+  if [[ -n "$PR_URL" ]]; then
+    echo "PR: $PR_URL"
+  else
+    # Build PR title — uppercase the slug if it looks like a Jira key
+    if [[ "$SLUG" =~ ^([a-z][a-z0-9_]+-[0-9]+)$ ]]; then
+      PR_TITLE=$(echo "$SLUG" | tr '[:lower:]' '[:upper:]')
+    else
+      PR_TITLE="$SLUG"
+    fi
+    echo "To create a PR:"
+    echo "  gh pr create --base $BASE_BRANCH --head $BRANCH --title \"$PR_TITLE\" --fill"
+  fi
+  echo ""
 fi
-
-echo "To create a PR:"
-echo "  gh pr create --base main --head $BRANCH --title \"$PR_TITLE\" --fill"
-echo ""
 
 if [[ "$FORCE" != true ]]; then
   read -rp "Remove worktree and close tab? (y/N) " confirm
@@ -73,6 +102,9 @@ git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || {
   rm -rf "$WORKTREE_DIR"
   git worktree prune
 }
+
+# Clean up info file
+[[ -f "$INFO_FILE" ]] && rm -f "$INFO_FILE"
 
 echo "Closing zellij tab..."
 zellij action close-tab

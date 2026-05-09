@@ -6,7 +6,8 @@ usage() {
   echo ""
   echo "Set up the current repo for the claude-jira workflow:"
   echo "  - Create .claude/jira-workflow.md from the bundled template"
-  echo "  - Substitute site / project key / board name if provided (placeholders left otherwise)"
+  echo "  - Substitute site / project key / board name if provided"
+  echo "    (missing values are prompted interactively; blank input leaves {placeholders})"
   echo "  - Add @.claude/jira-workflow.md to CLAUDE.md so it auto-loads in every session"
   echo ""
   echo "Options:"
@@ -32,6 +33,19 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1"; usage;;
   esac
 done
+
+# Interactive prompts when running from a terminal and values are still missing
+if [[ -t 0 ]]; then
+  if [[ -z "$SITE" ]]; then
+    read -rp "Jira site URL (e.g. https://acme.atlassian.net) [blank → leaves {SITE}]: " SITE
+  fi
+  if [[ -z "$KEY" ]]; then
+    read -rp "Project key (e.g. PROJ) [blank → leaves {KEY}]: " KEY
+  fi
+  if [[ -z "$BOARD" ]]; then
+    read -rp "Board name (e.g. My Board) [blank → leaves {BOARD}]: " BOARD
+  fi
+fi
 
 # Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
 src="${BASH_SOURCE[0]}"
@@ -61,9 +75,9 @@ if [[ -f "$TARGET" && "$FORCE" != true ]]; then
 fi
 
 sed_args=()
-[[ -n "$SITE"  ]] && sed_args+=(-e "s|https://<your-domain>.atlassian.net|$SITE|g")
-[[ -n "$KEY"   ]] && sed_args+=(-e "s/PROJ/$KEY/g")
-[[ -n "$BOARD" ]] && sed_args+=(-e "s|<Your Board Name>|$BOARD|g")
+[[ -n "$SITE"  ]] && sed_args+=(-e "s|{SITE}|$SITE|g")
+[[ -n "$KEY"   ]] && sed_args+=(-e "s/{KEY}/$KEY/g")
+[[ -n "$BOARD" ]] && sed_args+=(-e "s|{BOARD}|$BOARD|g")
 
 if [[ ${#sed_args[@]} -gt 0 ]]; then
   sed "${sed_args[@]}" "$TEMPLATE" > "$TARGET"
@@ -86,4 +100,4 @@ else
 fi
 
 echo ""
-echo "Done. Open .claude/jira-workflow.md to fill in remaining placeholders."
+echo "Done. Open .claude/jira-workflow.md to fill in any remaining {placeholders}."

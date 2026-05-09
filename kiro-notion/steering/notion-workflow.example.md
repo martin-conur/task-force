@@ -43,4 +43,5 @@ task-work refactor-auth -m claude-opus-4.6 --trust-all
 task-work spike-idea --no-launch
 ```
 
-`task-done` — from within worktree: show diff, print PR command, cleanup
+`task-done` — from within worktree: show diff, print/detect PR, cleanup
+`task-done --remove-worktree` — cleanup only (use after worker has already created the PR)

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub for claude CLI — records all invocations, silently succeeds.
+echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
+exit 0

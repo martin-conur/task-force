@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: task-init [--force]"
+  echo ""
+  echo "Set up the current repo for the kiro-gh workflow:"
+  echo "  - Create .kiro/steering/gh-workflow.md from the bundled template"
+  echo ""
+  echo "Options:"
+  echo "  --force   Overwrite .kiro/steering/gh-workflow.md if present"
+  exit 1
+}
+
+FORCE=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force) FORCE=true; shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown option: $1"; usage ;;
+  esac
+done
+
+# Resolve script path through symlinks
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
+TEMPLATE="$SCRIPT_DIR/../steering/gh-workflow.example.md"
+
+if [[ ! -f "$TEMPLATE" ]]; then
+  echo "Error: template not found at $TEMPLATE"
+  exit 1
+fi
+
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo"; exit 1; }
+REPO_ROOT=$(git rev-parse --show-toplevel)
+TARGET="$REPO_ROOT/.kiro/steering/gh-workflow.md"
+
+mkdir -p "$REPO_ROOT/.kiro/steering"
+
+if [[ -f "$TARGET" && "$FORCE" != true ]]; then
+  echo "$TARGET already exists. Use --force to overwrite."
+  exit 1
+fi
+
+cp "$TEMPLATE" "$TARGET"
+echo "✓ Wrote $TARGET"
+echo ""
+echo "Done. Open .kiro/steering/gh-workflow.md to fill in your GitHub owner, repo, and project number."

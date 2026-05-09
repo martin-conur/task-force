@@ -42,4 +42,12 @@ jobs:
             claude-notion/install.sh \
             claude-notion/bin/task-work \
             claude-notion/bin/task-done \
-            claude-notion/bin/task-init
+            claude-notion/bin/task-init \
+            claude-gh/install.sh \
+            claude-gh/bin/task-work \
+            claude-gh/bin/task-done \
+            claude-gh/bin/task-init \
+            kiro-gh/install.sh \
+            kiro-gh/bin/task-work \
+            kiro-gh/bin/task-done \
+            kiro-gh/bin/task-init

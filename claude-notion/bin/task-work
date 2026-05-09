@@ -9,55 +9,34 @@ Usage:
   task-work <free-form-slug> [options]       # ad-hoc, no Notion URL
 
 Creates a git worktree + branch for a task and opens a new zellij tab
-with a worker agent. If a worktree for that slug already exists, a
-5-char hash is appended so multiple agents can work the same task in parallel.
+with a Claude Code worker session. If a worktree for that slug already
+exists, a 5-char hash is appended so multiple agents can work the same
+task in parallel.
 
 Options:
-  -m, --model MODEL   Model to pass to kiro-cli (e.g. claude-opus-4.6,
-                      claude-sonnet-4.5). Defaults to $TASK_WORK_MODEL if set,
-                      else kiro-cli's own default (auto).
-  -a, --trust-all     Pass --trust-all-tools to kiro-cli so the worker can run
-                      commands without per-tool confirmation. Defaults to
-                      $TASK_WORK_TRUST_ALL=1 if set.
   -b, --base BRANCH   Base branch for the PR (default: current branch at call time).
       --no-launch     Create the worktree and open the tab at its directory,
-                      but do NOT start kiro-cli. Use this when you want to
+                      but do NOT start claude. Use this when you want to
                       pick the command/model interactively.
   -h, --help          Show this help.
 
-Environment:
-  TASK_WORK_MODEL         Default model (overridable with --model)
-  TASK_WORK_TRUST_ALL     If set to 1/true, defaults --trust-all on
-
 Examples:
   task-work add-store-filtering "https://www.notion.so/abc123def456"
-  task-work https://www.notion.so/My-Task-abc123def456
-  task-work refactor-auth -m claude-opus-4.6 --trust-all
+  task-work https://www.notion.so/My-Task-abc123def456abc123def456abc123de
+  task-work refactor-auth
   task-work spike-idea --no-launch
-  TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing https://...
 EOF
   exit "${1:-1}"
 }
 
 # ---------------- arg parsing ----------------
 POSITIONAL=()
-MODEL="${TASK_WORK_MODEL:-}"
-TRUST_ALL=""
 NO_LAUNCH=""
 BASE_BRANCH_OVERRIDE=""
-
-# Treat TASK_WORK_TRUST_ALL=1 / true / yes as enabled
-case "${TASK_WORK_TRUST_ALL:-}" in
-  1|true|TRUE|yes|YES) TRUST_ALL="1" ;;
-esac
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
-    -m|--model)
-      [[ $# -ge 2 ]] || { echo "Error: --model requires a value" >&2; exit 1; }
-      MODEL="$2"; shift 2 ;;
-    -a|--trust-all) TRUST_ALL="1"; shift ;;
     -b|--base)
       [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
       BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
@@ -126,39 +105,30 @@ BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 # ---------------- command builder ----------------
-build_kiro_cmd() {
-  local cmd="kiro-cli chat --agent worker"
-  [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
-  [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
+build_claude_cmd() {
   if [[ -n "$NOTION_URL" ]]; then
-    cmd+=" \"Implement task: $NOTION_URL\""
+    echo "claude \"/worker Implement task: $NOTION_URL\""
+  else
+    echo "claude \"/worker\""
   fi
-  echo "$cmd"
 }
 
 # ---------------- zellij tab launch ----------------
 launch_in_tab() {
   local dir="$1"
-  # Explicitly focus the new tab by name — idempotent, defeats the race
-  # where `write-chars` could otherwise target the previously-focused pane.
   zellij action go-to-tab-name "$SLUG"
   sleep 0.3
 
   if [[ -n "$NO_LAUNCH" ]]; then
-    # Just cd into the worktree, leave the user at a shell prompt
     zellij action write-chars "cd $dir"
   else
-    # Always cd explicitly — zellij's `new-tab --cwd` doesn't reliably
-    # propagate to the spawned shell across all zellij versions.
-    zellij action write-chars "cd $dir && $(build_kiro_cmd)"
+    zellij action write-chars "cd $dir && $(build_claude_cmd)"
   fi
   sleep 0.1
   zellij action write 10  # Enter
 }
 
 # ---------------- worktree creation ----------------
-# Worktree already exists? Spin up a parallel session with a hash suffix
-# so multiple agents can iterate on the same task at the same time.
 if [[ -d "$WORKTREE_DIR" ]]; then
   HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5 || :)
   SLUG="${SLUG}-${HASH}"
@@ -185,10 +155,7 @@ zellij action new-tab --name "$SLUG" --cwd "$WORKTREE_DIR"
 launch_in_tab "$WORKTREE_DIR"
 
 if [[ -n "$NO_LAUNCH" ]]; then
-  echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH) — kiro NOT launched (--no-launch)."
+  echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH) — claude NOT launched (--no-launch)."
 else
-  desc="worker"
-  [[ -n "$MODEL" ]] && desc+=" [model=$MODEL]"
-  [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
-  echo "Started $desc in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
+  echo "Started worker in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
 fi

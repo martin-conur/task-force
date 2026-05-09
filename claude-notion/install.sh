@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing claude-jira commands and scripts..."
+echo "Installing claude-notion commands and scripts..."
 
 # Slash commands → ~/.claude/commands/
 mkdir -p ~/.claude/commands
@@ -26,9 +26,10 @@ done
 ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
 echo "  ✓ Script: task-init (unified)"
 
+# Ensure ~/.local/bin is on PATH
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
-MARKER='# added by claude-jira install.sh'
+MARKER='# added by claude-notion install.sh'
 
 if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
   echo "  ✓ ~/.local/bin already on PATH"
@@ -49,7 +50,8 @@ fi
 
 echo ""
 echo "Done. Next steps:"
-echo "  1. Verify the Atlassian MCP is configured: claude mcp list"
-echo "  2. In your project root, run: task-init claude-jira --site https://... --key PROJ"
-echo "  3. Fill in any remaining details in .claude/jira-workflow.md"
+echo "  1. Verify the Notion MCP is configured: claude mcp list"
+echo "     (If not: claude mcp add --transport http notion https://mcp.notion.com/mcp)"
+echo "  2. In your project root, run: task-init claude-notion"
+echo "  3. Fill in your Notion database IDs in .claude/notion-workflow.md"
 echo "  4. Start with: claude   (then type /pm)"

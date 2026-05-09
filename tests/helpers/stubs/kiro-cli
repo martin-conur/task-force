@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub for kiro-cli — records all invocations, silently succeeds.
+echo "kiro-cli $*" >> "${STUB_CALLS_DIR}/kiro-cli.calls"
+exit 0

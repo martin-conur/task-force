@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: task-init [--help] [--force] [impl] [impl-options]
+
+Sets up the current git repo for an agentic-workflow implementation.
+With no impl argument, shows an interactive menu.
+
+Implementations:
+  claude-jira    Claude Code + Jira (Atlassian MCP)
+                 Options: --site URL, --key PROJ, --board NAME, --force
+  kiro-notion    Kiro CLI + Notion MCP
+                 Options: --force
+  claude-notion  Claude Code + Notion MCP
+                 Options: --force
+
+Global options:
+  --force     Overwrite existing config files (passed through to impl)
+  -h, --help  Show this help
+
+Examples:
+  task-init
+  task-init claude-notion
+  task-init kiro-notion --force
+  task-init claude-jira --site https://acme.atlassian.net --key PROJ --board "My Board"
+EOF
+  exit 0
+}
+
+# Resolve own path through symlinks to find the repo root
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+REPO_ROOT=$(cd -P "$(dirname "$src")" && pwd)
+
+IMPL=""
+FORCE_FLAG=""
+PASSTHROUGH=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage ;;
+    --force) FORCE_FLAG="--force"; shift ;;
+    claude-jira|kiro-notion|claude-notion) IMPL="$1"; shift ;;
+    *) PASSTHROUGH+=("$1"); shift ;;
+  esac
+done
+
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; exit 1; }
+
+if [[ -z "$IMPL" ]]; then
+  echo "Which implementation would you like to set up for this project?"
+  echo "  1) claude-jira   → .claude/jira-workflow.md + CLAUDE.md"
+  echo "  2) kiro-notion   → .kiro/steering/notion-workflow.md"
+  echo "  3) claude-notion → .claude/notion-workflow.md + CLAUDE.md"
+  read -rp "Choice [1-3]: " choice
+  case "$choice" in
+    1) IMPL="claude-jira" ;;
+    2) IMPL="kiro-notion" ;;
+    3) IMPL="claude-notion" ;;
+    *) echo "Invalid choice: $choice" >&2; exit 1 ;;
+  esac
+fi
+
+IMPL_INIT="$REPO_ROOT/$IMPL/bin/task-init"
+if [[ ! -f "$IMPL_INIT" ]]; then
+  echo "Error: $IMPL_INIT not found. Is the repository complete?" >&2
+  exit 1
+fi
+if [[ ! -x "$IMPL_INIT" ]]; then
+  echo "Error: $IMPL_INIT is not executable." >&2
+  exit 1
+fi
+
+exec "$IMPL_INIT" $FORCE_FLAG ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}

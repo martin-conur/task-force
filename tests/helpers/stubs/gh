@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stub for gh CLI — records invocations.
+# Set GH_STUB_PR_URL to simulate an existing PR on "gh pr view".
+echo "gh $*" >> "${STUB_CALLS_DIR}/gh.calls"
+
+if [[ "$*" == *"pr view"* && "$*" == *"--json url"* ]]; then
+  if [[ -n "${GH_STUB_PR_URL:-}" ]]; then
+    echo "$GH_STUB_PR_URL"
+    exit 0
+  fi
+  # No PR — exit 1 so the caller's "|| true" produces empty string
+  exit 1
+fi
+
+exit 0

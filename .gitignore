@@ -1,2 +1,3 @@
 .mcp.json
 .DS_Store
+tests/tmp/

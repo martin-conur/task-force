@@ -8,9 +8,9 @@ Copy this file to your project's `.claude/jira-workflow.md` and fill in your det
 
 ### Jira
 
-- **Site**: `https://<your-domain>.atlassian.net`
-- **Project key(s)**: `PROJ` (issue keys look like `PROJ-123`)
-- **Board name**: `<Your Board Name>`
+- **Site**: `{SITE}`
+- **Project key(s)**: `{KEY}` (issue keys look like `{KEY}-123`)
+- **Board name**: `{BOARD}`
 
 ### Issue Lifecycle
 
@@ -39,12 +39,13 @@ The Planner writes its spec into the issue **description** (overwriting) **OR** 
 
 ### Commit Convention
 
-Reference the Jira key as a prefix: `PROJ-123: <short description>`
+Reference the Jira key as a prefix: `{KEY}-123: <short description>`
 
 ### Shell Commands
 
 - `task-work <JIRA-KEY-or-url-or-slug>` — create worktree + zellij tab + worker session
 - `task-done` — from within a worktree: show diff, print PR command, cleanup
+- `task-done --remove-worktree` — cleanup only (use after worker has already created the PR)
 
 ### Atlassian MCP
 

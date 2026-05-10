@@ -71,14 +71,19 @@ if [[ -z "$TARGET" ]]; then
     done
   }
 
-  SELECTED=""
   if command -v fzf &>/dev/null; then
-    SELECTED=$(printf '%s\n' "${_LABELS[@]}" \
-      | fzf --prompt="Select implementation (↑↓ to move, Enter to select): ") || true
-    [[ -n "$SELECTED" ]] && TARGET=$(_resolve_label "$SELECTED")
+    if SELECTED=$(printf '%s\n' "${_LABELS[@]}" \
+      | fzf --prompt="Select implementation (↑↓ to move, Enter to select): "); then
+      TARGET=$(_resolve_label "$SELECTED")
+    else
+      exit 1
+    fi
   elif command -v gum &>/dev/null; then
-    SELECTED=$(gum choose "${_LABELS[@]}") || true
-    [[ -n "$SELECTED" ]] && TARGET=$(_resolve_label "$SELECTED")
+    if SELECTED=$(gum choose "${_LABELS[@]}"); then
+      TARGET=$(_resolve_label "$SELECTED")
+    else
+      exit 1
+    fi
   fi
 
   if [[ -z "$TARGET" ]]; then

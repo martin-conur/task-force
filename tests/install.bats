@@ -110,6 +110,13 @@ teardown() {
   assert_output --partial "Installing kiro-gh"
 }
 
+@test "fzf: Ctrl-C (exit 1) aborts install, does not fall through to numbered menu" {
+  # FZF_STUB_CHOICE unset → stub exits 1 (simulates Ctrl-C)
+  run "$INSTALL_SH"
+  assert_failure
+  refute_output --partial "Which AI tool?"
+}
+
 # ---------------------------------------------------------------------------
 # gum TUI path (gum present, fzf absent)
 # ---------------------------------------------------------------------------
@@ -141,6 +148,14 @@ teardown() {
   assert_success
   assert_output --partial "Installing claude-jira"
   assert_output --partial "Installing kiro-gh"
+}
+
+@test "gum: Ctrl-C (exit 1) aborts install, does not fall through to numbered menu" {
+  rm -f "$STUB_BIN/fzf"
+  # GUM_STUB_CHOICE unset → stub exits 1 (simulates Ctrl-C)
+  run "$INSTALL_SH"
+  assert_failure
+  refute_output --partial "Which AI tool?"
 }
 
 # ---------------------------------------------------------------------------

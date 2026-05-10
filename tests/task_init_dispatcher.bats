@@ -8,6 +8,9 @@ load helpers/common
 
 setup() {
   setup_repo
+  setup_stubs
+  # Restrict PATH so system-installed fzf/gum don't interfere with fallback tests.
+  export PATH="$STUB_BIN:/usr/bin:/bin"
   cd "$MAIN_REPO"
 }
 
@@ -108,46 +111,118 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Interactive menu (two-step: tool then board)
+# TUI selector (fzf path)
+# ---------------------------------------------------------------------------
+
+@test "fzf: Claude Code + GitHub Projects → claude-gh" {
+  run env FZF_STUB_CHOICE="Claude Code + GitHub Projects  → .claude/gh-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+}
+
+@test "fzf: Claude Code + Notion → claude-notion" {
+  run env FZF_STUB_CHOICE="Claude Code + Notion           → .claude/notion-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/notion-workflow.md" ]
+}
+
+@test "fzf: Claude Code + Jira → claude-jira" {
+  run env FZF_STUB_CHOICE="Claude Code + Jira             → .claude/jira-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/jira-workflow.md" ]
+}
+
+@test "fzf: Kiro + GitHub Projects → kiro-gh" {
+  run env FZF_STUB_CHOICE="Kiro + GitHub Projects         → .kiro/steering/gh-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+}
+
+@test "fzf: Kiro + Notion → kiro-notion" {
+  run env FZF_STUB_CHOICE="Kiro + Notion                  → .kiro/steering/notion-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/notion-workflow.md" ]
+}
+
+@test "fzf: Ctrl-C exits non-zero, does not fall through to numbered menu" {
+  run "$TASK_INIT_DISPATCHER"
+  assert_failure
+  refute_output --partial "Which AI tool?"
+}
+
+# ---------------------------------------------------------------------------
+# TUI selector (gum path — fzf absent)
+# ---------------------------------------------------------------------------
+
+@test "gum: Claude Code + GitHub Projects → claude-gh" {
+  rm -f "$STUB_BIN/fzf"
+  run env GUM_STUB_CHOICE="Claude Code + GitHub Projects  → .claude/gh-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+}
+
+@test "gum: Kiro + Notion → kiro-notion" {
+  rm -f "$STUB_BIN/fzf"
+  run env GUM_STUB_CHOICE="Kiro + Notion                  → .kiro/steering/notion-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/notion-workflow.md" ]
+}
+
+@test "gum: Ctrl-C exits non-zero, does not fall through to numbered menu" {
+  rm -f "$STUB_BIN/fzf"
+  run "$TASK_INIT_DISPATCHER"
+  assert_failure
+  refute_output --partial "Which AI tool?"
+}
+
+# ---------------------------------------------------------------------------
+# Fallback numbered menu (neither fzf nor gum present)
 # ---------------------------------------------------------------------------
 
 @test "interactive menu: Claude Code + Jira (1 then 1)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '1\n1\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.claude/jira-workflow.md" ]
 }
 
 @test "interactive menu: Claude Code + Notion (1 then 2)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '1\n2\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.claude/notion-workflow.md" ]
 }
 
 @test "interactive menu: Claude Code + GitHub Projects (1 then 3)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '1\n3\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
 }
 
 @test "interactive menu: Kiro + Notion (2 then 1)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '2\n1\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.kiro/steering/notion-workflow.md" ]
 }
 
 @test "interactive menu: Kiro + GitHub Projects (2 then 2)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '2\n2\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
 }
 
 @test "interactive menu invalid tool choice exits non-zero" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "echo 9 | \"$TASK_INIT_DISPATCHER\""
   assert_failure
   assert_output --partial "Invalid choice"
 }
 
 @test "interactive menu invalid board choice exits non-zero" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '1\n9\n' | \"$TASK_INIT_DISPATCHER\""
   assert_failure
   assert_output --partial "Invalid choice"

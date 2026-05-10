@@ -25,9 +25,9 @@ claude mcp add --transport stdio github -- npx -y @github/github-mcp-server
 
 ### GitHub Repository
 
-- **Owner**: `YOUR_OWNER` (GitHub user or org name)
-- **Repo**: `YOUR_REPO` (repository name)
-- **Project number**: `YOUR_PROJECT_NUMBER` (from the project URL: github.com/users/YOUR_OWNER/projects/N or github.com/orgs/YOUR_OWNER/projects/N)
+- **Owner**: `{OWNER}` (GitHub user or org name)
+- **Repo**: `{REPO}` (repository name)
+- **Project number**: `{PROJECT}` (from the project URL: github.com/users/{OWNER}/projects/N or github.com/orgs/{OWNER}/projects/N)
 
 ### Task Lifecycle
 
@@ -56,8 +56,8 @@ Use the issue title as prefix: `<Issue title>: <short description>`
 
 Examples:
 ```bash
-task-work add-auth "https://github.com/YOUR_OWNER/YOUR_REPO/issues/42"
-task-work https://github.com/YOUR_OWNER/YOUR_REPO/issues/42
+task-work add-auth "https://github.com/{OWNER}/{REPO}/issues/42"
+task-work https://github.com/{OWNER}/{REPO}/issues/42
 task-work refactor-auth
 task-work spike-idea --no-launch
 ```

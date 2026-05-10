@@ -10,7 +10,7 @@ mkdir -p ~/.claude/commands
 for cmd in "$SCRIPT_DIR"/commands/*.md; do
   name=$(basename "$cmd")
   ln -sf "$cmd" ~/.claude/commands/"$name"
-  echo "  ✓ Slash command: /$(basename "$name" .md)"
+  echo "  ✓ Slash command: /$(basename "$name" .md)"; sleep 0.05
 done
 
 # Scripts → ~/.local/bin/ (task-init handled separately via unified root script)
@@ -19,12 +19,12 @@ for script in "$SCRIPT_DIR"/bin/*; do
   name=$(basename "$script")
   [[ "$name" == "task-init" ]] && continue
   ln -sf "$script" ~/.local/bin/"$name"
-  echo "  ✓ Script: $name"
+  echo "  ✓ Script: $name"; sleep 0.05
 done
 
 # Unified task-init (always points to repo-root task-init regardless of which impl was installed last)
 ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
-echo "  ✓ Script: task-init (unified)"
+echo "  ✓ Script: task-init (unified)"; sleep 0.05
 
 # Ensure ~/.local/bin is on PATH
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here
@@ -49,9 +49,27 @@ else
 fi
 
 echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+sleep 0.3
+echo ""
 echo "Done. Next steps:"
-echo "  1. Verify the Notion MCP is configured: claude mcp list"
-echo "     (If not: claude mcp add --transport http notion https://mcp.notion.com/mcp)"
-echo "  2. In your project root, run: task-init claude-notion"
+echo ""
+sleep 0.4
+echo "  1. Verify the Notion MCP is configured:"
+echo "       claude mcp list"
+echo "     If missing:"
+echo "       claude mcp add --transport http notion https://mcp.notion.com/mcp"
+sleep 0.4
+echo ""
+echo "  2. In your project root, run:"
+echo "       task-init claude-notion"
+sleep 0.4
+echo ""
 echo "  3. Fill in your Notion database IDs in .claude/notion-workflow.md"
-echo "  4. Start with: claude   (then type /pm)"
+echo "     (open your Notion board in Claude Code to find the collection:// IDs)"
+sleep 0.4
+echo ""
+echo "  4. Start Claude and kick off the PM agent:"
+echo "       claude"
+echo "     then type /pm"
+echo ""

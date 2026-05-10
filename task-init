@@ -6,7 +6,8 @@ usage() {
 Usage: task-init [--help] [--force] [impl] [impl-options]
 
 Sets up the current git repo for an agentic-workflow implementation.
-With no impl argument, shows an interactive two-step menu (AI tool → board).
+With no impl argument, shows an interactive TUI selector (fzf or gum) if available,
+or falls back to a two-step numbered menu.
 
 Implementations:
   claude-jira    Claude Code + Jira (Atlassian MCP)
@@ -58,38 +59,69 @@ done
 git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; exit 1; }
 
 if [[ -z "$IMPL" ]]; then
-  echo "Which AI tool?"
-  echo "  1) Claude Code"
-  echo "  2) Kiro"
-  read -rp "Choice [1-2]: " tool_choice
+  _LABELS=(
+    "Claude Code + GitHub Projects  → .claude/gh-workflow.md"
+    "Claude Code + Notion           → .claude/notion-workflow.md"
+    "Claude Code + Jira             → .claude/jira-workflow.md"
+    "Kiro + GitHub Projects         → .kiro/steering/gh-workflow.md"
+    "Kiro + Notion                  → .kiro/steering/notion-workflow.md"
+  )
+  _TARGETS=(claude-gh claude-notion claude-jira kiro-gh kiro-notion)
 
-  case "$tool_choice" in
-    1)
-      echo ""
-      echo "Which board/tracker?"
-      echo "  1) Jira (Atlassian MCP)       → .claude/jira-workflow.md + CLAUDE.md"
-      echo "  2) Notion (Notion MCP)         → .claude/notion-workflow.md + CLAUDE.md"
-      echo "  3) GitHub Projects (GitHub MCP) → .claude/gh-workflow.md + CLAUDE.md"
-      read -rp "Choice [1-3]: " board_choice
-      case "$board_choice" in
-        1) IMPL="claude-jira" ;;
-        2) IMPL="claude-notion" ;;
-        3) IMPL="claude-gh" ;;
-        *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
-      esac ;;
-    2)
-      echo ""
-      echo "Which board/tracker?"
-      echo "  1) Notion (Notion MCP)         → .kiro/steering/notion-workflow.md"
-      echo "  2) GitHub Projects (GitHub MCP) → .kiro/steering/gh-workflow.md"
-      read -rp "Choice [1-2]: " board_choice
-      case "$board_choice" in
-        1) IMPL="kiro-notion" ;;
-        2) IMPL="kiro-gh" ;;
-        *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
-      esac ;;
-    *) echo "Invalid choice: $tool_choice" >&2; exit 1 ;;
-  esac
+  _resolve_label() {
+    local selected="$1" i
+    for i in "${!_LABELS[@]}"; do
+      [[ "${_LABELS[$i]}" == "$selected" ]] && echo "${_TARGETS[$i]}" && return 0
+    done
+  }
+
+  if command -v fzf &>/dev/null; then
+    if SELECTED=$(printf '%s\n' "${_LABELS[@]}" \
+      | fzf --prompt="Select implementation (↑↓ / Enter): "); then
+      IMPL=$(_resolve_label "$SELECTED")
+    else
+      exit 1
+    fi
+  elif command -v gum &>/dev/null; then
+    if SELECTED=$(gum choose "${_LABELS[@]}"); then
+      IMPL=$(_resolve_label "$SELECTED")
+    else
+      exit 1
+    fi
+  else
+    echo "Which AI tool?"
+    echo "  1) Claude Code"
+    echo "  2) Kiro"
+    read -rp "Choice [1-2]: " tool_choice
+
+    case "$tool_choice" in
+      1)
+        echo ""
+        echo "Which board/tracker?"
+        echo "  1) Jira (Atlassian MCP)        → .claude/jira-workflow.md + CLAUDE.md"
+        echo "  2) Notion (Notion MCP)          → .claude/notion-workflow.md + CLAUDE.md"
+        echo "  3) GitHub Projects (GitHub MCP) → .claude/gh-workflow.md + CLAUDE.md"
+        read -rp "Choice [1-3]: " board_choice
+        case "$board_choice" in
+          1) IMPL="claude-jira" ;;
+          2) IMPL="claude-notion" ;;
+          3) IMPL="claude-gh" ;;
+          *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
+        esac ;;
+      2)
+        echo ""
+        echo "Which board/tracker?"
+        echo "  1) Notion (Notion MCP)          → .kiro/steering/notion-workflow.md"
+        echo "  2) GitHub Projects (GitHub MCP)  → .kiro/steering/gh-workflow.md"
+        read -rp "Choice [1-2]: " board_choice
+        case "$board_choice" in
+          1) IMPL="kiro-notion" ;;
+          2) IMPL="kiro-gh" ;;
+          *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
+        esac ;;
+      *) echo "Invalid choice: $tool_choice" >&2; exit 1 ;;
+    esac
+  fi
 fi
 
 IMPL_INIT="$REPO_ROOT/$IMPL/bin/task-init"

@@ -73,6 +73,24 @@ teardown() {
   assert_success
 }
 
+@test "passes --owner --repo --project through to claude-gh implementation" {
+  run "$TASK_INIT_DISPATCHER" claude-gh --owner myorg --repo myrepo --project 5
+  assert_success
+  run grep "myorg" "$MAIN_REPO/.claude/gh-workflow.md"
+  assert_success
+  run grep "myrepo" "$MAIN_REPO/.claude/gh-workflow.md"
+  assert_success
+}
+
+@test "passes --owner --repo --project through to kiro-gh implementation" {
+  run "$TASK_INIT_DISPATCHER" kiro-gh --owner myorg --repo myrepo --project 5
+  assert_success
+  run grep "myorg" "$MAIN_REPO/.kiro/steering/gh-workflow.md"
+  assert_success
+  run grep "myrepo" "$MAIN_REPO/.kiro/steering/gh-workflow.md"
+  assert_success
+}
+
 # ---------------------------------------------------------------------------
 # New implementations — delegation
 # ---------------------------------------------------------------------------

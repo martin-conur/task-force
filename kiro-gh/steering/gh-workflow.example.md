@@ -16,9 +16,9 @@ Set `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment before running Kiro.
 
 ### GitHub Repository
 
-- **Owner**: `YOUR_OWNER` (GitHub user or org name)
-- **Repo**: `YOUR_REPO` (repository name)
-- **Project number**: `YOUR_PROJECT_NUMBER` (from the project URL: github.com/users/YOUR_OWNER/projects/N or github.com/orgs/YOUR_OWNER/projects/N)
+- **Owner**: `{OWNER}` (GitHub user or org name)
+- **Repo**: `{REPO}` (repository name)
+- **Project number**: `{PROJECT}` (from the project URL: github.com/users/{OWNER}/projects/N or github.com/orgs/{OWNER}/projects/N)
 
 ### Task Lifecycle
 

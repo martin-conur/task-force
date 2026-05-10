@@ -2,26 +2,81 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-init [--force]"
+  echo "Usage: task-init [--owner OWNER] [--repo REPO] [--project N] [--force]"
   echo ""
   echo "Set up the current repo for the claude-gh workflow:"
   echo "  - Create .claude/gh-workflow.md from the bundled template"
+  echo "  - Substitute owner / repo / project number if provided"
+  echo "    (auto-detected from git remote when possible; missing values prompted interactively)"
   echo "  - Add @.claude/gh-workflow.md to CLAUDE.md so it auto-loads in every session"
   echo ""
   echo "Options:"
-  echo "  --force   Overwrite .claude/gh-workflow.md if present"
+  echo "  --owner OWNER    GitHub user or org name"
+  echo "  --repo  REPO     Repository name"
+  echo "  --project N      GitHub Projects board number"
+  echo "  --force          Overwrite .claude/gh-workflow.md if present"
   exit 1
 }
 
+OWNER=""
+REPO=""
+PROJECT=""
 FORCE=false
+OWNER_VIA_FLAG=false
+REPO_VIA_FLAG=false
+PROJECT_VIA_FLAG=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --force) FORCE=true; shift ;;
-    -h|--help) usage ;;
-    *) echo "Unknown option: $1"; usage ;;
+    --owner)   OWNER="$2";   OWNER_VIA_FLAG=true;   shift 2;;
+    --repo)    REPO="$2";    REPO_VIA_FLAG=true;    shift 2;;
+    --project) PROJECT="$2"; PROJECT_VIA_FLAG=true; shift 2;;
+    --force)   FORCE=true; shift;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
   esac
 done
+
+# Auto-detect owner/repo from git remote (only for values not set via flag)
+_detect_gh_remote() {
+  local url
+  url=$(git remote get-url origin 2>/dev/null) || return 1
+  url="${url%.git}"  # strip trailing .git before matching
+  if [[ "$url" =~ github\.com[:/]([^/]+)/([^/]+)$ ]]; then
+    echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+  fi
+}
+
+if ! $OWNER_VIA_FLAG || ! $REPO_VIA_FLAG; then
+  _detected=$(_detect_gh_remote 2>/dev/null) || true
+  if [[ -n "${_detected:-}" ]]; then
+    $OWNER_VIA_FLAG || OWNER="${_detected%% *}"
+    $REPO_VIA_FLAG  || REPO="${_detected##* }"
+  fi
+fi
+
+# Interactive prompts when running from a terminal (skipped for values set via flag)
+if [[ -t 0 ]]; then
+  if ! $OWNER_VIA_FLAG; then
+    if [[ -n "$OWNER" ]]; then
+      read -rp "GitHub owner [$OWNER]: " _in
+      [[ -n "${_in:-}" ]] && OWNER="$_in"
+    else
+      read -rp "GitHub owner (user or org) [blank → leaves {OWNER}]: " OWNER
+    fi
+  fi
+  if ! $REPO_VIA_FLAG; then
+    if [[ -n "$REPO" ]]; then
+      read -rp "Repository name [$REPO]: " _in
+      [[ -n "${_in:-}" ]] && REPO="$_in"
+    else
+      read -rp "Repository name [blank → leaves {REPO}]: " REPO
+    fi
+  fi
+  if ! $PROJECT_VIA_FLAG; then
+    read -rp "Project number (find at: github.com/users/${OWNER:-YOUR_OWNER}/projects/N) [blank → leaves {PROJECT}]: " PROJECT
+  fi
+fi
 
 # Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
 src="${BASH_SOURCE[0]}"
@@ -50,7 +105,16 @@ if [[ -f "$TARGET" && "$FORCE" != true ]]; then
   exit 1
 fi
 
-cp "$TEMPLATE" "$TARGET"
+sed_args=()
+[[ -n "$OWNER"   ]] && sed_args+=(-e "s|{OWNER}|$OWNER|g")
+[[ -n "$REPO"    ]] && sed_args+=(-e "s|{REPO}|$REPO|g")
+[[ -n "$PROJECT" ]] && sed_args+=(-e "s|{PROJECT}|$PROJECT|g")
+
+if [[ ${#sed_args[@]} -gt 0 ]]; then
+  sed "${sed_args[@]}" "$TEMPLATE" > "$TARGET"
+else
+  cp "$TEMPLATE" "$TARGET"
+fi
 echo "✓ Wrote $TARGET"
 
 IMPORT_LINE="@.claude/gh-workflow.md"
@@ -67,4 +131,4 @@ else
 fi
 
 echo ""
-echo "Done. Open .claude/gh-workflow.md to fill in your GitHub owner, repo, and project number."
+echo "Done. Open .claude/gh-workflow.md to fill in any remaining {placeholders}."

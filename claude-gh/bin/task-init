@@ -37,6 +37,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Escape special sed replacement characters (|, &, \) to prevent injection
+_sed_escape() { printf '%s' "$1" | sed 's/[|&\]/\\&/g'; }
+
 # Auto-detect owner/repo from git remote (only for values not set via flag)
 _detect_gh_remote() {
   local url
@@ -47,34 +50,34 @@ _detect_gh_remote() {
   fi
 }
 
-if ! $OWNER_VIA_FLAG || ! $REPO_VIA_FLAG; then
+if [[ "$OWNER_VIA_FLAG" == false ]] || [[ "$REPO_VIA_FLAG" == false ]]; then
   _detected=$(_detect_gh_remote 2>/dev/null) || true
   if [[ -n "${_detected:-}" ]]; then
-    $OWNER_VIA_FLAG || OWNER="${_detected%% *}"
-    $REPO_VIA_FLAG  || REPO="${_detected##* }"
+    [[ "$OWNER_VIA_FLAG" == false ]] && OWNER="${_detected%% *}"
+    [[ "$REPO_VIA_FLAG"  == false ]] && REPO="${_detected##* }"
   fi
 fi
 
 # Interactive prompts when running from a terminal (skipped for values set via flag)
 if [[ -t 0 ]]; then
-  if ! $OWNER_VIA_FLAG; then
+  if [[ "$OWNER_VIA_FLAG" == false ]]; then
     if [[ -n "$OWNER" ]]; then
-      read -rp "GitHub owner [$OWNER]: " _in
-      [[ -n "${_in:-}" ]] && OWNER="$_in"
+      read -rp "GitHub owner [$OWNER]: " _input
+      [[ -n "${_input:-}" ]] && OWNER="$_input"
     else
       read -rp "GitHub owner (user or org) [blank → leaves {OWNER}]: " OWNER
     fi
   fi
-  if ! $REPO_VIA_FLAG; then
+  if [[ "$REPO_VIA_FLAG" == false ]]; then
     if [[ -n "$REPO" ]]; then
-      read -rp "Repository name [$REPO]: " _in
-      [[ -n "${_in:-}" ]] && REPO="$_in"
+      read -rp "Repository name [$REPO]: " _input
+      [[ -n "${_input:-}" ]] && REPO="$_input"
     else
       read -rp "Repository name [blank → leaves {REPO}]: " REPO
     fi
   fi
-  if ! $PROJECT_VIA_FLAG; then
-    read -rp "Project number (find at: github.com/users/${OWNER:-YOUR_OWNER}/projects/N) [blank → leaves {PROJECT}]: " PROJECT
+  if [[ "$PROJECT_VIA_FLAG" == false ]]; then
+    read -rp "Project number (find at: github.com/users/OWNER/projects/N or github.com/orgs/OWNER/projects/N) [blank → leaves {PROJECT}]: " PROJECT
   fi
 fi
 
@@ -106,9 +109,9 @@ if [[ -f "$TARGET" && "$FORCE" != true ]]; then
 fi
 
 sed_args=()
-[[ -n "$OWNER"   ]] && sed_args+=(-e "s|{OWNER}|$OWNER|g")
-[[ -n "$REPO"    ]] && sed_args+=(-e "s|{REPO}|$REPO|g")
-[[ -n "$PROJECT" ]] && sed_args+=(-e "s|{PROJECT}|$PROJECT|g")
+[[ -n "$OWNER"   ]] && sed_args+=(-e "s|{OWNER}|$(_sed_escape "$OWNER")|g")
+[[ -n "$REPO"    ]] && sed_args+=(-e "s|{REPO}|$(_sed_escape "$REPO")|g")
+[[ -n "$PROJECT" ]] && sed_args+=(-e "s|{PROJECT}|$(_sed_escape "$PROJECT")|g")
 
 if [[ ${#sed_args[@]} -gt 0 ]]; then
   sed "${sed_args[@]}" "$TEMPLATE" > "$TARGET"

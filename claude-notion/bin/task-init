@@ -2,26 +2,61 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-init [--force]"
+  echo "Usage: task-init [--force] [--help-ids]"
   echo ""
   echo "Set up the current repo for the claude-notion workflow:"
   echo "  - Create .claude/notion-workflow.md from the bundled template"
   echo "  - Add @.claude/notion-workflow.md to CLAUDE.md so it auto-loads in every session"
   echo ""
   echo "Options:"
-  echo "  --force   Overwrite .claude/notion-workflow.md if present"
+  echo "  --force      Overwrite .claude/notion-workflow.md if present"
+  echo "  --help-ids   Print guide for finding Notion database IDs (no setup)"
   exit 1
 }
 
+print_ids_guide() {
+  cat <<'GUIDE'
+
+How to find your Notion database IDs
+─────────────────────────────────────
+Notion IDs cannot be detected from the URL — you need an active Notion MCP
+session to discover them. Here's how:
+
+  1. Start a Claude Code session in this project directory:
+       claude
+
+  2. Ask Claude: "Help me find my Notion database IDs"
+     (Claude will use the Notion MCP to fetch your board and extract the IDs)
+
+  3. Paste the IDs into .claude/notion-workflow.md where marked:
+       Tasks:    collection://<YOUR_TASKS_DATA_SOURCE_ID>
+       Projects: collection://<YOUR_PROJECTS_DATA_SOURCE_ID>
+       Board:    <YOUR_BOARD_PAGE_ID>
+
+  Then run /pm to verify everything works.
+
+Tip: IDs look like UUID strings (e.g. 8a1b2c3d-...) or opaque alphanumeric
+     slugs depending on how you access Notion. The MCP response will show
+     them in <data-source url="collection://..."> attributes.
+GUIDE
+}
+
 FORCE=false
+HELP_IDS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) FORCE=true; shift ;;
+    --help-ids) HELP_IDS=true; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
+
+if [[ "$HELP_IDS" == true ]]; then
+  print_ids_guide
+  exit 0
+fi
 
 # Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
 src="${BASH_SOURCE[0]}"
@@ -66,5 +101,4 @@ else
   echo "✓ Created CLAUDE.md with $IMPORT_LINE"
 fi
 
-echo ""
-echo "Done. Open .claude/notion-workflow.md to fill in your Notion database IDs."
+print_ids_guide

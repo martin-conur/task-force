@@ -3,14 +3,23 @@
 Copy this file to your project's `.kiro/steering/notion-workflow.md` and fill in your Notion database IDs.
 
 ### Notion Database IDs
+
+<!-- Replace each placeholder with the real ID.
+     Run `task-init kiro-notion --help-ids` for step-by-step discovery instructions.
+
+     What each ID looks like:
+       collection://...  — opaque string from the Notion MCP (data-source URL)
+       board page ID     — UUID like 8a1b2c3d-e4f5-6789-abcd-ef0123456789
+
+     How to find them (requires Notion MCP active in Kiro):
+       1. Run: kiro
+       2. Ask: "Help me find my Notion database IDs"
+       3. Kiro will list your boards and extract the IDs from the MCP response
+-->
+
 - **Tasks**: `collection://<YOUR_TASKS_DATA_SOURCE_ID>`
 - **Projects**: `collection://<YOUR_PROJECTS_DATA_SOURCE_ID>`
 - **Board page**: `<YOUR_BOARD_PAGE_ID>`
-
-To find these IDs:
-1. Open your Notion board in Kiro with the Notion MCP
-2. Use `notion-fetch` on your database URL
-3. Look for `<data-source url="collection://...">` tags in the response
 
 ### Task Lifecycle
 Not Started → In Progress → Done (or Archived)

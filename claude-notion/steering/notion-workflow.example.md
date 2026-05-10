@@ -25,14 +25,22 @@ claude mcp add --transport http notion https://mcp.notion.com/mcp
 
 ### Notion Database IDs
 
+<!-- Replace each placeholder with the real ID.
+     Run `task-init claude-notion --help-ids` for step-by-step discovery instructions.
+
+     What each ID looks like:
+       collection://...  — opaque string from the Notion MCP (data-source URL)
+       board page ID     — UUID like 8a1b2c3d-e4f5-6789-abcd-ef0123456789
+
+     How to find them (requires Notion MCP active in Claude Code):
+       1. Run: claude
+       2. Ask: "Help me find my Notion database IDs"
+       3. Claude will list your boards and extract the IDs from the MCP response
+-->
+
 - **Tasks**: `collection://<YOUR_TASKS_DATA_SOURCE_ID>`
 - **Projects**: `collection://<YOUR_PROJECTS_DATA_SOURCE_ID>`
 - **Board page**: `<YOUR_BOARD_PAGE_ID>`
-
-To find these IDs:
-1. Open your Notion board in Claude Code with the Notion MCP
-2. Use `notion-fetch` on your database URL
-3. Look for `<data-source url="collection://...">` tags in the response
 
 ### Task Lifecycle
 

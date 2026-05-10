@@ -13,11 +13,11 @@ Implementations:
   claude-jira    Claude Code + Jira (Atlassian MCP)
                  Options: --site URL, --key PROJ, --board NAME, --force
   claude-notion  Claude Code + Notion MCP
-                 Options: --force
+                 Options: --force, --help-ids
   claude-gh      Claude Code + GitHub Projects (GitHub MCP)
                  Options: --force
   kiro-notion    Kiro CLI + Notion MCP
-                 Options: --force
+                 Options: --force, --help-ids
   kiro-gh        Kiro CLI + GitHub Projects (GitHub MCP)
                  Options: --force
 
@@ -45,16 +45,30 @@ REPO_ROOT=$(cd -P "$(dirname "$src")" && pwd)
 
 IMPL=""
 FORCE_FLAG=""
+HELP_IDS=false
 PASSTHROUGH=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage ;;
     --force) FORCE_FLAG="--force"; shift ;;
+    --help-ids) HELP_IDS=true; PASSTHROUGH+=("$1"); shift ;;
     claude-jira|claude-notion|claude-gh|kiro-notion|kiro-gh) IMPL="$1"; shift ;;
     *) PASSTHROUGH+=("$1"); shift ;;
   esac
 done
+
+# --help-ids only prints a guide; skip git-repo check and TUI selector
+if [[ "$HELP_IDS" == true ]]; then
+  if [[ -z "$IMPL" ]]; then
+    echo "Error: specify an impl with --help-ids (e.g. task-init claude-notion --help-ids)" >&2
+    exit 1
+  fi
+  IMPL_INIT="$REPO_ROOT/$IMPL/bin/task-init"
+  [[ -f "$IMPL_INIT" ]] || { echo "Error: $IMPL_INIT not found. Is the repository complete?" >&2; exit 1; }
+  [[ -x "$IMPL_INIT" ]] || { echo "Error: $IMPL_INIT is not executable." >&2; exit 1; }
+  exec "$IMPL_INIT" "${PASSTHROUGH[@]}"
+fi
 
 git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; exit 1; }
 

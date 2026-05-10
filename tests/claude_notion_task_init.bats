@@ -87,6 +87,35 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Post-install guidance
+# ---------------------------------------------------------------------------
+
+@test "prints Notion ID discovery guide after setup" {
+  run "$CLAUDE_NOTION_TASK_INIT"
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+  assert_output --partial "claude"
+}
+
+# ---------------------------------------------------------------------------
+# --help-ids flag
+# ---------------------------------------------------------------------------
+
+@test "--help-ids prints guide without running setup" {
+  run "$CLAUDE_NOTION_TASK_INIT" --help-ids
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+  assert [ ! -f "$TARGET_DIR/.claude/notion-workflow.md" ]
+}
+
+@test "--help-ids works outside a git repo" {
+  cd /tmp
+  run "$CLAUDE_NOTION_TASK_INIT" --help-ids
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

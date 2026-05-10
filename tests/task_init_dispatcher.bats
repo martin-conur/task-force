@@ -229,6 +229,44 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# --help-ids passthrough
+# ---------------------------------------------------------------------------
+
+@test "--help-ids after impl name prints guide, creates no files" {
+  run "$TASK_INIT_DISPATCHER" claude-notion --help-ids
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+  assert [ ! -f "$MAIN_REPO/.claude/notion-workflow.md" ]
+}
+
+@test "--help-ids before impl name prints guide, creates no files" {
+  run "$TASK_INIT_DISPATCHER" --help-ids claude-notion
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+  assert [ ! -f "$MAIN_REPO/.claude/notion-workflow.md" ]
+}
+
+@test "--help-ids kiro-notion prints guide, creates no files" {
+  run "$TASK_INIT_DISPATCHER" kiro-notion --help-ids
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+  assert [ ! -f "$MAIN_REPO/.kiro/steering/notion-workflow.md" ]
+}
+
+@test "--help-ids without impl name exits non-zero with helpful message" {
+  run "$TASK_INIT_DISPATCHER" --help-ids
+  assert_failure
+  assert_output --partial "specify an impl"
+}
+
+@test "--help-ids works outside a git repo" {
+  cd /tmp
+  run "$TASK_INIT_DISPATCHER" claude-notion --help-ids
+  assert_success
+  assert_output --partial "How to find your Notion database IDs"
+}
+
+# ---------------------------------------------------------------------------
 # Error paths
 # ---------------------------------------------------------------------------
 

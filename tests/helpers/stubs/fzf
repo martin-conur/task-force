@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub for fzf — records invocations, returns FZF_STUB_CHOICE.
+# Drains stdin (the label list). Exits 1 if FZF_STUB_CHOICE is unset (simulates Ctrl-C).
+echo "fzf $*" >> "${STUB_CALLS_DIR}/fzf.calls"
+cat > /dev/null
+if [[ -z "${FZF_STUB_CHOICE:-}" ]]; then
+  exit 1
+fi
+echo "$FZF_STUB_CHOICE"
+exit 0

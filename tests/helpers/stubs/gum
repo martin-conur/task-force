@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stub for gum — records invocations.
+# When called as "gum choose", returns GUM_STUB_CHOICE; exits 1 if unset.
+echo "gum $*" >> "${STUB_CALLS_DIR}/gum.calls"
+if [[ "${1:-}" == "choose" ]]; then
+  if [[ -z "${GUM_STUB_CHOICE:-}" ]]; then
+    exit 1
+  fi
+  echo "$GUM_STUB_CHOICE"
+  exit 0
+fi
+exit 0

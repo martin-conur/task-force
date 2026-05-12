@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared zellij tab launcher.
+AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT_REAL/lib/zellij-tab.sh"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -114,19 +119,7 @@ build_claude_cmd() {
 }
 
 # ---------------- zellij tab launch ----------------
-launch_in_tab() {
-  local dir="$1"
-  zellij action go-to-tab-name "$SLUG"
-  sleep 0.3
-
-  if [[ -n "$NO_LAUNCH" ]]; then
-    zellij action write-chars "cd $dir"
-  else
-    zellij action write-chars "cd $dir && $(build_claude_cmd)"
-  fi
-  sleep 0.1
-  zellij action write 10  # Enter
-}
+# Shared logic lives in lib/zellij-tab.sh (aw_launch_tab).
 
 # ---------------- worktree creation ----------------
 if [[ -d "$WORKTREE_DIR" ]]; then
@@ -151,8 +144,11 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 printf 'BASE_BRANCH=%s\nSLUG=%s\nGH_URL=%s\n' "$BASE_BRANCH" "$SLUG" "$GH_URL" > "$INFO_FILE"
 
 echo "Opening zellij tab '$SLUG'..."
-zellij action new-tab --name "$SLUG" --cwd "$WORKTREE_DIR"
-launch_in_tab "$WORKTREE_DIR"
+if [[ -n "$NO_LAUNCH" ]]; then
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" ""
+else
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "$(build_claude_cmd)"
+fi
 
 if [[ -n "$NO_LAUNCH" ]]; then
   echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH) — claude NOT launched (--no-launch)."

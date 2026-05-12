@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared zellij tab launcher.
+AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT_REAL/lib/zellij-tab.sh"
+
 usage() {
   echo "Usage: task-work [options] <jira-key-or-url-or-slug>"
   echo ""
@@ -62,16 +67,12 @@ SLUG="${SLUG:0:50}"
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
-launch_worker() {
-  local dir="$1"
-  sleep 0.5
+build_claude_cmd() {
   if [[ -n "$JIRA_REF" ]]; then
-    zellij action write-chars "cd $dir && claude \"/worker Implement Jira issue: $JIRA_REF\""
+    echo "claude \"/worker Implement Jira issue: $JIRA_REF\""
   else
-    zellij action write-chars "cd $dir && claude \"/worker\""
+    echo "claude \"/worker\""
   fi
-  sleep 0.1
-  zellij action write 10  # Enter
 }
 
 # Worktree already exists for this Jira key? Spin up a parallel session
@@ -98,7 +99,6 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 printf 'BASE_BRANCH=%s\nSLUG=%s\nJIRA_REF=%s\n' "$BASE_BRANCH" "$SLUG" "$JIRA_REF" > "$INFO_FILE"
 
 echo "Opening zellij tab '$SLUG'..."
-zellij action new-tab --name "$SLUG"
-launch_worker "$WORKTREE_DIR"
+aw_launch_tab "$SLUG" "$WORKTREE_DIR" "$(build_claude_cmd)"
 
 echo "Worker started in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared zellij tab launcher.
+AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT_REAL/lib/zellij-tab.sh"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -137,24 +142,7 @@ build_kiro_cmd() {
 }
 
 # ---------------- zellij tab launch ----------------
-launch_in_tab() {
-  local dir="$1"
-  # Explicitly focus the new tab by name — idempotent, defeats the race
-  # where `write-chars` could otherwise target the previously-focused pane.
-  zellij action go-to-tab-name "$SLUG"
-  sleep 0.3
-
-  if [[ -n "$NO_LAUNCH" ]]; then
-    # Just cd into the worktree, leave the user at a shell prompt
-    zellij action write-chars "cd $dir"
-  else
-    # Always cd explicitly — zellij's `new-tab --cwd` doesn't reliably
-    # propagate to the spawned shell across all zellij versions.
-    zellij action write-chars "cd $dir && $(build_kiro_cmd)"
-  fi
-  sleep 0.1
-  zellij action write 10  # Enter
-}
+# Shared logic lives in lib/zellij-tab.sh (aw_launch_tab).
 
 # ---------------- worktree creation ----------------
 # Worktree already exists? Spin up a parallel session with a hash suffix
@@ -181,8 +169,11 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 printf 'BASE_BRANCH=%s\nSLUG=%s\nNOTION_URL=%s\n' "$BASE_BRANCH" "$SLUG" "$NOTION_URL" > "$INFO_FILE"
 
 echo "Opening zellij tab '$SLUG'..."
-zellij action new-tab --name "$SLUG" --cwd "$WORKTREE_DIR"
-launch_in_tab "$WORKTREE_DIR"
+if [[ -n "$NO_LAUNCH" ]]; then
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" ""
+else
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "$(build_kiro_cmd)"
+fi
 
 if [[ -n "$NO_LAUNCH" ]]; then
   echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH) — kiro NOT launched (--no-launch)."

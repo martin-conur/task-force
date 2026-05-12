@@ -22,22 +22,25 @@ Inspired by [How I run 4–8 parallel coding agents](https://schipper.ai/posts/p
 | Folder | AI Agent | Task Tracker | Multiplexer |
 |--------|----------|-------------|-------------|
 | `claude-jira/` | Claude Code | Jira (Atlassian MCP) | Zellij |
-| `kiro-notion/` | Kiro CLI | Notion | Zellij |
 | `claude-notion/` | Claude Code | Notion | Zellij |
+| `claude-gh/` | Claude Code | GitHub Projects (GitHub MCP) | Zellij |
+| `kiro-notion/` | Kiro CLI | Notion | Zellij |
+| `kiro-gh/` | Kiro CLI | GitHub Projects (GitHub MCP) | Zellij |
 
 ---
 
 ## Requirements
 
-| Tool | claude-jira | kiro-notion | claude-notion |
-|------|:-----------:|:-----------:|:-------------:|
-| [Claude Code](https://docs.claude.com/claude-code) | ✓ | — | ✓ |
-| [Kiro CLI](https://kiro.dev) | — | ✓ | — |
-| [Atlassian Remote MCP](https://developer.atlassian.com/cloud/jira/platform/remote-mcp-server/) | ✓ | — | — |
-| [Notion MCP](https://mcp.notion.com) | — | ✓ | ✓ |
-| [Zellij](https://zellij.dev) | ✓ | ✓ | ✓ |
-| [gh CLI](https://cli.github.com) | ✓ | ✓ | ✓ |
-| Git | ✓ | ✓ | ✓ |
+| Tool | claude-jira | claude-notion | claude-gh | kiro-notion | kiro-gh |
+|------|:-----------:|:-------------:|:---------:|:-----------:|:-------:|
+| [Claude Code](https://docs.claude.com/claude-code) | ✓ | ✓ | ✓ | — | — |
+| [Kiro CLI](https://kiro.dev) | — | — | — | ✓ | ✓ |
+| [Atlassian Remote MCP](https://developer.atlassian.com/cloud/jira/platform/remote-mcp-server/) | ✓ | — | — | — | — |
+| [Notion MCP](https://mcp.notion.com) | — | ✓ | — | ✓ | — |
+| [GitHub MCP](https://github.com/github/github-mcp-server) | — | — | ✓ | — | ✓ |
+| [Zellij](https://zellij.dev) (≥ 0.32) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [gh CLI](https://cli.github.com) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Git | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
 
@@ -51,7 +54,7 @@ cd ~/agentic-workflow
 ./install.sh             # interactive menu
 # or:
 ./install.sh claude-notion   # specific implementation
-./install.sh all             # all three
+./install.sh all             # all five
 ```
 
 Each implementation can also be installed independently (backward-compatible):
@@ -61,6 +64,22 @@ cd claude-jira && ./install.sh
 cd kiro-notion && ./install.sh
 cd claude-notion && ./install.sh
 ```
+
+### How `task-work` / `task-done` pick the right implementation
+
+`task-work`, `task-done`, and `task-init` are **project-aware dispatchers** at the repo root. Installing any implementation symlinks them into `~/.local/bin` so they work regardless of which impl was installed last.
+
+When you run `task-work` or `task-done` inside a project, the dispatcher auto-detects the impl by looking at which workflow doc is present:
+
+| File present | Impl |
+|---|---|
+| `.claude/jira-workflow.md` | claude-jira |
+| `.claude/notion-workflow.md` | claude-notion |
+| `.claude/gh-workflow.md` | claude-gh |
+| `.kiro/steering/notion-workflow.md` | kiro-notion |
+| `.kiro/steering/gh-workflow.md` | kiro-gh |
+
+To override: pass `--impl <name>` or set `AW_IMPL=<name>`.
 
 ### Per-project setup
 
@@ -258,11 +277,20 @@ git submodule update --init --recursive  # first time only
 
 | Suite | What it covers |
 |-------|----------------|
+| `install.bats` | Root `install.sh` — direct args, fzf/gum TUI, numbered-menu fallback |
+| `task_init_dispatcher.bats` | Root `task-init` — impl dispatch, passthrough flags, TUI selector |
+| `task_work_dispatcher.bats` | Root `bin/task-work` — auto-detect impl from workflow docs, `--impl`/`AW_IMPL` overrides, passthrough |
+| `task_done_dispatcher.bats` | Root `bin/task-done` — same detection + worktree-aware fallback to main repo |
 | `jira_task_work.bats` | `claude-jira/bin/task-work` — input parsing, worktree creation, zellij launch |
 | `jira_task_init.bats` | `claude-jira/bin/task-init` — placeholder substitution, CLAUDE.md, --force |
 | `kiro_task_work.bats` | `kiro-notion/bin/task-work` — URL/slug detection, worktree, model/trust-all flags |
+| `kiro_notion_task_init.bats` | `kiro-notion/bin/task-init` — template copy, --force |
 | `claude_notion_task_work.bats` | `claude-notion/bin/task-work` — URL/slug detection, worktree, zellij launch |
 | `claude_notion_task_init.bats` | `claude-notion/bin/task-init` — template copy, CLAUDE.md, --force |
+| `claude_gh_task_work.bats` | `claude-gh/bin/task-work` — GitHub URL → `issue-N` slug, launch |
+| `claude_gh_task_init.bats` | `claude-gh/bin/task-init` — owner/repo/project substitution, remote auto-detection |
+| `kiro_gh_task_work.bats` | `kiro-gh/bin/task-work` — same as claude-gh but launching `kiro-cli` |
+| `kiro_gh_task_init.bats` | `kiro-gh/bin/task-init` — owner/repo/project substitution |
 | `task_done.bats` | `task-done` for kiro-notion, claude-jira, and claude-notion — cleanup, PR, guards |
 
 ### Test infrastructure

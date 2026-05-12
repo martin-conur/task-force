@@ -26,10 +26,13 @@ jobs:
 
       - name: Run shellcheck
         run: |
-          shellcheck \
+          shellcheck -x \
             install.sh \
             task-init \
             run_tests.sh \
+            bin/task-work \
+            bin/task-done \
+            lib/detect-impl.sh \
             tests/helpers/common.bash \
             claude-jira/install.sh \
             claude-jira/bin/task-work \

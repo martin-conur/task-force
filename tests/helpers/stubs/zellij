@@ -1,25 +1,4 @@
 #!/usr/bin/env bash
 # Stub for zellij — records all invocations, silently succeeds.
-#
-# When called as `zellij action new-tab ... --layout FILE`, also appends the
-# layout file's content to the calls log. This lets the test assertions that
-# previously grep'd for `write-chars` content still work against the new
-# layout-based launcher (the command is embedded inside the layout).
 echo "zellij $*" >> "${STUB_CALLS_DIR}/zellij.calls"
-
-# Walk the arg list looking for --layout <file>
-args=("$@")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  if [[ "${args[$i]}" == "--layout" && -n "${args[$((i+1))]:-}" ]]; then
-    layout="${args[$((i+1))]}"
-    if [[ -f "$layout" ]]; then
-      {
-        echo "--- layout: $layout ---"
-        cat "$layout"
-        echo "--- end layout ---"
-      } >> "${STUB_CALLS_DIR}/zellij.calls"
-    fi
-  fi
-done
-
 exit 0

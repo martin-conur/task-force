@@ -139,8 +139,8 @@ teardown() {
 @test "claude command uses /worker for free-form slugs" {
   run "$CLAUDE_NOTION_TASK_WORK" my-feature
   assert_success
-  # Layout contains: exec claude \"/worker\"  (KDL-escaped; no URL suffix)
-  assert_stub_called zellij 'exec claude \"/worker\"'
+  # Bare `claude "/worker"` (no URL suffix)
+  assert_stub_called zellij 'claude "/worker"'
 }
 
 # ---------------------------------------------------------------------------

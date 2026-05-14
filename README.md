@@ -50,7 +50,7 @@ All five share the same shape — same roles, same `task-work` / `task-done` com
 
 You always need:
 
-- [Zellij](https://zellij.dev) (≥ 0.32) — the multiplexer that hosts each agent in its own tab
+- [Zellij](https://zellij.dev) (≥ 0.44) — the multiplexer that hosts each agent in its own tab
 - [gh CLI](https://cli.github.com) — opens pull requests
 - Git
 - Either [Claude Code](https://docs.claude.com/claude-code) or [Kiro CLI](https://kiro.dev)

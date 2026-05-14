@@ -1,4 +1,4 @@
-# agentic-workflow
+# task-force
 
 Parallel AI coding agents for the terminal: multiple workers, each in an isolated Git worktree and Zellij tab, coordinating through a task tracker.
 

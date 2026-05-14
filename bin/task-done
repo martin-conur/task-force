@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Project-aware dispatcher for task-done.
+#
+# Detects which <impl>/bin/task-done to run by inspecting the current git
+# repo's workflow docs (see lib/detect-impl.sh). Override with --impl <name>
+# or AW_IMPL=<name>.
+
+# Resolve own path through symlinks -> AW_ROOT.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+source "$AW_ROOT/lib/detect-impl.sh"
+
+aw_parse_impl_flag "$@" || exit 1
+# task-done runs from a worktree where the workflow doc lives in the MAIN
+# worktree, not the current (task) worktree. Fall back to inspecting the main
+# worktree if auto-detection from $PWD yields zero matches.
+if [[ -z "$AW_PARSED_IMPL" && -z "${AW_IMPL:-}" ]]; then
+  CURR_REPO=$(git rev-parse --show-toplevel 2>/dev/null) || CURR_REPO=""
+  if [[ -n "$CURR_REPO" ]]; then
+    MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')
+    # If we're in a non-main worktree, retry detection from the main worktree.
+    if [[ -n "$MAIN_WT" && "$MAIN_WT" != "$CURR_REPO" ]]; then
+      pushd "$MAIN_WT" >/dev/null
+      IMPL=$(aw_detect_impl "") || { popd >/dev/null; exit 1; }
+      popd >/dev/null
+    else
+      IMPL=$(aw_detect_impl "") || exit 1
+    fi
+  else
+    IMPL=$(aw_detect_impl "") || exit 1
+  fi
+else
+  IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+fi
+
+TARGET="$AW_ROOT/$IMPL/bin/task-done"
+[[ -x "$TARGET" ]] || {
+  echo "Error: $TARGET not found or not executable. Is the repository complete?" >&2
+  exit 1
+}
+
+exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}

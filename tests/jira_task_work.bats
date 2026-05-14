@@ -106,7 +106,8 @@ teardown() {
 @test "injects claude /worker without ref for free-form slugs" {
   run "$JIRA_TASK_WORK" my-task
   assert_success
-  assert_stub_called zellij "/worker\""
+  # Bare `claude "/worker"` (no Jira ref)
+  assert_stub_called zellij 'claude "/worker"'
 }
 
 # ---------------------------------------------------------------------------

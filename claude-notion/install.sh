@@ -13,18 +13,17 @@ for cmd in "$SCRIPT_DIR"/commands/*.md; do
   echo "  ✓ Slash command: /$(basename "$name" .md)"; sleep 0.05
 done
 
-# Scripts → ~/.local/bin/ (task-init handled separately via unified root script)
+# Shared root scripts — task-init, task-work, task-done are all impl-dispatching
+# scripts at the repo root. No matter which impl was installed last, these
+# point at the dispatchers and route per-project based on which workflow doc
+# is present.
 mkdir -p ~/.local/bin
-for script in "$SCRIPT_DIR"/bin/*; do
-  name=$(basename "$script")
-  [[ "$name" == "task-init" ]] && continue
-  ln -sf "$script" ~/.local/bin/"$name"
-  echo "  ✓ Script: $name"; sleep 0.05
-done
-
-# Unified task-init (always points to repo-root task-init regardless of which impl was installed last)
 ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
-echo "  ✓ Script: task-init (unified)"; sleep 0.05
+echo "  ✓ Script: task-init (shared dispatcher)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-work" ~/.local/bin/task-work
+echo "  ✓ Script: task-work (shared dispatcher)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-done" ~/.local/bin/task-done
+echo "  ✓ Script: task-done (shared dispatcher)"; sleep 0.05
 
 # Ensure ~/.local/bin is on PATH
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here

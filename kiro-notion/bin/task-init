@@ -6,9 +6,10 @@ usage() {
   echo ""
   echo "Set up the current repo for the kiro-notion workflow:"
   echo "  - Create .kiro/steering/notion-workflow.md from the bundled template"
+  echo "  - Install pm, planner, worker agents into .kiro/agents/"
   echo ""
   echo "Options:"
-  echo "  --force      Overwrite .kiro/steering/notion-workflow.md if present"
+  echo "  --force      Overwrite .kiro/steering/notion-workflow.md and project-level agents if present"
   echo "  --help-ids   Print guide for finding Notion database IDs (no setup)"
   exit 1
 }
@@ -85,5 +86,20 @@ fi
 
 cp "$TEMPLATE" "$TARGET"
 echo "✓ Wrote $TARGET"
+
+# Project-level agents → <project>/.kiro/agents/
+AGENTS_DIR="$REPO_ROOT/.kiro/agents"
+AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
+mkdir -p "$AGENTS_DIR"
+for agent in "$AGENTS_SRC"/*.json; do
+  agent_name=$(basename "$agent")
+  agent_target="$AGENTS_DIR/$agent_name"
+  if [[ ( -e "$agent_target" || -L "$agent_target" ) && "$FORCE" != true ]]; then
+    echo "⚠ $agent_target already exists — skipping (use --force to overwrite)"
+  else
+    ln -sf "$agent" "$agent_target"
+    echo "✓ Agent: $agent_name"
+  fi
+done
 
 print_ids_guide

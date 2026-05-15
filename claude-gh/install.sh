@@ -3,15 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing claude-gh commands and scripts..."
-
-# Slash commands → ~/.claude/commands/
-mkdir -p ~/.claude/commands
-for cmd in "$SCRIPT_DIR"/commands/*.md; do
-  name=$(basename "$cmd")
-  ln -sf "$cmd" ~/.claude/commands/"$name"
-  echo "  ✓ Slash command: /$(basename "$name" .md)"; sleep 0.05
-done
+echo "Installing claude-gh scripts..."
 
 # Shared root scripts — task-init, task-work, task-done are all impl-dispatching
 # scripts at the repo root. No matter which impl was installed last, these

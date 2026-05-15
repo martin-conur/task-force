@@ -3,15 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing kiro-notion agents..."
-
-# Agents → ~/.kiro/agents/
-mkdir -p ~/.kiro/agents
-for agent in "$SCRIPT_DIR"/agents/*.json; do
-  name=$(basename "$agent")
-  ln -sf "$agent" ~/.kiro/agents/"$name"
-  echo "  ✓ Agent: $name"; sleep 0.05
-done
+echo "Installing kiro-notion scripts..."
 
 # Shared root scripts — task-init, task-work, task-done are all impl-dispatching
 # scripts at the repo root. No matter which impl was installed last, these

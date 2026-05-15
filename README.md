@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/martin-conur/agentic-workflow/actions"><img alt="CI" src="https://img.shields.io/badge/tests-bats-blue"></a>
-  <a href="#pick-your-loadout"><img alt="impls" src="https://img.shields.io/badge/loadouts-5-red"></a>
+  <a href="#pick-your-loadout"><img alt="impls" src="https://img.shields.io/badge/loadouts-7-red"></a>
   <a href="https://zellij.dev"><img alt="zellij" src="https://img.shields.io/badge/multiplexer-zellij-black"></a>
 </p>
 
@@ -34,13 +34,15 @@ Inspired by [How I run 4–8 parallel coding agents](https://schipper.ai/posts/p
 
 | Combo | AI Agent | Task Tracker | Folder |
 |-------|----------|--------------|--------|
-| **claude-jira**   | Claude Code | Jira (Atlassian MCP)        | [`claude-jira/`](claude-jira/)     |
-| **claude-notion** | Claude Code | Notion (Notion MCP)         | [`claude-notion/`](claude-notion/) |
-| **claude-gh**     | Claude Code | GitHub Projects (GitHub MCP)| [`claude-gh/`](claude-gh/)         |
-| **kiro-notion**   | Kiro CLI    | Notion (Notion MCP)         | [`kiro-notion/`](kiro-notion/)     |
-| **kiro-gh**       | Kiro CLI    | GitHub Projects (GitHub MCP)| [`kiro-gh/`](kiro-gh/)             |
+| **claude-jira**   | Claude Code | Jira (Atlassian MCP)                  | [`claude-jira/`](claude-jira/)     |
+| **claude-notion** | Claude Code | Notion (Notion MCP)                   | [`claude-notion/`](claude-notion/) |
+| **claude-gh**     | Claude Code | GitHub Projects (GitHub MCP)          | [`claude-gh/`](claude-gh/)         |
+| **claude-local**  | Claude Code | Local markdown files (Obsidian-style) | [`claude-local/`](claude-local/)   |
+| **kiro-notion**   | Kiro CLI    | Notion (Notion MCP)                   | [`kiro-notion/`](kiro-notion/)     |
+| **kiro-gh**       | Kiro CLI    | GitHub Projects (GitHub MCP)          | [`kiro-gh/`](kiro-gh/)             |
+| **kiro-local**    | Kiro CLI    | Local markdown files (Obsidian-style) | [`kiro-local/`](kiro-local/)       |
 
-All five share the same shape — same roles, same `task-work` / `task-done` commands, same Zellij workflow. The only thing that changes is which AI flies the missions and where the briefings live.
+All seven share the same shape — same roles, same `task-work` / `task-done` commands, same Zellij workflow. The only thing that changes is which AI flies the missions and where the briefings (or markdown task files) live.
 
 ---
 
@@ -68,7 +70,7 @@ cd ~/agentic-workflow
 
 ```bash
 ./install.sh claude-gh        # install one combo
-./install.sh all              # install all five
+./install.sh all              # install all seven
 ```
 
 The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, and `task-init` into `~/.local/bin`.
@@ -137,8 +139,10 @@ When you run `task-work` or `task-done` inside a project, the dispatcher detects
 | `.claude/jira-workflow.md`          | `claude-jira`   |
 | `.claude/notion-workflow.md`        | `claude-notion` |
 | `.claude/gh-workflow.md`            | `claude-gh`     |
+| `.claude/local-workflow.md`         | `claude-local`  |
 | `.kiro/steering/notion-workflow.md` | `kiro-notion`   |
 | `.kiro/steering/gh-workflow.md`     | `kiro-gh`       |
+| `.kiro/steering/local-workflow.md`  | `kiro-local`    |
 
 So you can have different combos in different projects and never have to think about it.
 
@@ -204,6 +208,45 @@ task-init claude-gh           # auto-detects owner/repo from your git remote
 
 Spawn workers with `task-work <github-issue-url>`. The issue number becomes the worktree slug (`issue-42`).
 
+### claude-local — Claude Code + local markdown task tracking
+
+**Need:** nothing extra — no MCP, no remote tracker. Tasks live as files committed inside the repo.
+
+```bash
+./install.sh claude-local
+cd ~/my-project
+task-init claude-local         # creates tasks/, .claude/local-workflow.md, and slash commands
+```
+
+`task-init` writes `.claude/local-workflow.md` and references it from `CLAUDE.md`, plus drops a `tasks/` directory and `task-board` into your `~/.local/bin` (alongside the shared dispatchers).
+
+**What "local tracking" means** — there is no Jira, Notion, or GitHub board. The markdown files in `tasks/` *are* the database, and `tasks/_board.md` is an auto-generated kanban view. Everything renders cleanly in Obsidian, so you can plan and read tasks from your editor of choice.
+
+**Layout** under `<repo>/tasks/`:
+
+- One `NNN-slug.md` per task (e.g. `001-add-login-flow.md`). `NNN` is the zero-padded id the PM allocates; `slug` is a kebab-case short title.
+- Each file opens with YAML frontmatter (`id`, `title`, `status`, `priority`, `tags`, `created`, `branch`, `pr`) followed by `## Problem`, `## Solution`, `## Files to Create/Modify`, `## Verification`.
+- `tasks/_board.md` is the **auto-generated** board — never hand-edit. It has three columns: Todo / In Progress / Done.
+
+**Lifecycle** — `todo` → `in-progress` → `done`. The worker bumps `status` in the task file's frontmatter on its first commit (`in-progress`) and again before opening the PR (`done`). The PM is the only role that creates new task files and allocates ids.
+
+**`task-board`** — regenerates `tasks/_board.md` from `tasks/*.md` frontmatter, overlaying live worktree state. It runs automatically after `task-work` and `task-done` (and whenever the PM mutates a task), but you can also run it manually to refresh the view:
+
+```bash
+task-board                    # uses $(git rev-parse --show-toplevel)
+task-board --repo ~/other     # explicit repo
+```
+
+**Live state** — `.git/task-force/state.json` is a gitignored, per-clone sidecar that tracks which worktrees are currently active. `task-work` writes a row; `task-done` removes it. Frontmatter is the durable, committed state; the sidecar is the live overlay. If a task appears in the sidecar, the board forces it into the In Progress column regardless of frontmatter.
+
+Spawn workers with `task-work tasks/NNN-slug.md`. The id becomes the worktree slug (`task-001`).
+
+| Role | How to invoke |
+|------|---------------|
+| `/pm`      | typed in Claude Code |
+| `/planner` | typed in Claude Code |
+| `/worker`  | auto-launched by `task-work tasks/NNN-slug.md` |
+
 ### kiro-notion — Kiro CLI + Notion
 
 **Need:** Kiro CLI with Notion MCP configured.
@@ -234,6 +277,28 @@ task-init kiro-gh
 ```
 
 Same Kiro shortcuts as `kiro-notion`.
+
+### kiro-local — Kiro CLI + local markdown task tracking
+
+**Need:** nothing extra — no MCP, no remote tracker. Same model as `claude-local`, just driven by Kiro instead of Claude Code.
+
+```bash
+./install.sh kiro-local
+cd ~/my-project
+task-init kiro-local           # creates tasks/, .kiro/steering/local-workflow.md, and agents
+```
+
+Tasks live in `<repo>/tasks/*.md` with the same NNN-slug filenames, frontmatter schema (`id`, `title`, `status`, `priority`, `tags`, `created`, `branch`, `pr`), and four-section body (`## Problem`, `## Solution`, `## Files to Create/Modify`, `## Verification`) as `claude-local`. `tasks/_board.md` is auto-generated by `task-board`.
+
+**Lifecycle** — `todo` → `in-progress` → `done`, with the worker mutating frontmatter on first commit and again before the PR. The PM allocates ids and creates new task files. The board script triggers automatically from `task-work` / `task-done` / PM mutations, and can be run by hand:
+
+```bash
+task-board
+```
+
+**Live state** — `.git/task-force/state.json` is the gitignored, per-clone sidecar that overlays live worktree state on top of the committed frontmatter. Same model as `claude-local`.
+
+Spawn workers with `task-work tasks/NNN-slug.md`. Same Kiro shortcuts as `kiro-notion`.
 
 ---
 
@@ -274,10 +339,15 @@ git submodule update --init --recursive   # first time only
 | `claude_notion_task_init.bats`    | `claude-notion/bin/task-init` — template copy, CLAUDE.md, `--force` |
 | `claude_gh_task_work.bats`        | `claude-gh/bin/task-work` — GitHub URL → `issue-N` slug, launch |
 | `claude_gh_task_init.bats`        | `claude-gh/bin/task-init` — owner/repo/project substitution, remote auto-detect |
+| `claude_local_task_work.bats`     | `claude-local/bin/task-work` — `tasks/NNN-slug.md` → `task-NNN` slug, frontmatter bump, board regen |
+| `claude_local_task_init.bats`     | `claude-local/bin/task-init` — `tasks/` scaffolding, `.claude/local-workflow.md`, slash commands |
 | `kiro_task_work.bats`             | `kiro-notion/bin/task-work` — URL/slug detection, model/trust-all flags |
 | `kiro_notion_task_init.bats`      | `kiro-notion/bin/task-init` — template copy, `--force` |
 | `kiro_gh_task_work.bats`          | `kiro-gh/bin/task-work` — same as `claude-gh` but launching `kiro-cli` |
 | `kiro_gh_task_init.bats`          | `kiro-gh/bin/task-init` — owner/repo/project substitution |
+| `kiro_local_task_work.bats`       | `kiro-local/bin/task-work` — same as `claude-local` but launching `kiro-cli` |
+| `kiro_local_task_init.bats`       | `kiro-local/bin/task-init` — `tasks/` scaffolding, `.kiro/steering/local-workflow.md`, agents |
+| `task_board.bats`                 | Shared `task-board` script — frontmatter parsing, sidecar overlay, `_board.md` regen |
 | `task_done.bats`                  | `task-done` across combos — cleanup, PR, guards |
 
 </details>

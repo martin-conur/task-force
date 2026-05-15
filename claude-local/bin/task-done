@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: task-done [--force] [--remove-worktree]"
+  echo ""
+  echo "Run from within a worktree to:"
+  echo "  1. Show the diff summary and existing PR (or print gh pr create command)"
+  echo "  2. Remove the slug entry from .git/task-force/state.json"
+  echo "  3. Regenerate tasks/_board.md from the main worktree"
+  echo "  4. Remove the worktree"
+  echo "  5. Close the zellij tab"
+  echo ""
+  echo "Options:"
+  echo "  --force            Skip confirmation prompts"
+  echo "  --remove-worktree  Skip PR section — just clean up the worktree and tab."
+  echo "                     Use after the worker has already created the PR."
+  exit 1
+}
+
+FORCE=false
+REMOVE_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force) FORCE=true; shift ;;
+    --remove-worktree) REMOVE_ONLY=true; shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown option: $1"; usage ;;
+  esac
+done
+
+# Detect worktree context
+WORKTREE_DIR=$(pwd)
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo"; exit 1; }
+
+# Check we're actually in a worktree (not the main repo)
+MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/worktree //')
+if [[ "$REPO_ROOT" == "$MAIN_WORKTREE" ]]; then
+  echo "Error: you're in the main repo, not a worktree. cd into a worktree first."
+  exit 1
+fi
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+SLUG="${BRANCH#task/}"
+REPO_NAME=$(basename "$MAIN_WORKTREE")
+WORKTREE_BASE="${MAIN_WORKTREE}/../${REPO_NAME}-worktrees"
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+
+# Load base branch written by task-work; fall back to "main"
+BASE_BRANCH="main"
+# shellcheck source=/dev/null
+[[ -f "$INFO_FILE" ]] && source "$INFO_FILE"
+
+echo "Worktree: $WORKTREE_DIR"
+echo "Branch:   $BRANCH"
+echo "Base:     $BASE_BRANCH"
+echo ""
+
+# Check for uncommitted changes
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "⚠ Uncommitted changes detected:"
+  git status --short
+  echo ""
+  if [[ "$FORCE" != true ]]; then
+    read -rp "Continue anyway? (y/N) " confirm
+    [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
+  fi
+fi
+
+# Show summary
+COMMIT_COUNT=$(git rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "?")
+echo "Commits ahead of ${BASE_BRANCH}: $COMMIT_COUNT"
+DIFF_STAT=$(git diff --shortstat "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
+[[ -n "$DIFF_STAT" ]] && echo "Changes: $DIFF_STAT"
+echo ""
+
+if [[ "$REMOVE_ONLY" != true ]]; then
+  # Show existing PR URL, or print the creation command
+  PR_URL=$(gh pr view --json url -q .url 2>/dev/null || true)
+  if [[ -n "$PR_URL" ]]; then
+    echo "PR: $PR_URL"
+  else
+    echo "To create a PR:"
+    echo "  gh pr create --base $BASE_BRANCH --head $BRANCH --title \"${BRANCH#task/}\" --fill"
+  fi
+  echo ""
+fi
+
+if [[ "$FORCE" != true ]]; then
+  read -rp "Remove worktree and close tab? (y/N) " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
+fi
+
+# Move out of worktree before removing it
+cd "$MAIN_WORKTREE"
+
+# Remove worktree
+echo "Removing worktree..."
+git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || {
+  echo "Warning: could not remove worktree cleanly. Trying prune..."
+  rm -rf "$WORKTREE_DIR"
+  git worktree prune
+}
+
+# Clean up info file
+[[ -f "$INFO_FILE" ]] && rm -f "$INFO_FILE"
+
+# Remove this slug's entry from .git/task-force/state.json
+STATE_FILE="$MAIN_WORKTREE/.git/task-force/state.json"
+if [[ -f "$STATE_FILE" ]]; then
+  awk -v slug="$SLUG" '
+    $0 !~ ("\"slug\"[[:space:]]*:[[:space:]]*\"" slug "\"") { print }
+  ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+fi
+
+# Regenerate the board from the main worktree (where tasks/ lives).
+if command -v task-board >/dev/null 2>&1; then
+  task-board --repo "$MAIN_WORKTREE" >/dev/null || true
+else
+  _BOARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task-board"
+  [[ -x "$_BOARD_SCRIPT" ]] && "$_BOARD_SCRIPT" --repo "$MAIN_WORKTREE" >/dev/null || true
+fi
+
+# Close current zellij tab
+echo "Closing zellij tab..."
+zellij action close-tab
+
+echo "Done. Branch '$BRANCH' still exists — delete after PR merge with: git branch -d $BRANCH"

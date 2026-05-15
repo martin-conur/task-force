@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Source shared zellij tab launcher.
+AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT_REAL/lib/zellij-tab.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  task-work tasks/NNN-slug.md [options]   # preferred — local task tracking
+  task-work <free-form-slug> [options]    # ad-hoc, no task file
+
+Creates a git worktree + branch for a task and opens a new zellij tab
+with a Claude Code worker session. If a worktree for that slug already
+exists, a 5-char hash is appended so multiple agents can work the same
+task in parallel.
+
+After creating the worktree, writes a sidecar entry to
+`.git/task-force/state.json` and regenerates `tasks/_board.md`.
+
+Options:
+  -b, --base BRANCH   Base branch for the PR (default: current branch at call time).
+      --no-launch     Create the worktree and open the tab at its directory,
+                      but do NOT start claude. Use this when you want to
+                      pick the command/model interactively.
+  -h, --help          Show this help.
+
+Examples:
+  task-work tasks/001-add-login-flow.md
+  task-work tasks/042-refactor-auth.md --base develop
+  task-work spike-idea --no-launch
+EOF
+  exit "${1:-1}"
+}
+
+# ---------------- arg parsing ----------------
+POSITIONAL=()
+NO_LAUNCH=""
+BASE_BRANCH_OVERRIDE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    -b|--base)
+      [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
+      BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
+    --no-launch) NO_LAUNCH="1"; shift ;;
+    --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
+    -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+[[ ${#POSITIONAL[@]} -lt 1 ]] && usage
+
+is_task_file() {
+  [[ "$1" == *.md && -f "$1" ]]
+}
+
+sanitize_slug() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g'
+}
+
+# Resolve TASK_FILE and SLUG from the first positional arg.
+TASK_FILE=""
+SLUG=""
+P0="${POSITIONAL[0]}"
+
+if is_task_file "$P0"; then
+  # Resolve to an absolute path without dereferencing symlinks (so the path
+  # stays consistent with $PWD; on macOS /var → /private/var would otherwise
+  # change form depending on whether cd -P was used).
+  if [[ "$P0" == /* ]]; then
+    TASK_FILE="$P0"
+  else
+    TASK_FILE="$PWD/$P0"
+  fi
+  _base=$(basename "$P0")
+  # Slug = filename minus leading NNN- and .md
+  _slug="${_base%.md}"
+  _slug="${_slug#[0-9][0-9][0-9]-}"
+  SLUG=$(sanitize_slug "$_slug")
+else
+  SLUG=$(sanitize_slug "$P0")
+fi
+
+[[ -z "$SLUG" ]] && { echo "Error: could not derive a slug from input" >&2; exit 1; }
+SLUG="${SLUG:0:50}"
+
+# ---------------- repo discovery ----------------
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
+REPO_NAME=$(basename "$REPO_ROOT")
+WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
+
+# Capture base branch now, before the worktree is created
+BASE_BRANCH="${BASE_BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
+
+BRANCH="task/${SLUG}"
+WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
+
+# ---------------- command builder ----------------
+build_claude_cmd() {
+  if [[ -n "$TASK_FILE" ]]; then
+    echo "claude \"/worker $TASK_FILE\""
+  else
+    echo "claude \"/worker\""
+  fi
+}
+
+# ---------------- worktree creation ----------------
+if [[ -d "$WORKTREE_DIR" ]]; then
+  HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5 || :)
+  SLUG="${SLUG}-${HASH}"
+  BRANCH="task/${SLUG}"
+  WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
+  echo "Existing worktree found — creating a parallel session: $SLUG"
+fi
+
+mkdir -p "$WORKTREE_BASE"
+echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
+git worktree add "$WORKTREE_DIR" -b "$BRANCH" 2>/dev/null || {
+  git worktree add "$WORKTREE_DIR" "$BRANCH" 2>/dev/null || {
+    echo "Error: could not create worktree. Check if branch '$BRANCH' exists elsewhere." >&2
+    exit 1
+  }
+}
+
+# Write task info so the worker and task-done can read it (stored outside the working tree)
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+printf 'BASE_BRANCH=%s\nSLUG=%s\nTASK_FILE=%s\n' "$BASE_BRANCH" "$SLUG" "$TASK_FILE" > "$INFO_FILE"
+
+# Write a sidecar entry to .git/task-force/state.json (JSONL — one line per slug).
+STATE_DIR="$REPO_ROOT/.git/task-force"
+STATE_FILE="$STATE_DIR/state.json"
+mkdir -p "$STATE_DIR"
+# Drop any existing entry for this slug (idempotent), then append the new one.
+if [[ -f "$STATE_FILE" ]]; then
+  awk -v slug="$SLUG" '
+    $0 !~ ("\"slug\"[[:space:]]*:[[:space:]]*\"" slug "\"") { print }
+  ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+fi
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# JSON-escape a string (handle backslash and double-quote only — paths/slugs
+# never contain control chars in practice).
+_json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+printf '{"slug":"%s","branch":"%s","worktree":"%s","started_at":"%s","task_file":"%s"}\n' \
+  "$(_json_escape "$SLUG")" \
+  "$(_json_escape "$BRANCH")" \
+  "$(_json_escape "$WORKTREE_DIR")" \
+  "$NOW" \
+  "$(_json_escape "$TASK_FILE")" \
+  >> "$STATE_FILE"
+
+# Regenerate the board if task-board is available (skip silently otherwise).
+if command -v task-board >/dev/null 2>&1; then
+  task-board --repo "$REPO_ROOT" >/dev/null || true
+else
+  _BOARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task-board"
+  [[ -x "$_BOARD_SCRIPT" ]] && "$_BOARD_SCRIPT" --repo "$REPO_ROOT" >/dev/null || true
+fi
+
+echo "Opening zellij tab '$SLUG'..."
+if [[ -n "$NO_LAUNCH" ]]; then
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" ""
+else
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "$(build_claude_cmd)"
+fi
+
+if [[ -n "$NO_LAUNCH" ]]; then
+  echo "Tab opened at $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH) — claude NOT launched (--no-launch)."
+else
+  echo "Started worker in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
+fi

@@ -23,7 +23,7 @@ setup() {
 
   # Create mock sub-installers so install_impl doesn't try to run real scripts.
   MOCK_IMPL_DIR=$(mktemp -d)
-  for impl in claude-gh claude-notion claude-jira kiro-gh kiro-notion; do
+  for impl in claude-gh claude-notion claude-jira claude-local kiro-gh kiro-notion kiro-local; do
     mkdir -p "$MOCK_IMPL_DIR/$impl"
     printf '#!/usr/bin/env bash\necho "mock-installed %s"\n' "$impl" \
       > "$MOCK_IMPL_DIR/$impl/install.sh"
@@ -54,14 +54,28 @@ teardown() {
   assert_output --partial "Installing kiro-notion"
 }
 
-@test "direct arg all installs all five implementations" {
+@test "direct arg all installs all seven implementations" {
   run "$INSTALL_SH" all
   assert_success
   assert_output --partial "Installing claude-jira"
   assert_output --partial "Installing claude-notion"
   assert_output --partial "Installing claude-gh"
+  assert_output --partial "Installing claude-local"
   assert_output --partial "Installing kiro-notion"
   assert_output --partial "Installing kiro-gh"
+  assert_output --partial "Installing kiro-local"
+}
+
+@test "direct arg claude-local installs claude-local" {
+  run "$INSTALL_SH" claude-local
+  assert_success
+  assert_output --partial "Installing claude-local"
+}
+
+@test "direct arg kiro-local installs kiro-local" {
+  run "$INSTALL_SH" kiro-local
+  assert_success
+  assert_output --partial "Installing kiro-local"
 }
 
 @test "unknown implementation exits non-zero" {
@@ -103,11 +117,25 @@ teardown() {
   assert_output --partial "Installing kiro-notion"
 }
 
-@test "fzf: selects Install all → all five installed" {
+@test "fzf: selects Install all → all seven installed" {
   run env FZF_STUB_CHOICE="Install all" "$INSTALL_SH"
   assert_success
   assert_output --partial "Installing claude-jira"
+  assert_output --partial "Installing claude-local"
   assert_output --partial "Installing kiro-gh"
+  assert_output --partial "Installing kiro-local"
+}
+
+@test "fzf: selects Claude Code + local tracking → claude-local" {
+  run env FZF_STUB_CHOICE="Claude Code + local tracking" "$INSTALL_SH"
+  assert_success
+  assert_output --partial "Installing claude-local"
+}
+
+@test "fzf: selects Kiro + local tracking → kiro-local" {
+  run env FZF_STUB_CHOICE="Kiro + local tracking" "$INSTALL_SH"
+  assert_success
+  assert_output --partial "Installing kiro-local"
 }
 
 @test "fzf: Ctrl-C (exit 1) aborts install, does not fall through to numbered menu" {
@@ -142,12 +170,21 @@ teardown() {
   assert_output --partial "Installing kiro-notion"
 }
 
-@test "gum: selects Install all → all five installed" {
+@test "gum: selects Install all → all seven installed" {
   rm -f "$STUB_BIN/fzf"
   run env GUM_STUB_CHOICE="Install all" "$INSTALL_SH"
   assert_success
   assert_output --partial "Installing claude-jira"
+  assert_output --partial "Installing claude-local"
   assert_output --partial "Installing kiro-gh"
+  assert_output --partial "Installing kiro-local"
+}
+
+@test "gum: selects Claude Code + local tracking → claude-local" {
+  rm -f "$STUB_BIN/fzf"
+  run env GUM_STUB_CHOICE="Claude Code + local tracking" "$INSTALL_SH"
+  assert_success
+  assert_output --partial "Installing claude-local"
 }
 
 @test "gum: Ctrl-C (exit 1) aborts install, does not fall through to numbered menu" {
@@ -195,6 +232,20 @@ teardown() {
   run bash -c "printf '2\n2\n' | \"$INSTALL_SH\""
   assert_success
   assert_output --partial "Installing kiro-gh"
+}
+
+@test "fallback: Claude Code + local tracking (1 then 4)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
+  run bash -c "printf '1\n4\n' | \"$INSTALL_SH\""
+  assert_success
+  assert_output --partial "Installing claude-local"
+}
+
+@test "fallback: Kiro + local tracking (2 then 3)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
+  run bash -c "printf '2\n3\n' | \"$INSTALL_SH\""
+  assert_success
+  assert_output --partial "Installing kiro-local"
 }
 
 @test "fallback: invalid tool choice exits non-zero" {

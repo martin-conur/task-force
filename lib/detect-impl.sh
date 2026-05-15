@@ -52,8 +52,10 @@ aw_detect_impl() {
     [[ -f "$repo_root/.claude/jira-workflow.md"          ]] && matches+=("claude-jira")
     [[ -f "$repo_root/.claude/notion-workflow.md"        ]] && matches+=("claude-notion")
     [[ -f "$repo_root/.claude/gh-workflow.md"            ]] && matches+=("claude-gh")
+    [[ -f "$repo_root/.claude/local-workflow.md"         ]] && matches+=("claude-local")
     [[ -f "$repo_root/.kiro/steering/notion-workflow.md" ]] && matches+=("kiro-notion")
     [[ -f "$repo_root/.kiro/steering/gh-workflow.md"     ]] && matches+=("kiro-gh")
+    [[ -f "$repo_root/.kiro/steering/local-workflow.md"  ]] && matches+=("kiro-local")
 
     case "${#matches[@]}" in
       0)
@@ -71,10 +73,10 @@ aw_detect_impl() {
   fi
 
   case "$impl" in
-    claude-jira|claude-notion|claude-gh|kiro-notion|kiro-gh) ;;
+    claude-jira|claude-notion|claude-gh|claude-local|kiro-notion|kiro-gh|kiro-local) ;;
     *)
       echo "Error: unknown impl '$impl'" >&2
-      echo "Valid impls: claude-jira, claude-notion, claude-gh, kiro-notion, kiro-gh" >&2
+      echo "Valid impls: claude-jira, claude-notion, claude-gh, claude-local, kiro-notion, kiro-gh, kiro-local" >&2
       return 1 ;;
   esac
 

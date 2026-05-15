@@ -85,6 +85,14 @@ teardown() {
   assert_output --partial "Branch:   task/$SLUG"
 }
 
+@test "detects claude-local from main worktree's .claude/local-workflow.md" {
+  mkdir -p "$MAIN_REPO/.claude"
+  touch "$MAIN_REPO/.claude/local-workflow.md"
+  run "$TASK_DONE_DISPATCHER" --force
+  assert_success
+  assert_output --partial "Branch:   task/$SLUG"
+}
+
 # ---------------------------------------------------------------------------
 # Passthrough
 # ---------------------------------------------------------------------------

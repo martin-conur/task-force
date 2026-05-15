@@ -27,6 +27,15 @@ KIRO_GH_TASK_WORK="$REPO_ROOT_REAL/kiro-gh/bin/task-work"
 KIRO_GH_TASK_DONE="$REPO_ROOT_REAL/kiro-gh/bin/task-done"
 KIRO_GH_TASK_INIT="$REPO_ROOT_REAL/kiro-gh/bin/task-init"
 KIRO_GH_TEMPLATE="$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
+CLAUDE_LOCAL_TASK_WORK="$REPO_ROOT_REAL/claude-local/bin/task-work"
+CLAUDE_LOCAL_TASK_DONE="$REPO_ROOT_REAL/claude-local/bin/task-done"
+CLAUDE_LOCAL_TASK_INIT="$REPO_ROOT_REAL/claude-local/bin/task-init"
+CLAUDE_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/claude-local/bin/task-board"
+CLAUDE_LOCAL_TEMPLATE="$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
+KIRO_LOCAL_TASK_WORK="$REPO_ROOT_REAL/kiro-local/bin/task-work"
+KIRO_LOCAL_TASK_DONE="$REPO_ROOT_REAL/kiro-local/bin/task-done"
+KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
+KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
 
 # Creates a temp directory with a git repo, sets up $MAIN_REPO,
 # $REPO_NAME, and $WORKTREE_BASE.

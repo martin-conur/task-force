@@ -14,9 +14,11 @@ Implementations:
   claude-jira    Claude Code + Jira (Atlassian MCP)
   claude-notion  Claude Code + Notion MCP
   claude-gh      Claude Code + GitHub Projects (GitHub MCP)
+  claude-local   Claude Code + local markdown task tracking (no external tracker)
   kiro-notion    Kiro CLI + Notion MCP
   kiro-gh        Kiro CLI + GitHub Projects (GitHub MCP)
-  all            Install all five
+  kiro-local     Kiro CLI + local markdown task tracking (no external tracker)
+  all            Install all seven
 
 With no argument, shows an interactive TUI selector (fzf or gum) if available,
 or falls back to a two-step numbered menu.
@@ -47,16 +49,20 @@ if [[ -z "$TARGET" ]]; then
     "Claude Code + GitHub Projects"
     "Claude Code + Notion"
     "Claude Code + Jira"
+    "Claude Code + local tracking"
     "Kiro + GitHub Projects"
     "Kiro + Notion"
+    "Kiro + local tracking"
     "Install all"
   )
   _TARGETS=(
     "claude-gh"
     "claude-notion"
     "claude-jira"
+    "claude-local"
     "kiro-gh"
     "kiro-notion"
+    "kiro-local"
     "all"
   )
 
@@ -99,11 +105,13 @@ if [[ -z "$TARGET" ]]; then
         echo "  1) Jira (Atlassian MCP)"
         echo "  2) Notion (Notion MCP)"
         echo "  3) GitHub Projects (GitHub MCP)"
-        read -rp "Choice [1-3]: " board_choice
+        echo "  4) Local markdown (no external tracker)"
+        read -rp "Choice [1-4]: " board_choice
         case "$board_choice" in
           1) TARGET="claude-jira" ;;
           2) TARGET="claude-notion" ;;
           3) TARGET="claude-gh" ;;
+          4) TARGET="claude-local" ;;
           *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
         esac ;;
       2)
@@ -111,10 +119,12 @@ if [[ -z "$TARGET" ]]; then
         echo "Which board/tracker?"
         echo "  1) Notion (Notion MCP)"
         echo "  2) GitHub Projects (GitHub MCP)"
-        read -rp "Choice [1-2]: " board_choice
+        echo "  3) Local markdown (no external tracker)"
+        read -rp "Choice [1-3]: " board_choice
         case "$board_choice" in
           1) TARGET="kiro-notion" ;;
           2) TARGET="kiro-gh" ;;
+          3) TARGET="kiro-local" ;;
           *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
         esac ;;
       *) echo "Invalid choice: $tool_choice" >&2; exit 1 ;;
@@ -123,14 +133,16 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 case "$TARGET" in
-  claude-jira|claude-notion|claude-gh|kiro-notion|kiro-gh)
+  claude-jira|claude-notion|claude-gh|claude-local|kiro-notion|kiro-gh|kiro-local)
     install_impl "$TARGET" ;;
   all)
     install_impl claude-jira
     install_impl claude-notion
     install_impl claude-gh
+    install_impl claude-local
     install_impl kiro-notion
-    install_impl kiro-gh ;;
+    install_impl kiro-gh
+    install_impl kiro-local ;;
   *)
     echo "Unknown implementation: $TARGET" >&2
     echo "Run './install.sh --help' for usage." >&2

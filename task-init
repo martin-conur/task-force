@@ -16,9 +16,13 @@ Implementations:
                  Options: --force, --help-ids
   claude-gh      Claude Code + GitHub Projects (GitHub MCP)
                  Options: --force
+  claude-local   Claude Code + local markdown task tracking (no external tracker)
+                 Options: --force
   kiro-notion    Kiro CLI + Notion MCP
                  Options: --force, --help-ids
   kiro-gh        Kiro CLI + GitHub Projects (GitHub MCP)
+                 Options: --force
+  kiro-local     Kiro CLI + local markdown task tracking (no external tracker)
                  Options: --force
 
 Global options:
@@ -53,7 +57,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage ;;
     --force) FORCE_FLAG="--force"; shift ;;
     --help-ids) HELP_IDS=true; PASSTHROUGH+=("$1"); shift ;;
-    claude-jira|claude-notion|claude-gh|kiro-notion|kiro-gh) IMPL="$1"; shift ;;
+    claude-jira|claude-notion|claude-gh|claude-local|kiro-notion|kiro-gh|kiro-local) IMPL="$1"; shift ;;
     *) PASSTHROUGH+=("$1"); shift ;;
   esac
 done
@@ -77,10 +81,12 @@ if [[ -z "$IMPL" ]]; then
     "Claude Code + GitHub Projects  → .claude/gh-workflow.md"
     "Claude Code + Notion           → .claude/notion-workflow.md"
     "Claude Code + Jira             → .claude/jira-workflow.md"
+    "Claude Code + local tracking   → .claude/local-workflow.md"
     "Kiro + GitHub Projects         → .kiro/steering/gh-workflow.md"
     "Kiro + Notion                  → .kiro/steering/notion-workflow.md"
+    "Kiro + local tracking          → .kiro/steering/local-workflow.md"
   )
-  _TARGETS=(claude-gh claude-notion claude-jira kiro-gh kiro-notion)
+  _TARGETS=(claude-gh claude-notion claude-jira claude-local kiro-gh kiro-notion kiro-local)
 
   _resolve_label() {
     local selected="$1" i
@@ -112,25 +118,29 @@ if [[ -z "$IMPL" ]]; then
       1)
         echo ""
         echo "Which board/tracker?"
-        echo "  1) Jira (Atlassian MCP)        → .claude/jira-workflow.md + CLAUDE.md"
+        echo "  1) Jira (Atlassian MCP)         → .claude/jira-workflow.md + CLAUDE.md"
         echo "  2) Notion (Notion MCP)          → .claude/notion-workflow.md + CLAUDE.md"
         echo "  3) GitHub Projects (GitHub MCP) → .claude/gh-workflow.md + CLAUDE.md"
-        read -rp "Choice [1-3]: " board_choice
+        echo "  4) Local markdown               → .claude/local-workflow.md + CLAUDE.md + tasks/"
+        read -rp "Choice [1-4]: " board_choice
         case "$board_choice" in
           1) IMPL="claude-jira" ;;
           2) IMPL="claude-notion" ;;
           3) IMPL="claude-gh" ;;
+          4) IMPL="claude-local" ;;
           *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
         esac ;;
       2)
         echo ""
         echo "Which board/tracker?"
         echo "  1) Notion (Notion MCP)          → .kiro/steering/notion-workflow.md"
-        echo "  2) GitHub Projects (GitHub MCP)  → .kiro/steering/gh-workflow.md"
-        read -rp "Choice [1-2]: " board_choice
+        echo "  2) GitHub Projects (GitHub MCP) → .kiro/steering/gh-workflow.md"
+        echo "  3) Local markdown               → .kiro/steering/local-workflow.md + tasks/"
+        read -rp "Choice [1-3]: " board_choice
         case "$board_choice" in
           1) IMPL="kiro-notion" ;;
           2) IMPL="kiro-gh" ;;
+          3) IMPL="kiro-local" ;;
           *) echo "Invalid choice: $board_choice" >&2; exit 1 ;;
         esac ;;
       *) echo "Invalid choice: $tool_choice" >&2; exit 1 ;;

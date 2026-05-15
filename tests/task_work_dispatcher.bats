@@ -115,6 +115,16 @@ teardown() {
   assert_success
 }
 
+@test "auto-routes to claude-local when .claude/local-workflow.md exists" {
+  mkdir -p "$MAIN_REPO/.claude"
+  touch "$MAIN_REPO/.claude/local-workflow.md"
+  run "$TASK_WORK_DISPATCHER" my-feature
+  assert_success
+  assert_stub_called zellij '/worker'
+  run grep -q '^TASK_FILE=' "$WORKTREE_BASE/.my-feature.info"
+  assert_success
+}
+
 # ---------------------------------------------------------------------------
 # Overrides
 # ---------------------------------------------------------------------------

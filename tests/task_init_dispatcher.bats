@@ -110,6 +110,27 @@ teardown() {
   assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
 }
 
+@test "delegates to claude-local with no passthrough args" {
+  run "$TASK_INIT_DISPATCHER" claude-local
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/local-workflow.md" ]
+  assert [ -d "$MAIN_REPO/tasks" ]
+}
+
+@test "claude-local via dispatcher: tasks/README.md and tasks/_board.md exist" {
+  run "$TASK_INIT_DISPATCHER" claude-local
+  assert_success
+  assert [ -f "$MAIN_REPO/tasks/README.md" ]
+  assert [ -f "$MAIN_REPO/tasks/_board.md" ]
+}
+
+@test "claude-local via dispatcher: .gitignore contains .git/task-force/" {
+  run "$TASK_INIT_DISPATCHER" claude-local
+  assert_success
+  run grep -xF ".git/task-force/" "$MAIN_REPO/.gitignore"
+  assert_success
+}
+
 # ---------------------------------------------------------------------------
 # TUI selector (fzf path)
 # ---------------------------------------------------------------------------
@@ -142,6 +163,13 @@ teardown() {
   run env FZF_STUB_CHOICE="Kiro + Notion                  → .kiro/steering/notion-workflow.md" "$TASK_INIT_DISPATCHER"
   assert_success
   assert [ -f "$MAIN_REPO/.kiro/steering/notion-workflow.md" ]
+}
+
+@test "fzf: Claude Code + local tracking → claude-local" {
+  run env FZF_STUB_CHOICE="Claude Code + local tracking   → .claude/local-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/local-workflow.md" ]
+  assert [ -d "$MAIN_REPO/tasks" ]
 }
 
 @test "fzf: Ctrl-C exits non-zero, does not fall through to numbered menu" {
@@ -200,6 +228,14 @@ teardown() {
   assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
 }
 
+@test "interactive menu: Claude Code + local tracking (1 then 4)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
+  run bash -c "printf '1\n4\n' | \"$TASK_INIT_DISPATCHER\""
+  assert_success
+  assert [ -f "$MAIN_REPO/.claude/local-workflow.md" ]
+  assert [ -d "$MAIN_REPO/tasks" ]
+}
+
 @test "interactive menu: Kiro + Notion (2 then 1)" {
   rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '2\n1\n' | \"$TASK_INIT_DISPATCHER\""
@@ -212,6 +248,16 @@ teardown() {
   run bash -c "printf '2\n2\n' | \"$TASK_INIT_DISPATCHER\""
   assert_success
   assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+}
+
+@test "interactive menu: Kiro + local tracking (2 then 3)" {
+  rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
+  run bash -c "printf '2\n3\n' | \"$TASK_INIT_DISPATCHER\""
+  # kiro-local impl does not exist yet (child B). Dispatcher should attempt
+  # to run kiro-local/bin/task-init and fail with a clear "not found" error
+  # — that's expected during this PR. We just confirm the menu routed there.
+  assert_failure
+  assert_output --partial "kiro-local"
 }
 
 @test "interactive menu invalid tool choice exits non-zero" {

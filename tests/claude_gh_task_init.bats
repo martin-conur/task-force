@@ -185,6 +185,48 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Project-level slash commands
+# ---------------------------------------------------------------------------
+
+@test "installs pm/planner/worker symlinks into .claude/commands/" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  for cmd in pm planner worker; do
+    assert [ -L "$TARGET_DIR/.claude/commands/$cmd.md" ]
+    assert [ -f "$TARGET_DIR/.claude/commands/$cmd.md" ]
+  done
+}
+
+@test "project-level slash commands link into claude-gh/commands/" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run readlink "$TARGET_DIR/.claude/commands/pm.md"
+  assert_output --partial "claude-gh/commands/pm.md"
+}
+
+@test "--force overwrites pre-existing project-level slash command" {
+  mkdir -p "$TARGET_DIR/.claude/commands"
+  echo "stale" > "$TARGET_DIR/.claude/commands/pm.md"
+  run "$CLAUDE_GH_TASK_INIT" --force
+  assert_success
+  assert [ -L "$TARGET_DIR/.claude/commands/pm.md" ]
+  run readlink "$TARGET_DIR/.claude/commands/pm.md"
+  assert_output --partial "claude-gh/commands/pm.md"
+}
+
+@test "without --force, pre-existing project-level slash command is preserved" {
+  mkdir -p "$TARGET_DIR/.claude/commands"
+  echo "stale content" > "$TARGET_DIR/.claude/commands/pm.md"
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  assert [ ! -L "$TARGET_DIR/.claude/commands/pm.md" ]
+  run cat "$TARGET_DIR/.claude/commands/pm.md"
+  assert_output "stale content"
+  assert [ -L "$TARGET_DIR/.claude/commands/planner.md" ]
+  assert [ -L "$TARGET_DIR/.claude/commands/worker.md" ]
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

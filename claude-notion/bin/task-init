@@ -7,9 +7,10 @@ usage() {
   echo "Set up the current repo for the claude-notion workflow:"
   echo "  - Create .claude/notion-workflow.md from the bundled template"
   echo "  - Add @.claude/notion-workflow.md to CLAUDE.md so it auto-loads in every session"
+  echo "  - Install /pm, /planner, /worker slash commands into .claude/commands/"
   echo ""
   echo "Options:"
-  echo "  --force      Overwrite .claude/notion-workflow.md if present"
+  echo "  --force      Overwrite .claude/notion-workflow.md and project-level slash commands if present"
   echo "  --help-ids   Print guide for finding Notion database IDs (no setup)"
   exit 1
 }
@@ -100,5 +101,20 @@ else
   printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
   echo "✓ Created CLAUDE.md with $IMPORT_LINE"
 fi
+
+# Project-level slash commands → <project>/.claude/commands/
+COMMANDS_DIR="$REPO_ROOT/.claude/commands"
+COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
+mkdir -p "$COMMANDS_DIR"
+for cmd in "$COMMANDS_SRC"/*.md; do
+  cmd_name=$(basename "$cmd")
+  cmd_target="$COMMANDS_DIR/$cmd_name"
+  if [[ ( -e "$cmd_target" || -L "$cmd_target" ) && "$FORCE" != true ]]; then
+    echo "⚠ $cmd_target already exists — skipping (use --force to overwrite)"
+  else
+    ln -sf "$cmd" "$cmd_target"
+    echo "✓ Slash command: /$(basename "$cmd_name" .md)"
+  fi
+done
 
 print_ids_guide

@@ -9,12 +9,13 @@ usage() {
   echo "  - Substitute owner / repo / project number if provided"
   echo "    (auto-detected from git remote when possible; missing values prompted interactively)"
   echo "  - Add @.claude/gh-workflow.md to CLAUDE.md so it auto-loads in every session"
+  echo "  - Install /pm, /planner, /worker slash commands into .claude/commands/"
   echo ""
   echo "Options:"
   echo "  --owner OWNER    GitHub user or org name"
   echo "  --repo  REPO     Repository name"
   echo "  --project N      GitHub Projects board number"
-  echo "  --force          Overwrite .claude/gh-workflow.md if present"
+  echo "  --force          Overwrite .claude/gh-workflow.md and project-level slash commands if present"
   exit 1
 }
 
@@ -132,6 +133,21 @@ else
   printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
   echo "✓ Created CLAUDE.md with $IMPORT_LINE"
 fi
+
+# Project-level slash commands → <project>/.claude/commands/
+COMMANDS_DIR="$REPO_ROOT/.claude/commands"
+COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
+mkdir -p "$COMMANDS_DIR"
+for cmd in "$COMMANDS_SRC"/*.md; do
+  cmd_name=$(basename "$cmd")
+  cmd_target="$COMMANDS_DIR/$cmd_name"
+  if [[ ( -e "$cmd_target" || -L "$cmd_target" ) && "$FORCE" != true ]]; then
+    echo "⚠ $cmd_target already exists — skipping (use --force to overwrite)"
+  else
+    ln -sf "$cmd" "$cmd_target"
+    echo "✓ Slash command: /$(basename "$cmd_name" .md)"
+  fi
+done
 
 echo ""
 echo "Done. Open .claude/gh-workflow.md to fill in any remaining {placeholders}."

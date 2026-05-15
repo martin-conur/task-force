@@ -136,6 +136,48 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Project-level agents
+# ---------------------------------------------------------------------------
+
+@test "installs pm/planner/worker symlinks into .kiro/agents/" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  for agent in pm planner worker; do
+    assert [ -L "$TARGET_DIR/.kiro/agents/$agent.json" ]
+    assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
+  done
+}
+
+@test "project-level agents link into kiro-gh/agents/" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run readlink "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_output --partial "kiro-gh/agents/pm.json"
+}
+
+@test "--force overwrites pre-existing project-level agent" {
+  mkdir -p "$TARGET_DIR/.kiro/agents"
+  echo "stale" > "$TARGET_DIR/.kiro/agents/pm.json"
+  run "$KIRO_GH_TASK_INIT" --force
+  assert_success
+  assert [ -L "$TARGET_DIR/.kiro/agents/pm.json" ]
+  run readlink "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_output --partial "kiro-gh/agents/pm.json"
+}
+
+@test "without --force, pre-existing project-level agent is preserved" {
+  mkdir -p "$TARGET_DIR/.kiro/agents"
+  echo "stale content" > "$TARGET_DIR/.kiro/agents/pm.json"
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
+  run cat "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_output "stale content"
+  assert [ -L "$TARGET_DIR/.kiro/agents/planner.json" ]
+  assert [ -L "$TARGET_DIR/.kiro/agents/worker.json" ]
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

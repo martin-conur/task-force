@@ -155,11 +155,12 @@ EOF
   echo "$line" | grep -qF '"task_file"'
 }
 
-@test "running twice does not duplicate the slug entry" {
+@test "second run on the same task creates a parallel session entry" {
   _make_task_file "$MAIN_REPO/tasks/001-add-login.md" 001 "Add login"
   run "$KIRO_LOCAL_TASK_WORK" tasks/001-add-login.md
   assert_success
-  # Second run creates a parallel session with a -HASH suffix.
+  # Second run creates a parallel session with a -HASH suffix, so the two
+  # state.json entries have distinct slugs.
   run "$KIRO_LOCAL_TASK_WORK" tasks/001-add-login.md
   assert_success
   local n

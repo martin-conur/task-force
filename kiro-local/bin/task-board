@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-board — regenerate <repo>/tasks/_board.md from the frontmatter of
+# <repo>/tasks/*.md, overlaying the live in-progress entries from
+# <repo>/.git/task-force/state.json (JSONL — one JSON object per line).
+#
+# Pure bash + awk + sed. No jq dependency. macOS bash 3.2 compatible
+# (so no `declare -A`, no `declare -n`).
+#
+# Triggers:
+#   - task-work    after creating a worktree
+#   - task-done    after cleanup
+#   - the PM agent after any mutation
+#
+# state.json line schema (one JSON object per line):
+#   {"slug":"...","branch":"task/...","worktree":"/abs/path","started_at":"YYYY-MM-DDTHH:MM:SSZ","task_file":"/abs/path"}
+#
+# Status sources (overlay order):
+#   - Frontmatter status: `todo` / `in-progress` / `done`
+#   - If a task is referenced in state.json, force it into the In Progress
+#     column regardless of frontmatter (live state overrides committed state).
+
+usage() {
+  echo "Usage: task-board [--repo PATH]"
+  echo ""
+  echo "Regenerate tasks/_board.md from the current task files + live state."
+  echo ""
+  echo "  --repo PATH   Use PATH instead of \$(git rev-parse --show-toplevel)"
+  exit 1
+}
+
+REPO_ROOT=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) REPO_ROOT="$2"; shift 2;;
+    -h|--help) usage;;
+    *) echo "Unknown option: $1"; usage;;
+  esac
+done
+
+if [[ -z "$REPO_ROOT" ]]; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "Error: not in a git repo (and --repo not given)" >&2
+    exit 1
+  }
+fi
+
+TASKS_DIR="$REPO_ROOT/tasks"
+STATE_FILE="$REPO_ROOT/.git/task-force/state.json"
+BOARD="$TASKS_DIR/_board.md"
+
+[[ -d "$TASKS_DIR" ]] || { echo "Error: $TASKS_DIR does not exist" >&2; exit 1; }
+
+# Build a newline-delimited list of in-flight slugs from state.json. Bash 3.2
+# has no associative arrays, so we use a plain string + grep for membership.
+IN_FLIGHT_SLUGS=""
+if [[ -f "$STATE_FILE" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    slug=$(printf '%s' "$line" | sed -n 's/.*"slug"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [[ -n "$slug" ]] && IN_FLIGHT_SLUGS="$IN_FLIGHT_SLUGS$slug"$'\n'
+  done < "$STATE_FILE"
+fi
+
+is_in_flight() {
+  [[ -n "$IN_FLIGHT_SLUGS" ]] && printf '%s' "$IN_FLIGHT_SLUGS" | grep -qxF "$1"
+}
+
+# Read a single field from YAML frontmatter (very small grammar — keys are
+# simple lowercase, values are scalar; strips surrounding quotes).
+# Usage: read_fm <file> <key>
+read_fm() {
+  local file="$1" key="$2"
+  awk -v key="$key" '
+    /^---[[:space:]]*$/ {
+      if (in_fm) { exit }
+      in_fm = 1; next
+    }
+    in_fm && $0 ~ "^" key "[[:space:]]*:" {
+      sub("^" key "[[:space:]]*:[[:space:]]*", "")
+      gsub(/^"|"$/, "")
+      gsub(/^'\''|'\''$/, "")
+      print
+      exit
+    }
+  ' "$file"
+}
+
+# Collect tasks into three temp files; each line is "<sort_id>\t<display>".
+# We use temp files (instead of `declare -n` namerefs) because bash 3.2 has
+# no nameref support and per-call indirect-expansion gets ugly fast.
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+TODO_TXT="$TMP_DIR/todo"
+INPROG_TXT="$TMP_DIR/inprog"
+DONE_TXT="$TMP_DIR/done"
+: > "$TODO_TXT"
+: > "$INPROG_TXT"
+: > "$DONE_TXT"
+
+shopt -s nullglob
+for tf in "$TASKS_DIR"/*.md; do
+  base=$(basename "$tf")
+  # Skip the board itself and the README
+  [[ "$base" == "_board.md" || "$base" == "README.md" ]] && continue
+
+  fm_id=$(read_fm "$tf" "id")
+  fm_title=$(read_fm "$tf" "title")
+  fm_status=$(read_fm "$tf" "status")
+  fm_priority=$(read_fm "$tf" "priority")
+  fm_pr=$(read_fm "$tf" "pr")
+
+  # Derive slug from filename: strip leading NNN- and trailing .md
+  slug="${base%.md}"
+  slug="${slug#[0-9][0-9][0-9]-}"
+
+  # Fallbacks
+  [[ -z "$fm_id"       ]] && fm_id="???"
+  [[ -z "$fm_title"    ]] && fm_title="$slug"
+  [[ -z "$fm_status"   ]] && fm_status="todo"
+  [[ -z "$fm_priority" ]] && fm_priority=""
+
+  # Compose the display line. The board links to the task file via a relative path.
+  link="[${fm_id} — ${fm_title}](${base})"
+  meta=""
+  [[ -n "$fm_priority" ]] && meta="${meta} \`${fm_priority}\`"
+  [[ -n "$fm_pr"       ]] && meta="${meta} → [PR](${fm_pr})"
+  line="- ${link}${meta}"
+
+  # Sort key: numeric id when possible, else "9999"
+  sort_id="$fm_id"
+  [[ "$sort_id" =~ ^[0-9]+$ ]] || sort_id="9999"
+
+  # Bucketing: live state.json overrides committed frontmatter for "in progress"
+  if is_in_flight "$slug"; then
+    printf '%s\t%s\n' "$sort_id" "$line" >> "$INPROG_TXT"
+  else
+    case "$fm_status" in
+      in-progress|in_progress|"in progress")
+        printf '%s\t%s\n' "$sort_id" "$line" >> "$INPROG_TXT" ;;
+      done)
+        printf '%s\t%s\n' "$sort_id" "$line" >> "$DONE_TXT" ;;
+      *)
+        printf '%s\t%s\n' "$sort_id" "$line" >> "$TODO_TXT" ;;
+    esac
+  fi
+done
+shopt -u nullglob
+
+# Print one bucket, sorted by numeric id. Reads a "<id>\t<line>" file.
+print_bucket() {
+  local file="$1"
+  if [[ ! -s "$file" ]]; then
+    echo "_(none)_"
+    return
+  fi
+  sort -n -k1,1 "$file" | cut -f2-
+}
+
+{
+  printf '<!-- AUTOGENERATED by task-board — do not edit by hand -->\n\n'
+  printf '# Board\n\n'
+  printf '## Todo\n\n'
+  print_bucket "$TODO_TXT"
+  printf '\n## In Progress\n\n'
+  print_bucket "$INPROG_TXT"
+  printf '\n## Done\n\n'
+  print_bucket "$DONE_TXT"
+  printf '\n'
+} > "$BOARD"
+
+echo "✓ Wrote $BOARD"

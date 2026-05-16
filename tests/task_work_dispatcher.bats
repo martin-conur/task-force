@@ -125,6 +125,16 @@ teardown() {
   assert_success
 }
 
+@test "auto-routes to kiro-local when .kiro/steering/local-workflow.md exists" {
+  mkdir -p "$MAIN_REPO/.kiro/steering"
+  touch "$MAIN_REPO/.kiro/steering/local-workflow.md"
+  run "$TASK_WORK_DISPATCHER" my-feature
+  assert_success
+  assert_stub_called zellij "kiro-cli"
+  run grep -q '^TASK_FILE=' "$WORKTREE_BASE/.my-feature.info"
+  assert_success
+}
+
 # ---------------------------------------------------------------------------
 # Overrides
 # ---------------------------------------------------------------------------

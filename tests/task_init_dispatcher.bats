@@ -131,6 +131,35 @@ teardown() {
   assert_success
 }
 
+@test "delegates to kiro-local with no passthrough args" {
+  run "$TASK_INIT_DISPATCHER" kiro-local
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/local-workflow.md" ]
+  assert [ -d "$MAIN_REPO/tasks" ]
+}
+
+@test "kiro-local via dispatcher: tasks/README.md and tasks/_board.md exist" {
+  run "$TASK_INIT_DISPATCHER" kiro-local
+  assert_success
+  assert [ -f "$MAIN_REPO/tasks/README.md" ]
+  assert [ -f "$MAIN_REPO/tasks/_board.md" ]
+}
+
+@test "kiro-local via dispatcher: .gitignore contains .git/task-force/" {
+  run "$TASK_INIT_DISPATCHER" kiro-local
+  assert_success
+  run grep -xF ".git/task-force/" "$MAIN_REPO/.gitignore"
+  assert_success
+}
+
+@test "kiro-local via dispatcher: agents symlinked under .kiro/agents/" {
+  run "$TASK_INIT_DISPATCHER" kiro-local
+  assert_success
+  for agent in pm planner worker; do
+    assert [ -L "$MAIN_REPO/.kiro/agents/$agent.json" ]
+  done
+}
+
 # ---------------------------------------------------------------------------
 # TUI selector (fzf path)
 # ---------------------------------------------------------------------------
@@ -169,6 +198,13 @@ teardown() {
   run env FZF_STUB_CHOICE="Claude Code + local tracking   → .claude/local-workflow.md" "$TASK_INIT_DISPATCHER"
   assert_success
   assert [ -f "$MAIN_REPO/.claude/local-workflow.md" ]
+  assert [ -d "$MAIN_REPO/tasks" ]
+}
+
+@test "fzf: Kiro + local tracking → kiro-local" {
+  run env FZF_STUB_CHOICE="Kiro + local tracking          → .kiro/steering/local-workflow.md" "$TASK_INIT_DISPATCHER"
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/local-workflow.md" ]
   assert [ -d "$MAIN_REPO/tasks" ]
 }
 
@@ -253,11 +289,8 @@ teardown() {
 @test "interactive menu: Kiro + local tracking (2 then 3)" {
   rm -f "$STUB_BIN/fzf" "$STUB_BIN/gum"
   run bash -c "printf '2\n3\n' | \"$TASK_INIT_DISPATCHER\""
-  # kiro-local impl does not exist yet (child B). Dispatcher should attempt
-  # to run kiro-local/bin/task-init and fail with a clear "not found" error
-  # — that's expected during this PR. We just confirm the menu routed there.
-  assert_failure
-  assert_output --partial "kiro-local"
+  assert_success
+  assert [ -f "$MAIN_REPO/.kiro/steering/local-workflow.md" ]
 }
 
 @test "interactive menu invalid tool choice exits non-zero" {

@@ -112,7 +112,8 @@ for cmd in "$COMMANDS_SRC"/*.md; do
   if [[ ( -e "$cmd_target" || -L "$cmd_target" ) && "$FORCE" != true ]]; then
     echo "⚠ $cmd_target already exists — skipping (use --force to overwrite)"
   else
-    ln -sf "$cmd" "$cmd_target"
+    rm -f "$cmd_target"
+    cp "$cmd" "$cmd_target"
     echo "✓ Slash command: /$(basename "$cmd_name" .md)"
   fi
 done

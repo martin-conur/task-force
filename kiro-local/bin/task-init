@@ -66,7 +66,8 @@ for agent in "$AGENTS_SRC"/*.json; do
   if [[ ( -e "$agent_target" || -L "$agent_target" ) && "$FORCE" != true ]]; then
     echo "⚠ $agent_target already exists — skipping (use --force to overwrite)"
   else
-    ln -sf "$agent" "$agent_target"
+    rm -f "$agent_target"
+    cp "$agent" "$agent_target"
     echo "✓ Agent: $agent_name"
   fi
 done

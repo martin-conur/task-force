@@ -88,20 +88,20 @@ teardown() {
 # Project-level agents
 # ---------------------------------------------------------------------------
 
-@test "installs pm/planner/worker symlinks into .kiro/agents/" {
+@test "installs pm/planner/worker into .kiro/agents/ as real files" {
   run "$KIRO_TASK_INIT"
   assert_success
   for agent in pm planner worker; do
-    assert [ -L "$TARGET_DIR/.kiro/agents/$agent.json" ]
     assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
+    assert [ ! -L "$TARGET_DIR/.kiro/agents/$agent.json" ]
   done
 }
 
-@test "project-level agents link into kiro-notion/agents/" {
+@test "project-level agents are copies of kiro-notion/agents/" {
   run "$KIRO_TASK_INIT"
   assert_success
-  run readlink "$TARGET_DIR/.kiro/agents/pm.json"
-  assert_output --partial "kiro-notion/agents/pm.json"
+  run cmp -s "$REPO_ROOT_REAL/kiro-notion/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_success
 }
 
 @test "--force overwrites pre-existing project-level agent" {
@@ -109,9 +109,19 @@ teardown() {
   echo "stale" > "$TARGET_DIR/.kiro/agents/pm.json"
   run "$KIRO_TASK_INIT" --force
   assert_success
-  assert [ -L "$TARGET_DIR/.kiro/agents/pm.json" ]
-  run readlink "$TARGET_DIR/.kiro/agents/pm.json"
-  assert_output --partial "kiro-notion/agents/pm.json"
+  assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
+  run cmp -s "$REPO_ROOT_REAL/kiro-notion/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_success
+}
+
+@test "--force replaces a stale (broken) symlink" {
+  mkdir -p "$TARGET_DIR/.kiro/agents"
+  ln -sf /nonexistent/path "$TARGET_DIR/.kiro/agents/pm.json"
+  run "$KIRO_TASK_INIT" --force
+  assert_success
+  assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
+  run cmp -s "$REPO_ROOT_REAL/kiro-notion/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_success
 }
 
 @test "without --force, pre-existing project-level agent is preserved" {
@@ -119,11 +129,10 @@ teardown() {
   echo "stale content" > "$TARGET_DIR/.kiro/agents/pm.json"
   run "$KIRO_TASK_INIT"
   assert_success
-  assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
   run cat "$TARGET_DIR/.kiro/agents/pm.json"
   assert_output "stale content"
-  assert [ -L "$TARGET_DIR/.kiro/agents/planner.json" ]
-  assert [ -L "$TARGET_DIR/.kiro/agents/worker.json" ]
+  assert [ -f "$TARGET_DIR/.kiro/agents/planner.json" ]
+  assert [ -f "$TARGET_DIR/.kiro/agents/worker.json" ]
 }
 
 # ---------------------------------------------------------------------------

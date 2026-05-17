@@ -152,11 +152,12 @@ teardown() {
   assert_success
 }
 
-@test "kiro-local via dispatcher: agents symlinked under .kiro/agents/" {
+@test "kiro-local via dispatcher: agents installed under .kiro/agents/" {
   run "$TASK_INIT_DISPATCHER" kiro-local
   assert_success
   for agent in pm planner worker; do
-    assert [ -L "$MAIN_REPO/.kiro/agents/$agent.json" ]
+    assert [ -f "$MAIN_REPO/.kiro/agents/$agent.json" ]
+    assert [ ! -L "$MAIN_REPO/.kiro/agents/$agent.json" ]
   done
 }
 

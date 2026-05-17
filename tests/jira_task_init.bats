@@ -119,20 +119,20 @@ teardown() {
 # Project-level slash commands
 # ---------------------------------------------------------------------------
 
-@test "installs pm/planner/worker symlinks into .claude/commands/" {
+@test "installs pm/planner/worker into .claude/commands/ as real files" {
   run "$JIRA_TASK_INIT"
   assert_success
   for cmd in pm planner worker; do
-    assert [ -L "$TARGET_DIR/.claude/commands/$cmd.md" ]
     assert [ -f "$TARGET_DIR/.claude/commands/$cmd.md" ]
+    assert [ ! -L "$TARGET_DIR/.claude/commands/$cmd.md" ]
   done
 }
 
-@test "project-level slash commands link into claude-jira/commands/" {
+@test "project-level slash commands are copies of claude-jira/commands/" {
   run "$JIRA_TASK_INIT"
   assert_success
-  run readlink "$TARGET_DIR/.claude/commands/pm.md"
-  assert_output --partial "claude-jira/commands/pm.md"
+  run cmp -s "$REPO_ROOT_REAL/claude-jira/commands/pm.md" "$TARGET_DIR/.claude/commands/pm.md"
+  assert_success
 }
 
 @test "--force overwrites pre-existing project-level slash command" {
@@ -140,9 +140,19 @@ teardown() {
   echo "stale" > "$TARGET_DIR/.claude/commands/pm.md"
   run "$JIRA_TASK_INIT" --force
   assert_success
-  assert [ -L "$TARGET_DIR/.claude/commands/pm.md" ]
-  run readlink "$TARGET_DIR/.claude/commands/pm.md"
-  assert_output --partial "claude-jira/commands/pm.md"
+  assert [ ! -L "$TARGET_DIR/.claude/commands/pm.md" ]
+  run cmp -s "$REPO_ROOT_REAL/claude-jira/commands/pm.md" "$TARGET_DIR/.claude/commands/pm.md"
+  assert_success
+}
+
+@test "--force replaces a stale (broken) symlink" {
+  mkdir -p "$TARGET_DIR/.claude/commands"
+  ln -sf /nonexistent/path "$TARGET_DIR/.claude/commands/pm.md"
+  run "$JIRA_TASK_INIT" --force
+  assert_success
+  assert [ ! -L "$TARGET_DIR/.claude/commands/pm.md" ]
+  run cmp -s "$REPO_ROOT_REAL/claude-jira/commands/pm.md" "$TARGET_DIR/.claude/commands/pm.md"
+  assert_success
 }
 
 @test "without --force, pre-existing project-level slash command is preserved" {
@@ -150,11 +160,10 @@ teardown() {
   echo "stale content" > "$TARGET_DIR/.claude/commands/pm.md"
   run "$JIRA_TASK_INIT"
   assert_success
-  assert [ ! -L "$TARGET_DIR/.claude/commands/pm.md" ]
   run cat "$TARGET_DIR/.claude/commands/pm.md"
   assert_output "stale content"
-  assert [ -L "$TARGET_DIR/.claude/commands/planner.md" ]
-  assert [ -L "$TARGET_DIR/.claude/commands/worker.md" ]
+  assert [ -f "$TARGET_DIR/.claude/commands/planner.md" ]
+  assert [ -f "$TARGET_DIR/.claude/commands/worker.md" ]
 }
 
 # ---------------------------------------------------------------------------

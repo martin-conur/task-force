@@ -77,6 +77,25 @@ teardown() {
   assert_output "2"
 }
 
+@test "branch collision: warns and reuses when task branch already exists" {
+  git -C "$MAIN_REPO" branch task/stale-feature
+  echo "newer" > "$MAIN_REPO/newfile.txt"
+  git -C "$MAIN_REPO" add newfile.txt
+  git -C "$MAIN_REPO" commit -q -m "advance main"
+
+  run "$KIRO_TASK_WORK" stale-feature
+  assert_success
+  assert_output --partial "Branch task/stale-feature already exists. Reusing it."
+  assert_output --partial "Current HEAD on main"
+  assert_output --partial "Divergence:"
+  assert_output --partial "0 ahead, 1 behind main"
+
+  local wt_head main_head
+  wt_head=$(git -C "$WORKTREE_BASE/stale-feature" rev-parse HEAD)
+  main_head=$(git -C "$MAIN_REPO" rev-parse main)
+  [[ "$wt_head" != "$main_head" ]]
+}
+
 # ---------------------------------------------------------------------------
 # .info file
 # ---------------------------------------------------------------------------

@@ -139,6 +139,22 @@ teardown() {
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
 
+@test "kiro: --remove-worktree alone exits 0 without reading stdin" {
+  # No --force, no piped input. Bug was that the "Remove worktree?" prompt
+  # still fired and would hang reading stdin.
+  run "$KIRO_TASK_DONE" --remove-worktree </dev/null
+  assert_success
+  refute_output --partial "Remove worktree and close tab?"
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}
+
+@test "jira: --remove-worktree alone exits 0 without reading stdin" {
+  run "$JIRA_TASK_DONE" --remove-worktree </dev/null
+  assert_success
+  refute_output --partial "Remove worktree and close tab?"
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}
+
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
@@ -231,6 +247,13 @@ teardown() {
 @test "claude-notion: --remove-worktree --force skips all prompts" {
   run "$CLAUDE_NOTION_TASK_DONE" --remove-worktree --force
   assert_success
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}
+
+@test "claude-notion: --remove-worktree alone exits 0 without reading stdin" {
+  run "$CLAUDE_NOTION_TASK_DONE" --remove-worktree </dev/null
+  assert_success
+  refute_output --partial "Remove worktree and close tab?"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
 

@@ -89,7 +89,7 @@ if [[ "$REMOVE_ONLY" != true ]]; then
   echo ""
 fi
 
-if [[ "$FORCE" != true ]]; then
+if [[ "$FORCE" != true && "$REMOVE_ONLY" != true ]]; then
   read -rp "Remove worktree and close tab? (y/N) " confirm
   [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
 fi

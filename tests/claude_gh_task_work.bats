@@ -163,6 +163,56 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Permission-mode flags: --plan / --auto (and their mutex)
+# ---------------------------------------------------------------------------
+
+@test "--plan: launches claude in plan mode running /planner" {
+  run "$CLAUDE_GH_TASK_WORK" --plan my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--plan with URL: passes URL to /planner" {
+  local url="https://github.com/owner/repo/issues/42"
+  run "$CLAUDE_GH_TASK_WORK" --plan my-feature "$url"
+  assert_success
+  assert_stub_called zellij "claude --permission-mode plan \"/planner $url\""
+}
+
+@test "-p alias works the same as --plan" {
+  run "$CLAUDE_GH_TASK_WORK" -p my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--auto: launches claude in auto mode running /worker" {
+  run "$CLAUDE_GH_TASK_WORK" --auto my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode auto "/worker"'
+}
+
+@test "--auto with URL: keeps /worker Implement task prefix" {
+  local url="https://github.com/owner/repo/issues/42"
+  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  assert_success
+  assert_stub_called zellij "claude --permission-mode auto \"/worker Implement task: $url\""
+}
+
+@test "--auto --plan: errors out (mutually exclusive)" {
+  run "$CLAUDE_GH_TASK_WORK" --auto --plan my-feature
+  assert_failure
+  assert_output --partial "--auto and --plan are mutually exclusive"
+}
+
+@test "--no-launch with --plan: opens tab without invoking claude (mode flag is a no-op)" {
+  run "$CLAUDE_GH_TASK_WORK" --no-launch --plan my-feature
+  assert_success
+  assert_output --partial "claude NOT launched"
+  run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

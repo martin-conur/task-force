@@ -27,12 +27,18 @@ Options:
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start claude. Use this when you want to
                       pick the command/model interactively.
+                      (--auto and --plan have no effect when combined with this.)
+  -p, --plan          Launch claude with --permission-mode plan, running
+                      /planner instead of /worker. Mutually exclusive with --auto.
+      --auto          Launch claude with --permission-mode auto (auto-accept
+                      low-risk tool calls). Mutually exclusive with --plan.
   -h, --help          Show this help.
 
 Examples:
   task-work tasks/001-add-login-flow.md
   task-work tasks/042-refactor-auth.md --base develop
   task-work spike-idea --no-launch
+  task-work tasks/001-add-login-flow.md --plan
 EOF
   exit "${1:-1}"
 }
@@ -41,6 +47,8 @@ EOF
 POSITIONAL=()
 NO_LAUNCH=""
 BASE_BRANCH_OVERRIDE=""
+AUTO_MODE=""
+PLAN_MODE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,11 +57,18 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
       BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
+    --auto) AUTO_MODE="1"; shift ;;
+    --plan|-p) PLAN_MODE="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac
 done
+
+if [[ -n "$AUTO_MODE" && -n "$PLAN_MODE" ]]; then
+  echo "Error: --auto and --plan are mutually exclusive" >&2
+  exit 1
+fi
 
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
 
@@ -104,10 +119,20 @@ WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 # ---------------- command builder ----------------
 build_claude_cmd() {
+  if [[ -n "$PLAN_MODE" ]]; then
+    if [[ -n "$TASK_FILE" ]]; then
+      echo "claude --permission-mode plan \"/planner $TASK_FILE\""
+    else
+      echo "claude --permission-mode plan \"/planner\""
+    fi
+    return
+  fi
+  local mode_prefix=""
+  [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$TASK_FILE" ]]; then
-    echo "claude \"/worker $TASK_FILE\""
+    echo "claude ${mode_prefix}\"/worker $TASK_FILE\""
   else
-    echo "claude \"/worker\""
+    echo "claude ${mode_prefix}\"/worker\""
   fi
 }
 

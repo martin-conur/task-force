@@ -16,6 +16,10 @@ usage() {
   echo ""
   echo "Options:"
   echo "  -b, --base BRANCH   Base branch for the PR (default: current branch)"
+  echo "  -p, --plan          Launch claude with --permission-mode plan, running"
+  echo "                      /planner instead of /worker. Mutually exclusive with --auto."
+  echo "      --auto          Launch claude with --permission-mode auto (auto-accept"
+  echo "                      low-risk tool calls). Mutually exclusive with --plan."
   echo "  -h, --help          Show this help"
   echo ""
   echo "Examples:"
@@ -23,11 +27,14 @@ usage() {
   echo "  task-work https://your.atlassian.net/browse/PROJ-123"
   echo "  task-work add-store-filtering"
   echo "  task-work --base develop PROJ-456"
+  echo "  task-work --plan PROJ-123"
   exit 1
 }
 
 BASE_BRANCH_OVERRIDE=""
 POSITIONAL=()
+AUTO_MODE=""
+PLAN_MODE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,10 +42,17 @@ while [[ $# -gt 0 ]]; do
     -b|--base)
       [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
       BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
+    --auto) AUTO_MODE="1"; shift ;;
+    --plan|-p) PLAN_MODE="1"; shift ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac
 done
+
+if [[ -n "$AUTO_MODE" && -n "$PLAN_MODE" ]]; then
+  echo "Error: --auto and --plan are mutually exclusive" >&2
+  exit 1
+fi
 
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
 
@@ -70,10 +84,20 @@ BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 build_claude_cmd() {
+  if [[ -n "$PLAN_MODE" ]]; then
+    if [[ -n "$JIRA_REF" ]]; then
+      echo "claude --permission-mode plan \"/planner $JIRA_REF\""
+    else
+      echo "claude --permission-mode plan \"/planner\""
+    fi
+    return
+  fi
+  local mode_prefix=""
+  [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$JIRA_REF" ]]; then
-    echo "claude \"/worker Implement Jira issue: $JIRA_REF\""
+    echo "claude ${mode_prefix}\"/worker Implement Jira issue: $JIRA_REF\""
   else
-    echo "claude \"/worker\""
+    echo "claude ${mode_prefix}\"/worker\""
   fi
 }
 

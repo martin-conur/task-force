@@ -5,6 +5,8 @@ set -euo pipefail
 AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=lib/zellij-tab.sh
 source "$AW_ROOT_REAL/lib/zellij-tab.sh"
+# shellcheck source=lib/worktree-create.sh
+source "$AW_ROOT_REAL/lib/worktree-create.sh"
 
 usage() {
   cat <<'EOF'
@@ -157,12 +159,7 @@ fi
 
 mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
-git worktree add "$WORKTREE_DIR" -b "$BRANCH" 2>/dev/null || {
-  git worktree add "$WORKTREE_DIR" "$BRANCH" 2>/dev/null || {
-    echo "Error: could not create worktree. Check if branch '$BRANCH' exists elsewhere." >&2
-    exit 1
-  }
-}
+aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$BASE_BRANCH"
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"

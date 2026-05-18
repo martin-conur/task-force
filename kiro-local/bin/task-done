@@ -122,12 +122,12 @@ else
   [[ -x "$_BOARD_SCRIPT" ]] && "$_BOARD_SCRIPT" --repo "$MAIN_WORKTREE" >/dev/null || true
 fi
 
-# Close current zellij tab
-echo "Closing zellij tab..."
-zellij action close-tab
-
 if git branch -d "$BRANCH" 2>/dev/null; then
   echo "Done. Deleted local branch '$BRANCH'."
 else
   echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
 fi
+
+# Close current zellij tab
+echo "Closing zellij tab..."
+zellij action close-tab

@@ -104,12 +104,12 @@ git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || {
 # Clean up info file
 [[ -f "$INFO_FILE" ]] && rm -f "$INFO_FILE"
 
-# Close current zellij tab
-echo "Closing zellij tab..."
-zellij action close-tab
-
 if git branch -d "$BRANCH" 2>/dev/null; then
   echo "Done. Deleted local branch '$BRANCH'."
 else
   echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
 fi
+
+# Close current zellij tab
+echo "Closing zellij tab..."
+zellij action close-tab

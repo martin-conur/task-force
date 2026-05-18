@@ -80,6 +80,8 @@ teardown() {
   assert_success
   assert_output --partial "Branch task/stale-feature already exists. Reusing it."
   assert_output --partial "Current HEAD on main"
+  assert_output --partial "Divergence:"
+  assert_output --partial "0 ahead, 1 behind main"
 
   local wt_head main_head
   wt_head=$(git -C "$WORKTREE_BASE/stale-feature" rev-parse HEAD)

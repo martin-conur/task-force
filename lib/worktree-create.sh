@@ -21,26 +21,31 @@ aw_create_worktree() {
   fi
 
   if ! git show-ref --verify --quiet "refs/heads/$branch"; then
-    echo "Error: could not create worktree. Check if branch '$branch' exists elsewhere." >&2
+    echo "Error: could not create worktree at '$worktree_dir'." >&2
+    echo "       Possibly a stale worktree registration — try: git worktree prune" >&2
     return 1
   fi
 
   if ! git worktree add "$worktree_dir" "$branch" 2>/dev/null; then
-    echo "Error: could not create worktree. Check if branch '$branch' exists elsewhere." >&2
+    echo "Error: could not create worktree at '$worktree_dir'." >&2
+    echo "       Possibly a stale worktree registration — try: git worktree prune" >&2
     return 1
   fi
 
-  local branch_tip branch_subj base_tip base_subj
+  local branch_tip branch_subj base_tip base_subj behind ahead
   branch_tip=$(git rev-parse --short "$branch" 2>/dev/null || echo "?")
   branch_subj=$(git log -1 --format=%s "$branch" 2>/dev/null || echo "?")
   base_tip=$(git rev-parse --short "$base_branch" 2>/dev/null || echo "?")
   base_subj=$(git log -1 --format=%s "$base_branch" 2>/dev/null || echo "?")
+  behind=$(git rev-list --count "$branch..$base_branch" 2>/dev/null || echo "?")
+  ahead=$(git rev-list --count "$base_branch..$branch" 2>/dev/null || echo "?")
 
   {
     echo ""
     echo "⚠ Branch $branch already exists. Reusing it."
     echo "  Branch tip:               $branch_tip ($branch_subj)"
     echo "  Current HEAD on $base_branch: $base_tip ($base_subj)"
+    echo "  Divergence:               $ahead ahead, $behind behind $base_branch"
     echo "  If the branch is stale, exit and run: git branch -D $branch"
     echo ""
   } >&2

@@ -163,6 +163,48 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Permission-mode flags: --plan / --auto (and their mutex)
+# ---------------------------------------------------------------------------
+
+@test "--plan: launches claude in plan mode running /planner" {
+  run "$CLAUDE_NOTION_TASK_WORK" --plan my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--plan with URL: passes URL to /planner" {
+  local url="https://www.notion.so/My-Task-abc123def456abc123def456abc123de"
+  run "$CLAUDE_NOTION_TASK_WORK" --plan my-feature "$url"
+  assert_success
+  assert_stub_called zellij "claude --permission-mode plan \"/planner $url\""
+}
+
+@test "-p alias works the same as --plan" {
+  run "$CLAUDE_NOTION_TASK_WORK" -p my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--auto: launches claude in auto mode running /worker" {
+  run "$CLAUDE_NOTION_TASK_WORK" --auto my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode auto "/worker"'
+}
+
+@test "--auto with URL: keeps /worker Implement task prefix" {
+  local url="https://www.notion.so/My-Task-abc123def456abc123def456abc123de"
+  run "$CLAUDE_NOTION_TASK_WORK" --auto my-feature "$url"
+  assert_success
+  assert_stub_called zellij "claude --permission-mode auto \"/worker Implement task: $url\""
+}
+
+@test "--auto --plan: errors out (mutually exclusive)" {
+  run "$CLAUDE_NOTION_TASK_WORK" --auto --plan my-feature
+  assert_failure
+  assert_output --partial "--auto and --plan are mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

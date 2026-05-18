@@ -130,6 +130,46 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Permission-mode flags: --plan / --auto (and their mutex)
+# ---------------------------------------------------------------------------
+
+@test "--plan: launches claude in plan mode running /planner" {
+  run "$JIRA_TASK_WORK" --plan my-task
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--plan with Jira key: passes key to /planner" {
+  run "$JIRA_TASK_WORK" --plan PROJ-10
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner PROJ-10"'
+}
+
+@test "-p alias works the same as --plan" {
+  run "$JIRA_TASK_WORK" -p my-task
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--auto: launches claude in auto mode running /worker" {
+  run "$JIRA_TASK_WORK" --auto my-task
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode auto "/worker"'
+}
+
+@test "--auto with Jira key: keeps /worker Implement Jira issue prefix" {
+  run "$JIRA_TASK_WORK" --auto PROJ-10
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode auto "/worker Implement Jira issue: PROJ-10"'
+}
+
+@test "--auto --plan: errors out (mutually exclusive)" {
+  run "$JIRA_TASK_WORK" --auto --plan my-task
+  assert_failure
+  assert_output --partial "--auto and --plan are mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

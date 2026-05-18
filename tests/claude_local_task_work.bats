@@ -238,6 +238,48 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Permission-mode flags: --plan / --auto (and their mutex)
+# ---------------------------------------------------------------------------
+
+@test "--plan: launches claude in plan mode running /planner" {
+  run "$CLAUDE_LOCAL_TASK_WORK" --plan my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--plan with task file: passes file path to /planner" {
+  _make_task_file "$MAIN_REPO/tasks/001-add-login.md" 001 "Add login"
+  run "$CLAUDE_LOCAL_TASK_WORK" --plan tasks/001-add-login.md
+  assert_success
+  assert_stub_called zellij "claude --permission-mode plan \"/planner $MAIN_REPO/tasks/001-add-login.md\""
+}
+
+@test "-p alias works the same as --plan" {
+  run "$CLAUDE_LOCAL_TASK_WORK" -p my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode plan "/planner"'
+}
+
+@test "--auto: launches claude in auto mode running /worker" {
+  run "$CLAUDE_LOCAL_TASK_WORK" --auto my-feature
+  assert_success
+  assert_stub_called zellij 'claude --permission-mode auto "/worker"'
+}
+
+@test "--auto with task file: keeps /worker <file> form" {
+  _make_task_file "$MAIN_REPO/tasks/001-add-login.md" 001 "Add login"
+  run "$CLAUDE_LOCAL_TASK_WORK" --auto tasks/001-add-login.md
+  assert_success
+  assert_stub_called zellij "claude --permission-mode auto \"/worker $MAIN_REPO/tasks/001-add-login.md\""
+}
+
+@test "--auto --plan: errors out (mutually exclusive)" {
+  run "$CLAUDE_LOCAL_TASK_WORK" --auto --plan my-feature
+  assert_failure
+  assert_output --partial "--auto and --plan are mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

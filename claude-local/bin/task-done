@@ -126,4 +126,8 @@ fi
 echo "Closing zellij tab..."
 zellij action close-tab
 
-echo "Done. Branch '$BRANCH' still exists — delete after PR merge with: git branch -d $BRANCH"
+if git branch -d "$BRANCH" 2>/dev/null; then
+  echo "Done. Deleted local branch '$BRANCH'."
+else
+  echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
+fi

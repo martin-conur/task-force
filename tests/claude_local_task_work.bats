@@ -279,6 +279,15 @@ EOF
   assert_output --partial "--auto and --plan are mutually exclusive"
 }
 
+@test "--no-launch with --plan: opens tab without invoking claude (mode flag is a no-op)" {
+  _make_task_file "$MAIN_REPO/tasks/001-add-login.md" 001 "Add login"
+  run "$CLAUDE_LOCAL_TASK_WORK" --no-launch --plan tasks/001-add-login.md
+  assert_success
+  assert_output --partial "claude NOT launched"
+  run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
 # ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------

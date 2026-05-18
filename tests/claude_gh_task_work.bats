@@ -204,6 +204,14 @@ teardown() {
   assert_output --partial "--auto and --plan are mutually exclusive"
 }
 
+@test "--no-launch with --plan: opens tab without invoking claude (mode flag is a no-op)" {
+  run "$CLAUDE_GH_TASK_WORK" --no-launch --plan my-feature
+  assert_success
+  assert_output --partial "claude NOT launched"
+  run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
 # ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------

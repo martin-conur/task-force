@@ -27,10 +27,11 @@ Options:
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start claude. Use this when you want to
                       pick the command/model interactively.
-      --auto          Launch claude with --permission-mode auto (auto-accept
-                      low-risk tool calls). Mutually exclusive with --plan.
+                      (--auto and --plan have no effect when combined with this.)
   -p, --plan          Launch claude with --permission-mode plan, running
                       /planner instead of /worker. Mutually exclusive with --auto.
+      --auto          Launch claude with --permission-mode auto (auto-accept
+                      low-risk tool calls). Mutually exclusive with --plan.
   -h, --help          Show this help.
 
 Examples:

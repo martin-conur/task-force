@@ -284,3 +284,69 @@ teardown() {
   run bash -c "echo y | $CLAUDE_NOTION_TASK_DONE --force"
   assert_output --partial "Uncommitted changes"
 }
+
+# ---------------------------------------------------------------------------
+# Local branch deletion after worktree removal
+# ---------------------------------------------------------------------------
+
+@test "kiro: deletes local branch when fully merged (no new commits)" {
+  # Fresh branch with no commits ahead of main is trivially merged.
+  run_task_done "$KIRO_TASK_DONE" --force
+  assert_success
+  assert_output --partial "Deleted local branch 'task/$SLUG'"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output ""
+}
+
+@test "kiro: keeps local branch when it has unmerged commits" {
+  # Commit on the task branch — now it's ahead of main and not merged.
+  touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
+  git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
+  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
+
+  run_task_done "$KIRO_TASK_DONE" --force
+  assert_success
+  assert_output --partial "still has unmerged commits"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output --partial "task/$SLUG"
+}
+
+@test "jira: deletes local branch when fully merged (no new commits)" {
+  run_task_done "$JIRA_TASK_DONE" --force
+  assert_success
+  assert_output --partial "Deleted local branch 'task/$SLUG'"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output ""
+}
+
+@test "jira: keeps local branch when it has unmerged commits" {
+  touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
+  git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
+  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
+
+  run_task_done "$JIRA_TASK_DONE" --force
+  assert_success
+  assert_output --partial "still has unmerged commits"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output --partial "task/$SLUG"
+}
+
+@test "claude-notion: deletes local branch when fully merged (no new commits)" {
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_success
+  assert_output --partial "Deleted local branch 'task/$SLUG'"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output ""
+}
+
+@test "claude-notion: keeps local branch when it has unmerged commits" {
+  touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
+  git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
+  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
+
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_success
+  assert_output --partial "still has unmerged commits"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output --partial "task/$SLUG"
+}

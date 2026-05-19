@@ -32,6 +32,15 @@ jobs:
         run: |
           shellcheck -x \
             install.sh task-init run_tests.sh \
-            bin/* lib/*.sh \
+            bin/* lib/*.sh tools/*.sh \
             tests/helpers/*.bash \
             */install.sh */bin/*
+
+  drift-check:
+    name: Loadout drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check loadout drift
+        run: bash tools/check-drift.sh

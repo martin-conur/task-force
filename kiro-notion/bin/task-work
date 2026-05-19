@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# region:lib-source-header
 # Source shared zellij tab launcher.
 AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=lib/zellij-tab.sh
 source "$AW_ROOT_REAL/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-create.sh
 source "$AW_ROOT_REAL/lib/worktree-create.sh"
+# endregion:lib-source-header
 
 usage() {
   cat <<'EOF'
@@ -166,6 +168,7 @@ build_kiro_cmd() {
 # ---------------- worktree creation ----------------
 # Worktree already exists? Spin up a parallel session with a hash suffix
 # so multiple agents can iterate on the same task at the same time.
+# region:worktree-creation-pre-info
 if [[ -d "$WORKTREE_DIR" ]]; then
   HASH=$(LC_ALL=C head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 5)
   SLUG="${SLUG}-${HASH}"
@@ -177,11 +180,13 @@ fi
 mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
 aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
+# endregion:worktree-creation-pre-info
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 printf 'BASE_BRANCH=%s\nSLUG=%s\nNOTION_URL=%s\n' "$BASE_BRANCH" "$SLUG" "$NOTION_URL" > "$INFO_FILE"
 
+# region:worktree-creation-post-info
 echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" ""
@@ -197,3 +202,4 @@ else
   [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
   echo "Started $desc in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
 fi
+# endregion:worktree-creation-post-info

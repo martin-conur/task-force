@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# region:flag-parsing
 usage() {
   echo "Usage: task-done [--force] [--remove-worktree]"
   echo ""
@@ -27,7 +28,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
+# endregion:flag-parsing
 
+# region:worktree-context
+# Detect worktree context
 WORKTREE_DIR=$(pwd)
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo"; exit 1; }
 
@@ -48,13 +52,15 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 BASE_BRANCH="main"
 # shellcheck source=/dev/null
 [[ -f "$INFO_FILE" ]] && source "$INFO_FILE"
+# endregion:worktree-context
 
+# region:diff-summary
 echo "Worktree: $WORKTREE_DIR"
 echo "Branch:   $BRANCH"
 echo "Base:     $BASE_BRANCH"
 echo ""
 
-# Uncommitted changes?
+# Check for uncommitted changes
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "⚠ Uncommitted changes detected:"
   git status --short
@@ -65,11 +71,13 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   fi
 fi
 
+# Show summary
 COMMIT_COUNT=$(git rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "?")
 echo "Commits ahead of ${BASE_BRANCH}: $COMMIT_COUNT"
 DIFF_STAT=$(git diff --shortstat "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
 [[ -n "$DIFF_STAT" ]] && echo "Changes: $DIFF_STAT"
 echo ""
+# endregion:diff-summary
 
 if [[ "$REMOVE_ONLY" != true ]]; then
   # Show existing PR URL, or print the creation command
@@ -89,13 +97,16 @@ if [[ "$REMOVE_ONLY" != true ]]; then
   echo ""
 fi
 
+# region:confirm-and-cleanup
 if [[ "$FORCE" != true && "$REMOVE_ONLY" != true ]]; then
   read -rp "Remove worktree and close tab? (y/N) " confirm
   [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
 fi
 
+# Move out of worktree before removing it
 cd "$MAIN_WORKTREE"
 
+# Remove worktree
 echo "Removing worktree..."
 git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || {
   echo "Warning: could not remove worktree cleanly. Trying prune..."
@@ -112,5 +123,7 @@ else
   echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
 fi
 
+# Close current zellij tab
 echo "Closing zellij tab..."
 zellij action close-tab
+# endregion:confirm-and-cleanup

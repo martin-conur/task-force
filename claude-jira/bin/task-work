@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# region:lib-source-header
 # Source shared zellij tab launcher.
 AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=lib/zellij-tab.sh
 source "$AW_ROOT_REAL/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-create.sh
 source "$AW_ROOT_REAL/lib/worktree-create.sh"
+# endregion:lib-source-header
 
 usage() {
   echo "Usage: task-work [options] <jira-key-or-url-or-slug>"

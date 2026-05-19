@@ -137,7 +137,7 @@ build_kiro_cmd() {
 
 # ---------------- worktree creation ----------------
 if [[ -d "$WORKTREE_DIR" ]]; then
-  HASH=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 5 || :)
+  HASH=$(LC_ALL=C head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 5)
   SLUG="${SLUG}-${HASH}"
   BRANCH="task/${SLUG}"
   WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"

@@ -320,6 +320,41 @@ _setup_stale_local_base() {
   rm -rf "$UPSTREAM_DIR"
 }
 
+@test "diverged local + remote: behavior unchanged (no warning, forks from local HEAD)" {
+  local upstream sibling
+  upstream=$(mktemp -d)
+  git -C "$upstream" init -q --bare -b main
+  git -C "$MAIN_REPO" remote add origin "$upstream"
+  git -C "$MAIN_REPO" push -q origin main
+
+  # Local main advances with its own commit.
+  echo "local diverge" > "$MAIN_REPO/local.txt"
+  git -C "$MAIN_REPO" add local.txt
+  git -C "$MAIN_REPO" commit -q -m "local-only"
+  local local_head
+  local_head=$(git -C "$MAIN_REPO" rev-parse main)
+
+  # Remote main advances with a DIFFERENT commit via a sibling clone — true divergence.
+  sibling=$(mktemp -d)
+  git -C "$sibling" clone -q "$upstream" .
+  git -C "$sibling" config user.email "s@s.local"
+  git -C "$sibling" config user.name "S"
+  echo "remote diverge" > "$sibling/remote.txt"
+  git -C "$sibling" add remote.txt
+  git -C "$sibling" commit -q -m "remote-only"
+  git -C "$sibling" push -q origin main
+  rm -rf "$sibling"
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  refute_output --partial "is behind"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$local_head"
+
+  rm -rf "$upstream"
+}
+
 @test "no remote configured: auto-refresh is a silent no-op" {
   # No origin set on $MAIN_REPO at all — task-work should just work as before.
   local local_head

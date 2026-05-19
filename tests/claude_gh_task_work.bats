@@ -14,6 +14,11 @@ setup() {
 
 teardown() {
   teardown_all
+  if [[ -f "$BATS_TEST_TMPDIR/.upstream" ]]; then
+    local up
+    up=$(cat "$BATS_TEST_TMPDIR/.upstream")
+    [[ -d "$up" ]] && rm -rf "$up"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -218,7 +223,8 @@ teardown() {
 _setup_stale_local_base() {
   local upstream
   upstream=$(mktemp -d)
-  UPSTREAM_DIR="$upstream"  # export so the test can rm -rf it later
+  UPSTREAM_DIR="$upstream"
+  echo "$upstream" > "$BATS_TEST_TMPDIR/.upstream"
   git -C "$upstream" init -q --bare -b main
   git -C "$MAIN_REPO" remote add origin "$upstream"
   git -C "$MAIN_REPO" push -q origin main
@@ -252,13 +258,12 @@ _setup_stale_local_base() {
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
   assert_equal "$wt_head" "$remote_head"
-
-  rm -rf "$UPSTREAM_DIR"
 }
 
 @test "local base ahead of remote: behavior unchanged (no warning, forks from HEAD)" {
   local upstream
   upstream=$(mktemp -d)
+  echo "$upstream" > "$BATS_TEST_TMPDIR/.upstream"
   git -C "$upstream" init -q --bare -b main
   git -C "$MAIN_REPO" remote add origin "$upstream"
   git -C "$MAIN_REPO" push -q origin main
@@ -275,13 +280,12 @@ _setup_stale_local_base() {
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
   assert_equal "$wt_head" "$local_head"
-
-  rm -rf "$upstream"
 }
 
 @test "local base matches remote: behavior unchanged (no warning)" {
   local upstream
   upstream=$(mktemp -d)
+  echo "$upstream" > "$BATS_TEST_TMPDIR/.upstream"
   git -C "$upstream" init -q --bare -b main
   git -C "$MAIN_REPO" remote add origin "$upstream"
   git -C "$MAIN_REPO" push -q origin main
@@ -294,8 +298,6 @@ _setup_stale_local_base() {
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
   assert_equal "$wt_head" "$local_head"
-
-  rm -rf "$upstream"
 }
 
 @test "stale local base + --from override: --from wins, no auto-refresh" {
@@ -316,13 +318,12 @@ _setup_stale_local_base() {
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/stacked" rev-parse HEAD)
   assert_equal "$wt_head" "$feat_head"
-
-  rm -rf "$UPSTREAM_DIR"
 }
 
 @test "diverged local + remote: behavior unchanged (no warning, forks from local HEAD)" {
   local upstream sibling
   upstream=$(mktemp -d)
+  echo "$upstream" > "$BATS_TEST_TMPDIR/.upstream"
   git -C "$upstream" init -q --bare -b main
   git -C "$MAIN_REPO" remote add origin "$upstream"
   git -C "$MAIN_REPO" push -q origin main
@@ -351,8 +352,6 @@ _setup_stale_local_base() {
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
   assert_equal "$wt_head" "$local_head"
-
-  rm -rf "$upstream"
 }
 
 @test "no remote configured: auto-refresh is a silent no-op" {

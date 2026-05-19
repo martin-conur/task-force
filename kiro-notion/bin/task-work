@@ -169,6 +169,24 @@ build_kiro_cmd() {
 # Worktree already exists? Spin up a parallel session with a hash suffix
 # so multiple agents can iterate on the same task at the same time.
 # region:worktree-creation-pre-info
+# Auto-refresh: if local <base> is strictly behind origin/<base>, fork from
+# origin/<base> instead of the stale local tip. Skipped when --from was given
+# (that flag is the explicit user override). Local-ahead and diverged cases
+# are left alone so unpushed work isn't silently bypassed.
+if [[ -z "$FROM_REF_OVERRIDE" ]]; then
+  git fetch origin "$BASE_BRANCH" --quiet 2>/dev/null || true
+  if git rev-parse --verify --quiet "$BASE_BRANCH" >/dev/null 2>&1 \
+     && git rev-parse --verify --quiet "origin/$BASE_BRANCH" >/dev/null 2>&1; then
+    LOCAL_SHA=$(git rev-parse "$BASE_BRANCH")
+    REMOTE_SHA=$(git rev-parse "origin/$BASE_BRANCH")
+    if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]] \
+       && git merge-base --is-ancestor "$LOCAL_SHA" "$REMOTE_SHA" 2>/dev/null; then
+      echo "⚠ Local '$BASE_BRANCH' is behind 'origin/$BASE_BRANCH'. Forking from origin/$BASE_BRANCH."
+      FROM_REF="origin/$BASE_BRANCH"
+    fi
+  fi
+fi
+
 if [[ -d "$WORKTREE_DIR" ]]; then
   HASH=$(LC_ALL=C head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 5)
   SLUG="${SLUG}-${HASH}"

@@ -209,6 +209,166 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Auto-refresh: detect a stale local base and fork from origin/<base>
+# ---------------------------------------------------------------------------
+
+# Wire up $MAIN_REPO to a bare upstream and advance the upstream's main by
+# one commit, leaving local main behind. Prints the upstream's main SHA on
+# stdout so callers can assert against it.
+_setup_stale_local_base() {
+  local upstream
+  upstream=$(mktemp -d)
+  UPSTREAM_DIR="$upstream"  # export so the test can rm -rf it later
+  git -C "$upstream" init -q --bare -b main
+  git -C "$MAIN_REPO" remote add origin "$upstream"
+  git -C "$MAIN_REPO" push -q origin main
+  # Advance upstream main via a sibling clone (no `git pull` in $MAIN_REPO).
+  local sibling
+  sibling=$(mktemp -d)
+  git -C "$sibling" clone -q "$upstream" .
+  git -C "$sibling" config user.email "s@s.local"
+  git -C "$sibling" config user.name "S"
+  echo "remote advance" > "$sibling/remote.txt"
+  git -C "$sibling" add remote.txt
+  git -C "$sibling" commit -q -m "advance remote main"
+  git -C "$sibling" push -q origin main
+  local remote_head
+  remote_head=$(git -C "$sibling" rev-parse HEAD)
+  rm -rf "$sibling"
+  echo "$remote_head"
+}
+
+@test "stale local base: warns and forks from origin/<base>" {
+  local remote_head
+  remote_head=$(_setup_stale_local_base)
+  local local_head
+  local_head=$(git -C "$MAIN_REPO" rev-parse main)
+  [[ "$remote_head" != "$local_head" ]]
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  assert_output --partial "Local 'main' is behind 'origin/main'"
+  assert_output --partial "Forking from origin/main"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$remote_head"
+
+  rm -rf "$UPSTREAM_DIR"
+}
+
+@test "local base ahead of remote: behavior unchanged (no warning, forks from HEAD)" {
+  local upstream
+  upstream=$(mktemp -d)
+  git -C "$upstream" init -q --bare -b main
+  git -C "$MAIN_REPO" remote add origin "$upstream"
+  git -C "$MAIN_REPO" push -q origin main
+  # Local main moves ahead; remote stays put.
+  echo "local ahead" > "$MAIN_REPO/local.txt"
+  git -C "$MAIN_REPO" add local.txt
+  git -C "$MAIN_REPO" commit -q -m "local-only commit"
+  local local_head
+  local_head=$(git -C "$MAIN_REPO" rev-parse main)
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  refute_output --partial "is behind"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$local_head"
+
+  rm -rf "$upstream"
+}
+
+@test "local base matches remote: behavior unchanged (no warning)" {
+  local upstream
+  upstream=$(mktemp -d)
+  git -C "$upstream" init -q --bare -b main
+  git -C "$MAIN_REPO" remote add origin "$upstream"
+  git -C "$MAIN_REPO" push -q origin main
+  local local_head
+  local_head=$(git -C "$MAIN_REPO" rev-parse main)
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  refute_output --partial "is behind"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$local_head"
+
+  rm -rf "$upstream"
+}
+
+@test "stale local base + --from override: --from wins, no auto-refresh" {
+  local remote_head
+  remote_head=$(_setup_stale_local_base)
+  # Create a local feature branch to fork from.
+  git -C "$MAIN_REPO" checkout -q -b feature-w
+  echo "w" > "$MAIN_REPO/w.txt"
+  git -C "$MAIN_REPO" add w.txt
+  git -C "$MAIN_REPO" commit -q -m "w"
+  local feat_head
+  feat_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
+  git -C "$MAIN_REPO" checkout -q main
+
+  run "$CLAUDE_GH_TASK_WORK" --from feature-w stacked
+  assert_success
+  refute_output --partial "is behind"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/stacked" rev-parse HEAD)
+  assert_equal "$wt_head" "$feat_head"
+
+  rm -rf "$UPSTREAM_DIR"
+}
+
+@test "diverged local + remote: behavior unchanged (no warning, forks from local HEAD)" {
+  local upstream sibling
+  upstream=$(mktemp -d)
+  git -C "$upstream" init -q --bare -b main
+  git -C "$MAIN_REPO" remote add origin "$upstream"
+  git -C "$MAIN_REPO" push -q origin main
+
+  # Local main advances with its own commit.
+  echo "local diverge" > "$MAIN_REPO/local.txt"
+  git -C "$MAIN_REPO" add local.txt
+  git -C "$MAIN_REPO" commit -q -m "local-only"
+  local local_head
+  local_head=$(git -C "$MAIN_REPO" rev-parse main)
+
+  # Remote main advances with a DIFFERENT commit via a sibling clone — true divergence.
+  sibling=$(mktemp -d)
+  git -C "$sibling" clone -q "$upstream" .
+  git -C "$sibling" config user.email "s@s.local"
+  git -C "$sibling" config user.name "S"
+  echo "remote diverge" > "$sibling/remote.txt"
+  git -C "$sibling" add remote.txt
+  git -C "$sibling" commit -q -m "remote-only"
+  git -C "$sibling" push -q origin main
+  rm -rf "$sibling"
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  refute_output --partial "is behind"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$local_head"
+
+  rm -rf "$upstream"
+}
+
+@test "no remote configured: auto-refresh is a silent no-op" {
+  # No origin set on $MAIN_REPO at all — task-work should just work as before.
+  local local_head
+  local_head=$(git -C "$MAIN_REPO" rev-parse main)
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  refute_output --partial "is behind"
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$local_head"
+}
+
+# ---------------------------------------------------------------------------
 # .info file
 # ---------------------------------------------------------------------------
 

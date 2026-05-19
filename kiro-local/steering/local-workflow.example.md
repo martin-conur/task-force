@@ -70,18 +70,24 @@ Use the task title as prefix: `<Task title>: <short description>`
 
 - `-m, --model MODEL` — model to pass to `kiro-cli`
 - `-a, --trust-all` — pass `--trust-all-tools` to `kiro-cli`
-- `-b, --base BRANCH` — base branch for the PR (default: current branch)
+- `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
+- `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
 - `--no-launch` — open the worktree tab but do NOT start `kiro-cli`
+
+If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
 Examples:
 ```bash
 task-work tasks/001-add-login-flow.md
 task-work tasks/042-refactor-auth.md --base develop
+task-work tasks/050-stacked-feature.md --from task/042-refactor-auth
 task-work tasks/007-spike-idea.md --no-launch
 ```
 
-`task-done` — from within worktree: show diff, print/detect PR, cleanup
-`task-done --remove-worktree` — cleanup only (use after worker has already created the PR)
+`task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup
+
+- `--force` — skip all confirmation prompts
+- `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
 `.git/task-force/state.json`. Idempotent; safe to run anytime.

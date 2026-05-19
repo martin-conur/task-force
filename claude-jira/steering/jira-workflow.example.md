@@ -43,9 +43,27 @@ Reference the Jira key as a prefix: `{KEY}-123: <short description>`
 
 ### Shell Commands
 
-- `task-work <JIRA-KEY-or-url-or-slug>` — create worktree + zellij tab + worker session
-- `task-done` — from within a worktree: show diff, print PR command, cleanup
-- `task-done --remove-worktree` — cleanup only (use after worker has already created the PR)
+`task-work <JIRA-KEY-or-url-or-slug> [options]` — create worktree + zellij tab + worker session
+
+- `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
+- `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
+- `-p, --plan` — launch the worker in Claude plan mode (runs `/planner`); mutually exclusive with `--auto`
+- `--auto` — launch the worker in Claude auto permission mode (runs `/worker`); mutually exclusive with `--plan`
+
+If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
+
+Examples:
+```bash
+task-work {KEY}-42
+task-work https://{SITE}.atlassian.net/browse/{KEY}-42
+task-work refactor-auth --plan
+task-work {KEY}-99 --from task/{KEY}-46 --base main --auto   # stack on an in-flight branch
+```
+
+`task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup
+
+- `--force` — skip all confirmation prompts
+- `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
 ### Atlassian MCP
 

@@ -350,3 +350,73 @@ teardown() {
   run git -C "$MAIN_REPO" branch --list "task/$SLUG"
   assert_output --partial "task/$SLUG"
 }
+
+# ---------------------------------------------------------------------------
+# Submodule cleanup (issue #35)
+# Without the deinit step, `git worktree remove` refuses with
+# "fatal: working trees containing submodules cannot be moved or removed".
+# ---------------------------------------------------------------------------
+
+# Initialize a real submodule inside the current worktree.
+# Creates a separate source repo and adds it as a submodule named "lib".
+add_submodule_to_worktree() {
+  local worktree="$1"
+  local submodule_src
+  submodule_src=$(mktemp -d)
+  git -C "$submodule_src" init -q -b main
+  git -C "$submodule_src" config user.email "test@test.local"
+  git -C "$submodule_src" config user.name "Test"
+  touch "$submodule_src/sub.txt"
+  git -C "$submodule_src" add sub.txt
+  git -C "$submodule_src" commit -q -m "init submodule"
+
+  # protocol.file.allow=always is required by modern git for local-path submodules.
+  git -C "$worktree" -c protocol.file.allow=always submodule add -q "$submodule_src" lib
+  git -C "$worktree" commit -q -m "add submodule"
+  # Stash for cleanup
+  echo "$submodule_src" > "$BATS_TEST_TMPDIR/.submodule_src"
+}
+
+teardown_submodule_src() {
+  local src
+  if [[ -f "$BATS_TEST_TMPDIR/.submodule_src" ]]; then
+    src=$(cat "$BATS_TEST_TMPDIR/.submodule_src")
+    [[ -d "$src" ]] && rm -rf "$src"
+  fi
+}
+
+@test "kiro: removes worktree containing initialized submodules without warning" {
+  add_submodule_to_worktree "$WORKTREE_BASE/$SLUG"
+
+  run_task_done "$KIRO_TASK_DONE" --force
+  assert_success
+  refute_output --partial "could not remove worktree cleanly"
+  refute_output --partial "removal failed"
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+
+  teardown_submodule_src
+}
+
+@test "jira: removes worktree containing initialized submodules without warning" {
+  add_submodule_to_worktree "$WORKTREE_BASE/$SLUG"
+
+  run_task_done "$JIRA_TASK_DONE" --force
+  assert_success
+  refute_output --partial "could not remove worktree cleanly"
+  refute_output --partial "removal failed"
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+
+  teardown_submodule_src
+}
+
+@test "claude-notion: removes worktree containing initialized submodules without warning" {
+  add_submodule_to_worktree "$WORKTREE_BASE/$SLUG"
+
+  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  assert_success
+  refute_output --partial "could not remove worktree cleanly"
+  refute_output --partial "removal failed"
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+
+  teardown_submodule_src
+}

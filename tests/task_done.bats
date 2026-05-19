@@ -27,6 +27,11 @@ setup() {
 
 teardown() {
   teardown_all
+  if [[ -f "$BATS_TEST_TMPDIR/.submodule_src" ]]; then
+    local src
+    src=$(cat "$BATS_TEST_TMPDIR/.submodule_src")
+    [[ -d "$src" ]] && rm -rf "$src"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -373,16 +378,8 @@ add_submodule_to_worktree() {
   # protocol.file.allow=always is required by modern git for local-path submodules.
   git -C "$worktree" -c protocol.file.allow=always submodule add -q "$submodule_src" lib
   git -C "$worktree" commit -q -m "add submodule"
-  # Stash for cleanup
+  # Stash for cleanup; teardown() reads this marker.
   echo "$submodule_src" > "$BATS_TEST_TMPDIR/.submodule_src"
-}
-
-teardown_submodule_src() {
-  local src
-  if [[ -f "$BATS_TEST_TMPDIR/.submodule_src" ]]; then
-    src=$(cat "$BATS_TEST_TMPDIR/.submodule_src")
-    [[ -d "$src" ]] && rm -rf "$src"
-  fi
 }
 
 @test "kiro: removes worktree containing initialized submodules without warning" {
@@ -393,8 +390,6 @@ teardown_submodule_src() {
   refute_output --partial "could not remove worktree cleanly"
   refute_output --partial "removal failed"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-
-  teardown_submodule_src
 }
 
 @test "jira: removes worktree containing initialized submodules without warning" {
@@ -405,8 +400,6 @@ teardown_submodule_src() {
   refute_output --partial "could not remove worktree cleanly"
   refute_output --partial "removal failed"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-
-  teardown_submodule_src
 }
 
 @test "claude-notion: removes worktree containing initialized submodules without warning" {
@@ -417,6 +410,4 @@ teardown_submodule_src() {
   refute_output --partial "could not remove worktree cleanly"
   refute_output --partial "removal failed"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-
-  teardown_submodule_src
 }

@@ -72,18 +72,26 @@ Use the task title as prefix: `<Task title>: <short description>`
 
 `task-work tasks/NNN-slug.md [options]` — create worktree + zellij tab + worker session
 
-- `-b, --base BRANCH` — base branch for the PR (default: current branch)
+- `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
+- `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
+- `-p, --plan` — launch the worker in Claude plan mode (runs `/planner`); mutually exclusive with `--auto`
+- `--auto` — launch the worker in Claude auto permission mode (runs `/worker`); mutually exclusive with `--plan`
 - `--no-launch` — open the worktree tab but do NOT start Claude
+
+If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
 Examples:
 ```bash
 task-work tasks/001-add-login-flow.md
-task-work tasks/042-refactor-auth.md --base develop
+task-work tasks/042-refactor-auth.md --base develop --plan
+task-work tasks/050-stacked-feature.md --from task/042-refactor-auth --auto
 task-work tasks/007-spike-idea.md --no-launch
 ```
 
-`task-done` — from within worktree: show diff, print/detect PR, cleanup
-`task-done --remove-worktree` — cleanup only (use after worker has already created the PR)
+`task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup
+
+- `--force` — skip all confirmation prompts
+- `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
 `.git/task-force/state.json`. Idempotent; safe to run anytime.

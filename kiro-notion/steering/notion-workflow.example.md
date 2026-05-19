@@ -41,16 +41,24 @@ Use the task name as prefix: `<Task name>: <description>`
 ### Shell Commands
 
 `task-work <slug> [notion-url] [options]` — create worktree + zellij tab + worker agent
+
 - `-m, --model MODEL` — pick a specific kiro model (e.g. `claude-opus-4.6`, `claude-sonnet-4.6`). Falls back to `$TASK_WORK_MODEL`, else kiro's default (`auto`).
 - `-a, --trust-all` — pass `--trust-all-tools` so the worker runs commands without per-tool confirmation. Defaults to `$TASK_WORK_TRUST_ALL=1` if set.
+- `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
+- `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
 - `--no-launch` — open the worktree's tab but do NOT start kiro (lets you type the command yourself).
+
+If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
 Examples:
 ```bash
 task-work add-store-filtering https://www.notion.so/My-Task-abc123def456
 task-work refactor-auth -m claude-opus-4.6 --trust-all
+task-work feature-x --from task/in-flight --base main       # stack on an in-flight branch
 task-work spike-idea --no-launch
 ```
 
-`task-done` — from within worktree: show diff, print/detect PR, cleanup
-`task-done --remove-worktree` — cleanup only (use after worker has already created the PR)
+`task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup
+
+- `--force` — skip all confirmation prompts
+- `--remove-worktree` — cleanup only (use after worker has already created the PR)

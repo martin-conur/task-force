@@ -96,6 +96,119 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# --from: fork point override
+# ---------------------------------------------------------------------------
+
+@test "no --from: regression — forks from current HEAD (default behavior)" {
+  # Advance main by one commit, then ensure the new worktree's HEAD matches main's HEAD.
+  echo "advance" > "$MAIN_REPO/advance.txt"
+  git -C "$MAIN_REPO" add advance.txt
+  git -C "$MAIN_REPO" commit -q -m "advance main"
+  local main_head
+  main_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
+
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$main_head"
+}
+
+@test "--from <local-branch>: forks new branch from that branch's tip" {
+  # Create a feature branch one commit ahead of main, then check out main again.
+  git -C "$MAIN_REPO" checkout -q -b feature-x
+  echo "feature work" > "$MAIN_REPO/feature.txt"
+  git -C "$MAIN_REPO" add feature.txt
+  git -C "$MAIN_REPO" commit -q -m "feature commit"
+  local feature_head
+  feature_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
+  git -C "$MAIN_REPO" checkout -q main
+
+  run "$CLAUDE_GH_TASK_WORK" --from feature-x stacked-feature
+  assert_success
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/stacked-feature" rev-parse HEAD)
+  assert_equal "$wt_head" "$feature_head"
+}
+
+@test "--from <local-branch>: --base is independent from --from" {
+  git -C "$MAIN_REPO" checkout -q -b feature-y
+  echo "feature y" > "$MAIN_REPO/y.txt"
+  git -C "$MAIN_REPO" add y.txt
+  git -C "$MAIN_REPO" commit -q -m "y"
+  git -C "$MAIN_REPO" checkout -q main
+
+  run "$CLAUDE_GH_TASK_WORK" --from feature-y --base main stacked
+  assert_success
+  source "$WORKTREE_BASE/.stacked.info"
+  assert_equal "$BASE_BRANCH" "main"
+  # And the worktree HEAD is feature-y's tip, not main's
+  local wt_head feat_head
+  wt_head=$(git -C "$WORKTREE_BASE/stacked" rev-parse HEAD)
+  feat_head=$(git -C "$MAIN_REPO" rev-parse feature-y)
+  assert_equal "$wt_head" "$feat_head"
+}
+
+@test "--from <remote-ref>: forks from a remote-only branch" {
+  # Set up a second repo to act as a remote with a branch not present locally.
+  local upstream
+  upstream=$(mktemp -d)
+  git -C "$upstream" init -q -b main
+  git -C "$upstream" config user.email "u@u.local"
+  git -C "$upstream" config user.name "U"
+  cp "$MAIN_REPO/README.md" "$upstream/README.md"
+  git -C "$upstream" add README.md
+  git -C "$upstream" commit -q -m "init upstream"
+  git -C "$upstream" checkout -q -b upstream-feature
+  echo "upstream feature" > "$upstream/u.txt"
+  git -C "$upstream" add u.txt
+  git -C "$upstream" commit -q -m "upstream feature"
+  local upstream_feat_head
+  upstream_feat_head=$(git -C "$upstream" rev-parse HEAD)
+
+  git -C "$MAIN_REPO" remote add origin "$upstream"
+  git -C "$MAIN_REPO" fetch -q origin
+
+  run "$CLAUDE_GH_TASK_WORK" --from origin/upstream-feature spike
+  assert_success
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/spike" rev-parse HEAD)
+  assert_equal "$wt_head" "$upstream_feat_head"
+
+  rm -rf "$upstream"
+}
+
+@test "--from <unknown-ref>: errors out" {
+  run "$CLAUDE_GH_TASK_WORK" --from no-such-ref my-feature
+  assert_failure
+  assert_output --partial "does not resolve to a commit"
+  # No worktree should have been created.
+  assert [ ! -d "$WORKTREE_BASE/my-feature" ]
+}
+
+@test "--from missing value: errors out" {
+  run "$CLAUDE_GH_TASK_WORK" --from
+  assert_failure
+  assert_output --partial "--from requires a value"
+}
+
+@test "-f alias works the same as --from" {
+  git -C "$MAIN_REPO" checkout -q -b feature-z
+  echo "z" > "$MAIN_REPO/z.txt"
+  git -C "$MAIN_REPO" add z.txt
+  git -C "$MAIN_REPO" commit -q -m "z"
+  local feat_head
+  feat_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
+  git -C "$MAIN_REPO" checkout -q main
+
+  run "$CLAUDE_GH_TASK_WORK" -f feature-z forked
+  assert_success
+  local wt_head
+  wt_head=$(git -C "$WORKTREE_BASE/forked" rev-parse HEAD)
+  assert_equal "$wt_head" "$feat_head"
+}
+
+# ---------------------------------------------------------------------------
 # .info file
 # ---------------------------------------------------------------------------
 

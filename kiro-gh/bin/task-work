@@ -26,7 +26,12 @@ Options:
   -a, --trust-all     Pass --trust-all-tools to kiro-cli so the worker can run
                       commands without per-tool confirmation. Defaults to
                       $TASK_WORK_TRUST_ALL=1 if set.
-  -b, --base BRANCH   Base branch for the PR (default: current branch at call time).
+  -b, --base BRANCH   Branch the PR will target (default: current branch at call time).
+  -f, --from REF      Git ref to fork the new worktree's branch from. Defaults
+                      to current HEAD. Use this to stack a PR on top of an
+                      in-flight branch, or to spike off origin/main without
+                      checking it out first. Accepts any ref `git` accepts
+                      (branches, tags, SHAs, origin/foo).
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start kiro-cli. Use this when you want to
                       pick the command/model interactively.
@@ -42,6 +47,8 @@ Examples:
   task-work refactor-auth -m claude-opus-4.6 --trust-all
   task-work spike-idea --no-launch
   TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing https://github.com/owner/repo/issues/5
+  # Stack a follow-up PR on top of an in-flight branch:
+  task-work issue-99 <url> --from task/issue-46 --base main
 EOF
   exit "${1:-1}"
 }
@@ -52,6 +59,7 @@ MODEL="${TASK_WORK_MODEL:-}"
 TRUST_ALL=""
 NO_LAUNCH=""
 BASE_BRANCH_OVERRIDE=""
+FROM_REF_OVERRIDE=""
 
 # Treat TASK_WORK_TRUST_ALL=1 / true / yes as enabled
 case "${TASK_WORK_TRUST_ALL:-}" in
@@ -68,6 +76,9 @@ while [[ $# -gt 0 ]]; do
     -b|--base)
       [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
       BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
+    -f|--from)
+      [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
+      FROM_REF_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
@@ -128,6 +139,12 @@ WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
 # Capture base branch now, before the worktree is created
 BASE_BRANCH="${BASE_BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
+FROM_REF="${FROM_REF_OVERRIDE:-HEAD}"
+
+if ! git rev-parse --verify --quiet "${FROM_REF}^{commit}" >/dev/null 2>&1; then
+  echo "Error: --from ref '$FROM_REF' does not resolve to a commit" >&2
+  exit 1
+fi
 
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
@@ -157,7 +174,7 @@ fi
 
 mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
-aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$BASE_BRANCH"
+aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$BASE_BRANCH" "$FROM_REF"
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"

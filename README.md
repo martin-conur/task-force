@@ -306,7 +306,8 @@ Spawn workers with `task-work tasks/NNN-slug.md`. Same Kiro shortcuts as `kiro-n
 
 Common to every combo:
 
-- `-b, --base BRANCH` — base branch for the eventual PR (default: branch you're on when `task-work` runs)
+- `-b, --base BRANCH` — branch the PR will target (default: branch you're on when `task-work` runs)
+- `-f, --from REF` — git ref to fork the new worktree's branch from (default: current HEAD). Accepts any ref `git` accepts (branches, tags, SHAs, `origin/foo`). Use this to stack a PR on an in-flight branch (`--from task/issue-46 --base main`) or to spike off `origin/main` without checking it out first.
 - `--no-launch` — create the worktree and open the tab at that directory, but don't auto-start the agent (you pick the model/command yourself)
 - `--impl <name>` — force a specific combo, bypassing auto-detection
 

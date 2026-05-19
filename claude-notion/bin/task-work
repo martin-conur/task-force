@@ -21,7 +21,12 @@ exists, a 5-char hash is appended so multiple agents can work the same
 task in parallel.
 
 Options:
-  -b, --base BRANCH   Base branch for the PR (default: current branch at call time).
+  -b, --base BRANCH   Branch the PR will target (default: current branch at call time).
+  -f, --from REF      Git ref to fork the new worktree's branch from. Defaults
+                      to current HEAD. Use this to stack a PR on top of an
+                      in-flight branch, or to spike off origin/main without
+                      checking it out first. Accepts any ref `git` accepts
+                      (branches, tags, SHAs, origin/foo).
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start claude. Use this when you want to
                       pick the command/model interactively.
@@ -38,6 +43,8 @@ Examples:
   task-work refactor-auth
   task-work spike-idea --no-launch
   task-work spike-idea --plan
+  # Stack a follow-up on top of an in-flight branch:
+  task-work followup <notion-url> --from task/refactor-auth --base main
 EOF
   exit "${1:-1}"
 }
@@ -46,6 +53,7 @@ EOF
 POSITIONAL=()
 NO_LAUNCH=""
 BASE_BRANCH_OVERRIDE=""
+FROM_REF_OVERRIDE=""
 AUTO_MODE=""
 PLAN_MODE=""
 
@@ -55,6 +63,9 @@ while [[ $# -gt 0 ]]; do
     -b|--base)
       [[ $# -ge 2 ]] || { echo "Error: --base requires a value" >&2; exit 1; }
       BASE_BRANCH_OVERRIDE="$2"; shift 2 ;;
+    -f|--from)
+      [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
+      FROM_REF_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --auto) AUTO_MODE="1"; shift ;;
     --plan|-p) PLAN_MODE="1"; shift ;;
@@ -122,6 +133,12 @@ WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
 # Capture base branch now, before the worktree is created
 BASE_BRANCH="${BASE_BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
+FROM_REF="${FROM_REF_OVERRIDE:-HEAD}"
+
+if ! git rev-parse --verify --quiet "${FROM_REF}^{commit}" >/dev/null 2>&1; then
+  echo "Error: --from ref '$FROM_REF' does not resolve to a commit" >&2
+  exit 1
+fi
 
 BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
@@ -159,7 +176,7 @@ fi
 
 mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
-aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$BASE_BRANCH"
+aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"

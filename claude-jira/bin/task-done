@@ -97,8 +97,12 @@ fi
 cd "$MAIN_WORKTREE"
 
 echo "Removing worktree..."
-git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || {
-  echo "Warning: could not remove worktree cleanly. Trying prune..."
+# Deinit any submodules first — git refuses to remove a worktree containing them.
+if [[ -f "$WORKTREE_DIR/.gitmodules" ]]; then
+  git -C "$WORKTREE_DIR" submodule deinit --all --force >/dev/null 2>&1 || true
+fi
+git worktree remove "$WORKTREE_DIR" --force || {
+  echo "Warning: removal failed, falling back to rm + prune"
   rm -rf "$WORKTREE_DIR"
   git worktree prune
 }

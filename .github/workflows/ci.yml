@@ -27,31 +27,7 @@ jobs:
       - name: Run shellcheck
         run: |
           shellcheck -x \
-            install.sh \
-            task-init \
-            run_tests.sh \
-            bin/task-work \
-            bin/task-done \
-            lib/detect-impl.sh \
-            lib/zellij-tab.sh \
-            tests/helpers/common.bash \
-            claude-jira/install.sh \
-            claude-jira/bin/task-work \
-            claude-jira/bin/task-done \
-            claude-jira/bin/task-init \
-            kiro-notion/install.sh \
-            kiro-notion/bin/task-work \
-            kiro-notion/bin/task-done \
-            kiro-notion/bin/task-init \
-            claude-notion/install.sh \
-            claude-notion/bin/task-work \
-            claude-notion/bin/task-done \
-            claude-notion/bin/task-init \
-            claude-gh/install.sh \
-            claude-gh/bin/task-work \
-            claude-gh/bin/task-done \
-            claude-gh/bin/task-init \
-            kiro-gh/install.sh \
-            kiro-gh/bin/task-work \
-            kiro-gh/bin/task-done \
-            kiro-gh/bin/task-init
+            install.sh task-init run_tests.sh \
+            bin/* lib/*.sh \
+            tests/helpers/*.bash \
+            */install.sh */bin/*

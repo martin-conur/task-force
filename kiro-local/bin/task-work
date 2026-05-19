@@ -179,7 +179,9 @@ if command -v task-board >/dev/null 2>&1; then
   task-board --repo "$REPO_ROOT" >/dev/null || true
 else
   _BOARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task-board"
-  [[ -x "$_BOARD_SCRIPT" ]] && "$_BOARD_SCRIPT" --repo "$REPO_ROOT" >/dev/null || true
+  if [[ -x "$_BOARD_SCRIPT" ]]; then
+    "$_BOARD_SCRIPT" --repo "$REPO_ROOT" >/dev/null || true
+  fi
 fi
 
 echo "Opening zellij tab '$SLUG'..."

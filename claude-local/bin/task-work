@@ -164,7 +164,7 @@ fi
 
 mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
-aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$BASE_BRANCH" "$FROM_REF"
+aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"

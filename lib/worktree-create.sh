@@ -2,10 +2,9 @@
 # Shared worktree creation. Sourced by every <impl>/bin/task-work.
 #
 # Exports:
-#   aw_create_worktree <worktree_dir> <branch> <base_branch> [from_ref]
+#   aw_create_worktree <worktree_dir> <branch> [from_ref]
 #
-# Forks the new branch from <from_ref> (defaults to HEAD). <base_branch> is
-# only used as the label in the divergence warning emitted below.
+# Forks the new branch from <from_ref> (defaults to HEAD).
 #
 # Tries to create the worktree on a new branch (-b). If that fails because
 # the branch already exists, reuses it — but emits a loud warning to stderr
@@ -17,8 +16,7 @@
 aw_create_worktree() {
   local worktree_dir="$1"
   local branch="$2"
-  local base_branch="$3"
-  local from_ref="${4:-HEAD}"
+  local from_ref="${3:-HEAD}"
 
   if git worktree add "$worktree_dir" -b "$branch" "$from_ref" 2>/dev/null; then
     return 0

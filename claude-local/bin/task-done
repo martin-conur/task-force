@@ -119,7 +119,9 @@ if command -v task-board >/dev/null 2>&1; then
   task-board --repo "$MAIN_WORKTREE" >/dev/null || true
 else
   _BOARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task-board"
-  [[ -x "$_BOARD_SCRIPT" ]] && "$_BOARD_SCRIPT" --repo "$MAIN_WORKTREE" >/dev/null || true
+  if [[ -x "$_BOARD_SCRIPT" ]]; then
+    "$_BOARD_SCRIPT" --repo "$MAIN_WORKTREE" >/dev/null || true
+  fi
 fi
 
 if git branch -d "$BRANCH" 2>/dev/null; then

@@ -398,3 +398,9 @@ Add script path variables to `tests/helpers/common.bash`. The runner picks up ev
 - Quote every variable
 - No package managers, no compiled code — pure shell
 - 2-space indentation
+
+---
+
+## License
+
+[MIT](LICENSE) © Martin Conur

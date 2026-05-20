@@ -135,6 +135,32 @@ teardown() {
   assert_output --partial "not in inbox"
 }
 
+# ----- role sanitization (path-traversal defense) --------------------------
+
+@test "register rejects a role containing '..' (path traversal)" {
+  run "$RADIO" register --role "../escape" --tab pm --agent claude
+  assert_failure
+  assert_output --partial "invalid role"
+}
+
+@test "register rejects a role containing '/' (path separator)" {
+  run "$RADIO" register --role "pm/sub" --tab pm --agent claude
+  assert_failure
+  assert_output --partial "invalid role"
+}
+
+@test "send rejects a recipient role containing '..'" {
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to "../escape" --intent ping --body x
+  assert_failure
+  assert_output --partial "invalid role"
+}
+
+@test "self-identifying commands reject a malformed \$TASK_FORCE_ROLE" {
+  TASK_FORCE_ROLE="pm/../escape" run "$RADIO" check
+  assert_failure
+  assert_output --partial "invalid role"
+}
+
 # ----- orphans --------------------------------------------------------------
 
 @test "orphans lists sessions whose LAST_HEARTBEAT is older than 1 hour" {

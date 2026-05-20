@@ -112,3 +112,9 @@ still lives in `gh pr comment`s — `radio` only carries the routing ping.
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm`, registers via the `SessionStart` hook, and
 starts the PM agent in-place.
+
+If a worker tab dies unexpectedly (or Claude resumes a session without
+re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.
+Run `radio orphans` to list any session whose heartbeat is older than 1 hour —
+those entries are safe to delete (`rm ~/.task-force/radio/sessions/<role>.info`)
+or leave for the next legitimate `radio register` to overwrite.

@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: task-init [--owner OWNER] [--repo REPO] [--project N]
-                 [--workflow | --commands]
+                 [--workflow | --commands | --hooks]
                  [--force | --restore]
 
 Set up the current repo for the claude-gh workflow:
@@ -13,10 +13,12 @@ Set up the current repo for the claude-gh workflow:
     (auto-detected from git remote when possible; missing values prompted interactively)
   - Add @.claude/gh-workflow.md to CLAUDE.md so it auto-loads in every session
   - Install /pm, /planner, /worker slash commands into .claude/commands/
+  - Merge radio PM↔worker messaging hooks into .claude/settings.json
 
 Scope (which categories of files to touch):
   --workflow       Workflow doc only (and CLAUDE.md import)
   --commands       Slash commands only
+  --hooks          Radio hooks (settings.json) only
   (none)           All of the above (default)
 
 Overwrite policy when a target file already exists:
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --restore)  RESTORE=true; shift;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
+    --hooks)    SCOPE="hooks"; shift;;
     -h|--help)  usage;;
     *) echo "Unknown option: $1"; usage;;
   esac
@@ -138,7 +141,7 @@ _preserve_placeholders() {
 
 # Only do prompts / detect / placeholder preservation when we're actually going
 # to render the workflow.
-if [[ "$SCOPE" != "commands" ]]; then
+if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   _preserve_placeholders "$TARGET"
 
   if [[ "$OWNER_VIA_FLAG" == false ]] || [[ "$REPO_VIA_FLAG" == false ]]; then
@@ -210,7 +213,7 @@ if [[ "$SCOPE" != "commands" ]]; then
 fi
 
 # Project-level slash commands → <project>/.claude/commands/
-if [[ "$SCOPE" != "workflow" ]]; then
+if [[ "$SCOPE" != "workflow" && "$SCOPE" != "hooks" ]]; then
   COMMANDS_DIR="$REPO_ROOT/.claude/commands"
   COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
   mkdir -p "$COMMANDS_DIR"
@@ -224,9 +227,12 @@ fi
 # -------- radio hooks merge (jq-based, idempotent, non-destructive) ---------
 # Adds 3 hook entries to <repo>/.claude/settings.json so the worker / PM agent
 # self-registers with the radio mailbox on startup and signals busy/idle around
-# every user prompt. Pre-existing hooks (e.g. user's own Stop hook) are
-# preserved; entries are added only if no existing hook command starts with
-# "radio " (so re-running task-init is idempotent).
+# every user prompt. The jq merge is inherently idempotent (an entry is added
+# only if no existing hook command starts with "radio "), so we run it on every
+# in-scope invocation regardless of the overwrite policy — there is nothing
+# for --force / --restore / --prompt to disambiguate at the entry level.
+# Pre-existing user hooks (e.g. ./scripts/pre-tool-lint.sh on Stop) are
+# preserved.
 _radio_install_hooks() {
   local settings_file="$REPO_ROOT/.claude/settings.json"
   local loadout="claude-gh"
@@ -263,7 +269,9 @@ _radio_install_hooks() {
   echo "✓ Merged radio hooks into $settings_file"
 }
 
-_radio_install_hooks
+if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then
+  _radio_install_hooks
+fi
 
 echo ""
 echo "Done. Open .claude/gh-workflow.md to fill in any remaining {placeholders}."

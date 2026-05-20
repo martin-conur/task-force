@@ -40,7 +40,9 @@ _now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 _compact_now() { date -u +%Y%m%d-%H%M%S; }
 
 _rand_id() {
-  LC_ALL=C head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 6
+  # 32 bytes of /dev/urandom is plenty for 6 alphanumeric chars after `tr`
+  # filtering — the previous 256-byte read was wasteful, not wrong.
+  LC_ALL=C head -c 32 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 6
 }
 
 _require_role() {
@@ -48,6 +50,7 @@ _require_role() {
     echo "Error: \$TASK_FORCE_ROLE is not set (task-work / task-pm should set it)" >&2
     exit 2
   fi
+  _validate_role "$TASK_FORCE_ROLE" || exit 2
 }
 
 # Atomic write: stage into <file>.tmp.<rand> then rename. mv on POSIX is atomic
@@ -68,6 +71,20 @@ _session_field() {
   local line
   line=$(grep -E "^${key}=" "$file" | head -1) || return 1
   printf '%s' "${line#*=}"
+}
+
+# Reject role names that could let a caller escape $SESSIONS_DIR / $MAILBOX_DIR
+# via `..` or `/`. Today roles come from task-work / task-pm (`worker-<basename>-<slug>`
+# and `pm`), so the values are already safe — but `_session_file` / `_inbox_dir`
+# build paths by string concatenation, so we validate at the boundary
+# (`_require_role` for self-identifying commands; `cmd_send` for `--to`) before
+# any path is constructed.
+_validate_role() {
+  local role="$1"
+  case "$role" in
+    ""|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
+    *[!a-zA-Z0-9_-]*) echo "radio: invalid role: $role" >&2; return 1 ;;
+  esac
 }
 
 _session_file() {
@@ -114,6 +131,7 @@ cmd_register() {
   done
   [[ -n "$role"  ]] || { echo "register: --role required"  >&2; exit 2; }
   [[ -n "$agent" ]] || { echo "register: --agent required" >&2; exit 2; }
+  _validate_role "$role" || exit 2
 
   local f
   f=$(_session_file "$role")
@@ -152,6 +170,7 @@ cmd_send() {
   done
   [[ -n "$to"     ]] || { echo "send: --to required"     >&2; exit 2; }
   [[ -n "$intent" ]] || { echo "send: --intent required" >&2; exit 2; }
+  _validate_role "$to" || exit 2
 
   local from="${TASK_FORCE_ROLE:-unknown}"
   local id
@@ -206,6 +225,11 @@ cmd_send() {
   fi
   zellij action go-to-tab-name "$rtab" >/dev/null 2>&1 || {
     _log "send: go-to-tab-name $rtab failed — queued (id=$id)"; return 0; }
+  # Only ever write the literal string "radio check\n" — never the message body
+  # or any caller-supplied data. `zellij write-chars` injects directly into the
+  # recipient's TUI input buffer; writing anything else risks corrupting the
+  # agent's unsaved prompt or smuggling content into a TUI command. The
+  # recipient reads the actual message via `radio check` / `radio read`.
   zellij action write-chars "radio check"$'\n' >/dev/null 2>&1 || {
     _log "send: write-chars failed for $to — queued (id=$id)"; return 0; }
   _log "send: woke $to via tab=$rtab (id=$id)"

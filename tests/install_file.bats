@@ -184,6 +184,27 @@ k"
 # Default policy when INSTALL_POLICY is unset
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Atomic write (mktemp + mv): no temp-file leftovers
+# ---------------------------------------------------------------------------
+
+@test "force overwrite leaves no .XXXXXX temp files alongside dest" {
+  mkdir -p "$(dirname "$DEST")"
+  printf 'OLD\n' > "$DEST"
+  _run_install force "$SRC" "$DEST" "my-label"
+  assert_success
+  # Glob for any stray temp files in the dest directory.
+  run bash -c "shopt -s nullglob; printf '%s\n' '$(dirname "$DEST")'/dest.md.*"
+  assert_output ""
+}
+
+@test "missing dest write leaves no .XXXXXX temp files alongside dest" {
+  _run_install keep "$SRC" "$DEST" "my-label"
+  assert_success
+  run bash -c "shopt -s nullglob; printf '%s\n' '$(dirname "$DEST")'/dest.md.*"
+  assert_output ""
+}
+
 @test "unset policy defaults to 'keep'" {
   mkdir -p "$(dirname "$DEST")"
   printf 'OLD CONTENT\n' > "$DEST"

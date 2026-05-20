@@ -55,8 +55,16 @@ install_file() {
 _install_file_write() {
   local src="$1" dest="$2" label="$3"
   mkdir -p "$(dirname "$dest")"
-  rm -f "$dest"
-  cp "$src" "$dest"
+  # Atomic write via mktemp + mv: mv on the same filesystem is a POSIX rename,
+  # so the target either still points at the old file or at the new one — never
+  # missing if we get Ctrl+C'd between cp and rename.
+  local tmp
+  tmp=$(mktemp "$dest.XXXXXX")
+  if ! cp "$src" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$dest"
   echo "✓ Wrote $label ($dest)"
 }
 

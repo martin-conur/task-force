@@ -435,6 +435,40 @@ Add script path variables to `tests/helpers/common.bash`. The runner picks up ev
 
 ---
 
+## Maintaining task-force
+
+`main` is protected via the GitHub API (not a YAML file), so the config lives off-repo. The current rules:
+
+- Required status checks (all four must be green before merge): `ShellCheck`, `Bats tests (ubuntu-latest)`, `Bats tests (macos-latest)`, `Loadout drift check`
+- `strict=true` — PR branch must be up-to-date with `main`
+- `enforce_admins=true` — the maintainer can't bypass either
+- Force-pushes and branch deletion blocked
+
+Re-apply (or restore after an accidental clear):
+
+```bash
+gh api -X PUT repos/martin-conur/task-force/branches/main/protection --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "ShellCheck",
+      "Bats tests (ubuntu-latest)",
+      "Bats tests (macos-latest)",
+      "Loadout drift check"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+JSON
+```
+
+Inspect: `gh api repos/martin-conur/task-force/branches/main/protection | jq`.
+
+---
+
 ## License
 
 [MIT](LICENSE) © Martin Conur

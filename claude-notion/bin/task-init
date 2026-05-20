@@ -2,16 +2,30 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-init [--force] [--help-ids]"
-  echo ""
-  echo "Set up the current repo for the claude-notion workflow:"
-  echo "  - Create .claude/notion-workflow.md from the bundled template"
-  echo "  - Add @.claude/notion-workflow.md to CLAUDE.md so it auto-loads in every session"
-  echo "  - Install /pm, /planner, /worker slash commands into .claude/commands/"
-  echo ""
-  echo "Options:"
-  echo "  --force      Overwrite .claude/notion-workflow.md and project-level slash commands if present"
-  echo "  --help-ids   Print guide for finding Notion database IDs (no setup)"
+  cat <<'EOF'
+Usage: task-init [--workflow | --commands] [--force | --restore] [--help-ids]
+
+Set up the current repo for the claude-notion workflow:
+  - Create .claude/notion-workflow.md from the bundled template
+  - Add @.claude/notion-workflow.md to CLAUDE.md so it auto-loads in every session
+  - Install /pm, /planner, /worker slash commands into .claude/commands/
+
+Scope (which categories of files to touch):
+  --workflow       Workflow doc only (and CLAUDE.md import)
+  --commands       Slash commands only
+  (none)           All of the above (default)
+
+Overwrite policy when a target file already exists:
+  --force          Overwrite all targets (no prompt)
+  --restore        Only fill missing targets; never touch existing files
+  (TTY default)    Per-file prompt: [k]eep / [o]verwrite / [d]iff
+  (non-TTY)        Silently keep existing files (script-safe)
+
+--force and --restore are mutually exclusive.
+
+Other:
+  --help-ids       Print guide for finding Notion database IDs (no setup)
+EOF
   exit 1
 }
 
@@ -43,11 +57,16 @@ GUIDE
 }
 
 FORCE=false
+RESTORE=false
+SCOPE="all"
 HELP_IDS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --force) FORCE=true; shift ;;
+    --force)    FORCE=true; shift ;;
+    --restore)  RESTORE=true; shift ;;
+    --workflow) SCOPE="workflow"; shift ;;
+    --commands) SCOPE="commands"; shift ;;
     --help-ids) HELP_IDS=true; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
@@ -59,6 +78,21 @@ if [[ "$HELP_IDS" == true ]]; then
   exit 0
 fi
 
+if [[ "$FORCE" == true && "$RESTORE" == true ]]; then
+  echo "Error: --force and --restore are mutually exclusive" >&2
+  exit 2
+fi
+
+if [[ "$FORCE" == true ]]; then
+  POLICY="force"
+elif [[ "$RESTORE" == true ]]; then
+  POLICY="restore"
+elif [[ -t 0 ]]; then
+  POLICY="prompt"
+else
+  POLICY="keep"
+fi
+
 # Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -68,6 +102,9 @@ while [ -L "$src" ]; do
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
 TEMPLATE="$SCRIPT_DIR/../steering/notion-workflow.example.md"
+LIB_DIR="$SCRIPT_DIR/../../lib"
+# shellcheck source=lib/install-file.sh
+. "$LIB_DIR/install-file.sh"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -81,41 +118,34 @@ CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 
 mkdir -p "$REPO_ROOT/.claude"
 
-if [[ -f "$TARGET" && "$FORCE" != true ]]; then
-  echo "$TARGET already exists. Use --force to overwrite."
-  exit 1
+# The notion template has no flag-driven placeholders — its IDs are filled in
+# manually after init via the MCP. So we just install the raw template.
+if [[ "$SCOPE" != "commands" ]]; then
+  INSTALL_POLICY="$POLICY" install_file "$TEMPLATE" "$TARGET" "notion-workflow.md"
+
+  IMPORT_LINE="@.claude/notion-workflow.md"
+  if [[ -f "$CLAUDE_MD" ]]; then
+    if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
+      echo "✓ CLAUDE.md already references notion-workflow.md"
+    else
+      printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
+      echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
+    fi
+  else
+    printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
+    echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+  fi
 fi
 
-cp "$TEMPLATE" "$TARGET"
-echo "✓ Wrote $TARGET"
-
-IMPORT_LINE="@.claude/notion-workflow.md"
-if [[ -f "$CLAUDE_MD" ]]; then
-  if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
-    echo "✓ CLAUDE.md already references notion-workflow.md"
-  else
-    printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
-    echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
-  fi
-else
-  printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
-  echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+if [[ "$SCOPE" != "workflow" ]]; then
+  COMMANDS_DIR="$REPO_ROOT/.claude/commands"
+  COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
+  mkdir -p "$COMMANDS_DIR"
+  for cmd in "$COMMANDS_SRC"/*.md; do
+    cmd_name=$(basename "$cmd")
+    cmd_target="$COMMANDS_DIR/$cmd_name"
+    INSTALL_POLICY="$POLICY" install_file "$cmd" "$cmd_target" "/$(basename "$cmd_name" .md)"
+  done
 fi
-
-# Project-level slash commands → <project>/.claude/commands/
-COMMANDS_DIR="$REPO_ROOT/.claude/commands"
-COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
-mkdir -p "$COMMANDS_DIR"
-for cmd in "$COMMANDS_SRC"/*.md; do
-  cmd_name=$(basename "$cmd")
-  cmd_target="$COMMANDS_DIR/$cmd_name"
-  if [[ ( -e "$cmd_target" || -L "$cmd_target" ) && "$FORCE" != true ]]; then
-    echo "⚠ $cmd_target already exists — skipping (use --force to overwrite)"
-  else
-    rm -f "$cmd_target"
-    cp "$cmd" "$cmd_target"
-    echo "✓ Slash command: /$(basename "$cmd_name" .md)"
-  fi
-done
 
 print_ids_guide

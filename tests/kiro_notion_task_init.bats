@@ -65,23 +65,70 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# --force and overwrite guard
+# Overwrite policy: --force / --restore / default (TTY prompt / non-TTY keep)
 # ---------------------------------------------------------------------------
 
-@test "fails if .kiro/steering/notion-workflow.md already exists (no --force)" {
+@test "non-TTY default: existing workflow doc is kept silently (exit 0)" {
   run "$KIRO_TASK_INIT"
   assert_success
+  echo "USER EDIT" >> "$TARGET_DIR/.kiro/steering/notion-workflow.md"
   run "$KIRO_TASK_INIT"
-  assert_failure
-  assert_output --partial "already exists"
+  assert_success
+  assert_output --partial "kept"
+  run cat "$TARGET_DIR/.kiro/steering/notion-workflow.md"
+  assert_output --partial "USER EDIT"
 }
 
 @test "--force overwrites existing notion-workflow.md" {
   run "$KIRO_TASK_INIT"
   assert_success
+  echo "USER EDIT" >> "$TARGET_DIR/.kiro/steering/notion-workflow.md"
   run "$KIRO_TASK_INIT" --force
   assert_success
+  run cat "$TARGET_DIR/.kiro/steering/notion-workflow.md"
+  refute_output --partial "USER EDIT"
+}
+
+@test "--force + --restore is rejected" {
+  run "$KIRO_TASK_INIT" --force --restore
+  assert_failure
+  assert_output --partial "mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
+# --restore: fill missing only
+# ---------------------------------------------------------------------------
+
+@test "--restore restores a deleted agent without touching workflow" {
+  run "$KIRO_TASK_INIT"
+  assert_success
+  cp "$TARGET_DIR/.kiro/steering/notion-workflow.md" "$BATS_TEST_TMPDIR/workflow.before"
+  rm "$TARGET_DIR/.kiro/agents/pm.json"
+  run "$KIRO_TASK_INIT" --restore
+  assert_success
+  assert [ -f "$TARGET_DIR/.kiro/agents/pm.json" ]
+  run cmp -s "$BATS_TEST_TMPDIR/workflow.before" "$TARGET_DIR/.kiro/steering/notion-workflow.md"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# --workflow / --commands scope flags
+# ---------------------------------------------------------------------------
+
+@test "--commands installs agents without writing workflow doc" {
+  run "$KIRO_TASK_INIT" --commands
+  assert_success
+  assert [ ! -f "$TARGET_DIR/.kiro/steering/notion-workflow.md" ]
+  for agent in pm planner worker; do
+    assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
+  done
+}
+
+@test "--workflow installs workflow doc without writing agents" {
+  run "$KIRO_TASK_INIT" --workflow
+  assert_success
   assert [ -f "$TARGET_DIR/.kiro/steering/notion-workflow.md" ]
+  assert [ ! -d "$TARGET_DIR/.kiro/agents" ]
 }
 
 # ---------------------------------------------------------------------------

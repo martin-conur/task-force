@@ -94,15 +94,18 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# --force and overwrite guard
+# Overwrite policy: --force / --restore / default (TTY prompt / non-TTY keep)
 # ---------------------------------------------------------------------------
 
-@test "fails if .claude/jira-workflow.md already exists (no --force)" {
-  run "$JIRA_TASK_INIT"
+@test "non-TTY default: existing workflow doc is kept silently (exit 0)" {
+  run "$JIRA_TASK_INIT" --key OLD
   assert_success
-  run "$JIRA_TASK_INIT"
-  assert_failure
-  assert_output --partial "already exists"
+  run "$JIRA_TASK_INIT" --key IGNORED
+  assert_success
+  assert_output --partial "kept"
+  run cat "$TARGET_DIR/.claude/jira-workflow.md"
+  assert_output --partial "OLD-123"
+  refute_output --partial "IGNORED-123"
 }
 
 @test "--force overwrites existing jira-workflow.md" {
@@ -113,6 +116,66 @@ teardown() {
   run cat "$TARGET_DIR/.claude/jira-workflow.md"
   assert_output --partial "NEW-123"
   refute_output --partial "OLD-123"
+}
+
+@test "--force + --restore is rejected" {
+  run "$JIRA_TASK_INIT" --force --restore
+  assert_failure
+  assert_output --partial "mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
+# --restore: fill missing only
+# ---------------------------------------------------------------------------
+
+@test "--restore restores a deleted slash command without touching workflow" {
+  run "$JIRA_TASK_INIT" --site "https://acme.atlassian.net" --key ML --board "My Board"
+  assert_success
+  cp "$TARGET_DIR/.claude/jira-workflow.md" "$BATS_TEST_TMPDIR/workflow.before"
+  rm "$TARGET_DIR/.claude/commands/pm.md"
+  run "$JIRA_TASK_INIT" --restore
+  assert_success
+  assert [ -f "$TARGET_DIR/.claude/commands/pm.md" ]
+  run cmp -s "$BATS_TEST_TMPDIR/workflow.before" "$TARGET_DIR/.claude/jira-workflow.md"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# --workflow / --commands scope flags
+# ---------------------------------------------------------------------------
+
+@test "--commands installs slash commands without writing workflow doc" {
+  run "$JIRA_TASK_INIT" --commands
+  assert_success
+  assert [ ! -f "$TARGET_DIR/.claude/jira-workflow.md" ]
+  for cmd in pm planner worker; do
+    assert [ -f "$TARGET_DIR/.claude/commands/$cmd.md" ]
+  done
+}
+
+@test "--workflow installs workflow doc without writing slash commands" {
+  run "$JIRA_TASK_INIT" --workflow
+  assert_success
+  assert [ -f "$TARGET_DIR/.claude/jira-workflow.md" ]
+  assert [ ! -d "$TARGET_DIR/.claude/commands" ]
+}
+
+# ---------------------------------------------------------------------------
+# Placeholder preservation
+# ---------------------------------------------------------------------------
+
+@test "--force preserves filled-in {SITE}/{KEY}/{BOARD} when no flags passed" {
+  run "$JIRA_TASK_INIT" --site "https://acme.atlassian.net" --key ML --board "My Board"
+  assert_success
+  run "$JIRA_TASK_INIT" --force
+  assert_success
+  run cat "$TARGET_DIR/.claude/jira-workflow.md"
+  assert_output --partial "https://acme.atlassian.net"
+  assert_output --partial "ML-123"
+  assert_output --partial "My Board"
+  refute_output --partial "{SITE}"
+  refute_output --partial "{KEY}"
+  refute_output --partial "{BOARD}"
 }
 
 # ---------------------------------------------------------------------------

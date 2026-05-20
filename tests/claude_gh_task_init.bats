@@ -348,3 +348,57 @@ teardown() {
   assert_failure
   assert_output --partial "not in a git repo"
 }
+
+# ---------------------------------------------------------------------------
+# radio hooks: settings.json merge
+# ---------------------------------------------------------------------------
+
+@test "writes 3 radio hook entries into .claude/settings.json" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  assert [ -f "$TARGET_DIR/.claude/settings.json" ]
+  for event in SessionStart UserPromptSubmit Stop; do
+    run jq -r ".hooks.$event[0].hooks[0].command" "$TARGET_DIR/.claude/settings.json"
+    assert_output --partial "radio"
+  done
+}
+
+@test "SessionStart hook command embeds the loadout name" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.SessionStart[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "--loadout claude-gh"
+  assert_output --partial "--agent claude"
+}
+
+@test "preserves a pre-existing user Stop hook when merging radio hooks" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "./scripts/pre-tool-lint.sh"}]}
+    ]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  # The user's pre-existing hook must still be there.
+  run jq -r '.hooks.Stop | length' "$TARGET_DIR/.claude/settings.json"
+  assert_output "2"
+  run jq -r '.hooks.Stop[].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "./scripts/pre-tool-lint.sh"
+  assert_output --partial "radio ready"
+}
+
+@test "idempotent re-run does not duplicate radio hook entries" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run "$CLAUDE_GH_TASK_INIT" --force
+  assert_success
+  for event in SessionStart UserPromptSubmit Stop; do
+    run jq -r ".hooks.$event | length" "$TARGET_DIR/.claude/settings.json"
+    assert_output "1"
+  done
+}

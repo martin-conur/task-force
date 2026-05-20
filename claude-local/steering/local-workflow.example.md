@@ -95,3 +95,26 @@ task-work tasks/007-spike-idea.md --no-launch
 
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
 `.git/task-force/state.json`. Idempotent; safe to run anytime.
+### PM ↔ worker messaging (radio)
+
+When you finish your task and have nothing pending, the `radio ready` step will
+run automatically via your `Stop` hook — you don't need to invoke it manually.
+If you ever want to nudge the PM (or a worker) outside the normal flow, run:
+
+```bash
+radio send --to <role> --intent <kind> [--pr N] [--issue N]
+```
+
+Intents are free-form labels (`review-requested`, `re-review-requested`,
+`approved`, etc.); the body comes from `--body` or stdin. PR review *content*
+still lives in `gh pr comment`s — `radio` only carries the routing ping.
+
+To launch the PM agent in this repo, run `task-pm` from any tab — it renames
+the current zellij tab to `pm`, registers via the `SessionStart` hook, and
+starts the PM agent in-place.
+
+If a worker tab dies unexpectedly (or Claude resumes a session without
+re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.
+Run `radio orphans` to list any session whose heartbeat is older than 1 hour —
+those entries are safe to delete (`rm ~/.task-force/radio/sessions/<role>.info`)
+or leave for the next legitimate `radio register` to overwrite.

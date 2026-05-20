@@ -3,17 +3,19 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: task-init [--workflow | --commands] [--force | --restore]
+Usage: task-init [--workflow | --commands | --hooks] [--force | --restore]
 
 Set up the current repo for the kiro-local workflow:
   - Create .kiro/steering/local-workflow.md from the bundled template
   - Install pm, planner, worker agents into .kiro/agents/
   - Create tasks/{README.md, _board.md} with starter content
   - Append .git/task-force/ to .gitignore (create if missing)
+  - Write radio PM↔worker messaging hooks into .kiro/hooks/
 
 Scope (which categories of files to touch):
   --workflow       Workflow doc only (and tasks scaffolding / .gitignore)
   --commands       Agents only
+  --hooks          Radio hooks (.kiro/hooks/*.json) only
   (none)           All of the above (default)
 
 Overwrite policy when a target file already exists:
@@ -37,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --restore)  RESTORE=true; shift;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
+    --hooks)    SCOPE="hooks"; shift;;
     -h|--help)  usage;;
     *) echo "Unknown option: $1"; usage;;
   esac
@@ -83,11 +86,11 @@ TASKS_DIR="$REPO_ROOT/tasks"
 
 mkdir -p "$REPO_ROOT/.kiro/steering"
 
-if [[ "$SCOPE" != "commands" ]]; then
+if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   INSTALL_POLICY="$POLICY" install_file "$TEMPLATE" "$TARGET" "local-workflow.md"
 fi
 
-if [[ "$SCOPE" != "workflow" ]]; then
+if [[ "$SCOPE" != "workflow" && "$SCOPE" != "hooks" ]]; then
   AGENTS_DIR="$REPO_ROOT/.kiro/agents"
   AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
   mkdir -p "$AGENTS_DIR"
@@ -99,7 +102,7 @@ if [[ "$SCOPE" != "workflow" ]]; then
 fi
 
 # tasks/ skeleton — already idempotent; only touch when scope includes workflow.
-if [[ "$SCOPE" != "commands" ]]; then
+if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   mkdir -p "$TASKS_DIR"
   TASKS_README="$TASKS_DIR/README.md"
   if [[ ! -f "$TASKS_README" ]]; then
@@ -196,6 +199,45 @@ EOF
     printf '%s\n' "$IGNORE_LINE" > "$GITIGNORE"
     echo "✓ Created .gitignore with $IGNORE_LINE"
   fi
+fi
+
+# -------- radio hooks (one shell-command hook per agent lifecycle event) ----
+# Writes 3 hook files into <repo>/.kiro/hooks/ so the worker / PM agent
+# self-registers with the radio mailbox on startup and signals busy/idle around
+# every user prompt. Each hook is rendered into a tempfile and installed via
+# install_file so it honors the same --force / --restore / --prompt / keep
+# policy used for the workflow doc and agent files — re-init UX stays uniform.
+_radio_install_hooks() {
+  local hooks_dir="$REPO_ROOT/.kiro/hooks"
+  local loadout="kiro-local"
+  mkdir -p "$hooks_dir"
+
+  _write_hook() {
+    local name="$1" trigger="$2" command="$3"
+    local target="$hooks_dir/${name}.json"
+    local tmp
+    tmp=$(mktemp)
+    cat >"$tmp" <<EOF
+{
+  "version": "1.0",
+  "name": "${name}",
+  "trigger": {"type": "${trigger}"},
+  "action": {"type": "shellCommand", "command": "${command}"},
+  "enabled": true
+}
+EOF
+    INSTALL_POLICY="$POLICY" install_file "$tmp" "$target" "hook: $name"
+    rm -f "$tmp"
+  }
+
+  _write_hook "radio-register" "agentSpawn" \
+    "radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${loadout}"
+  _write_hook "radio-busy"     "userPromptSubmit" "radio busy"
+  _write_hook "radio-ready"    "agentStop"        "radio ready && radio check"
+}
+
+if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then
+  _radio_install_hooks
 fi
 
 echo ""

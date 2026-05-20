@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# region:body
+# task-pm — in-place PM-tab takeover for claude loadouts.
+# Renames the current zellij tab to "pm" and exec's claude /pm so the
+# SessionStart hook in <repo>/.claude/settings.json registers the PM mailbox.
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "Error: not in a git repo (task-pm requires a task-force-initialized repo" >&2
+  echo "       so the SessionStart hook can load .claude/settings.json)" >&2
+  exit 1
+fi
+cd "$(git rev-parse --show-toplevel)"
+
+if [[ -n "${ZELLIJ:-}" ]]; then
+  zellij action rename-tab "pm" >/dev/null 2>&1 || true
+fi
+
+export TASK_FORCE_ROLE=pm
+export ZELLIJ_TAB=pm
+exec claude "/pm"
+# endregion:body

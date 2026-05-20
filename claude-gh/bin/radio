@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+# region:body
+# radio — tiny mailbox + zellij wake-up CLI for PM <-> worker handoff.
+# See issue #63 for design.
+set -euo pipefail
+
+RADIO_HOME="${TASK_FORCE_HOME:-$HOME/.task-force}/radio"
+SESSIONS_DIR="$RADIO_HOME/sessions"
+MAILBOX_DIR="$RADIO_HOME/mailbox"
+LOG_FILE="$RADIO_HOME/log"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  radio send --to ROLE --intent KIND [--pr N] [--issue N] [--repo PATH] [--body TEXT | < body]
+  radio check                            list unread messages for this role
+  radio read   <id>                      print message body
+  radio ack    <id>                      move message to processed/
+  radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
+  radio ready                            mark this role idle (and process pending)
+  radio busy                             mark this role busy
+  radio unregister                       remove this role's session file
+  radio orphans                          list session files with stale (>1h) heartbeat
+
+Self-identification: every command except `register` reads $TASK_FORCE_ROLE.
+Override the mailbox root with $TASK_FORCE_HOME (defaults to ~/.task-force).
+EOF
+  exit "${1:-1}"
+}
+
+# ----- helpers --------------------------------------------------------------
+
+_log() {
+  mkdir -p "$RADIO_HOME"
+  printf '%s %s\n' "$(_now)" "$*" >>"$LOG_FILE"
+}
+
+_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+_compact_now() { date -u +%Y%m%d-%H%M%S; }
+
+_rand_id() {
+  # 32 bytes of /dev/urandom is plenty for 6 alphanumeric chars after `tr`
+  # filtering — the previous 256-byte read was wasteful, not wrong.
+  LC_ALL=C head -c 32 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 6
+}
+
+_require_role() {
+  if [[ -z "${TASK_FORCE_ROLE:-}" ]]; then
+    echo "Error: \$TASK_FORCE_ROLE is not set (task-work / task-pm should set it)" >&2
+    exit 2
+  fi
+  _validate_role "$TASK_FORCE_ROLE" || exit 2
+}
+
+# Atomic write: stage into <file>.tmp.<rand> then rename. mv on POSIX is atomic
+# within the same directory, so readers never see a half-written session file.
+_atomic_write() {
+  local target="$1" tmp
+  tmp="${target}.tmp.$$.$RANDOM"
+  mkdir -p "$(dirname "$target")"
+  cat >"$tmp"
+  mv -f "$tmp" "$target"
+}
+
+# Read a single KEY=VALUE field from a session file. Never `source` the file
+# (it's untrusted input from another process); grep+cut is enough.
+_session_field() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 1
+  local line
+  line=$(grep -E "^${key}=" "$file" | head -1) || return 1
+  printf '%s' "${line#*=}"
+}
+
+# Reject role names that could let a caller escape $SESSIONS_DIR / $MAILBOX_DIR
+# via `..` or `/`. Today roles come from task-work / task-pm (`worker-<basename>-<slug>`
+# and `pm`), so the values are already safe — but `_session_file` / `_inbox_dir`
+# build paths by string concatenation, so we validate at the boundary
+# (`_require_role` for self-identifying commands; `cmd_send` for `--to`) before
+# any path is constructed.
+_validate_role() {
+  local role="$1"
+  case "$role" in
+    ""|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
+    *[!a-zA-Z0-9_-]*) echo "radio: invalid role: $role" >&2; return 1 ;;
+  esac
+}
+
+_session_file() {
+  printf '%s/%s.info' "$SESSIONS_DIR" "$1"
+}
+
+_inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
+_processed_dir(){ printf '%s/%s/processed' "$MAILBOX_DIR" "$1"; }
+
+# Update STATE=… and LAST_HEARTBEAT=… on the current session file.
+_update_state() {
+  local new_state="$1"
+  _require_role
+  local f
+  f=$(_session_file "$TASK_FORCE_ROLE")
+  [[ -f "$f" ]] || { _log "update_state: no session file for $TASK_FORCE_ROLE"; return 0; }
+
+  # Re-emit the file with STATE/LAST_HEARTBEAT replaced; preserve everything else.
+  awk -v st="$new_state" -v hb="$(_now)" '
+    BEGIN { OFS="=" }
+    /^STATE=/         { print "STATE=" st;        seen_state=1; next }
+    /^LAST_HEARTBEAT=/{ print "LAST_HEARTBEAT=" hb; seen_hb=1;  next }
+    { print }
+    END {
+      if (!seen_state) print "STATE=" st
+      if (!seen_hb)    print "LAST_HEARTBEAT=" hb
+    }
+  ' "$f" | _atomic_write "$f"
+}
+
+# ----- subcommands ----------------------------------------------------------
+
+cmd_register() {
+  local role="" tab="" repo="" agent="" loadout=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role)    role="$2";    shift 2 ;;
+      --tab)     tab="$2";     shift 2 ;;
+      --repo)    repo="$2";    shift 2 ;;
+      --agent)   agent="$2";   shift 2 ;;
+      --loadout) loadout="$2"; shift 2 ;;
+      *) echo "register: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ -n "$role"  ]] || { echo "register: --role required"  >&2; exit 2; }
+  [[ -n "$agent" ]] || { echo "register: --agent required" >&2; exit 2; }
+  _validate_role "$role" || exit 2
+
+  local f
+  f=$(_session_file "$role")
+  printf 'ROLE=%s\nTAB=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+    "$role" "$tab" "$repo" "$(_now)" "$agent" "$loadout" \
+    | _atomic_write "$f"
+
+  mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
+  _log "register role=$role tab=$tab agent=$agent loadout=$loadout"
+}
+
+cmd_unregister() {
+  _require_role
+  local f
+  f=$(_session_file "$TASK_FORCE_ROLE")
+  rm -f "$f"
+  _log "unregister role=$TASK_FORCE_ROLE"
+}
+
+cmd_ready() { _update_state idle; }
+cmd_busy()  { _update_state busy; }
+
+cmd_send() {
+  local to="" intent="" pr="" issue="" repo="" body=""
+  local body_set=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --to)     to="$2";     shift 2 ;;
+      --intent) intent="$2"; shift 2 ;;
+      --pr)     pr="$2";     shift 2 ;;
+      --issue)  issue="$2";  shift 2 ;;
+      --repo)   repo="$2";   shift 2 ;;
+      --body)   body="$2"; body_set=1; shift 2 ;;
+      *) echo "send: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ -n "$to"     ]] || { echo "send: --to required"     >&2; exit 2; }
+  [[ -n "$intent" ]] || { echo "send: --intent required" >&2; exit 2; }
+  _validate_role "$to" || exit 2
+
+  local from="${TASK_FORCE_ROLE:-unknown}"
+  local id
+  id="$(_compact_now)-from-${from}-$(_rand_id)"
+  local inbox
+  inbox=$(_inbox_dir "$to")
+  mkdir -p "$inbox"
+  local msg="$inbox/${id}.md"
+
+  if [[ "$body_set" -eq 0 ]] && [[ ! -t 0 ]]; then
+    body=$(cat)
+  fi
+
+  {
+    printf -- '---\n'
+    printf 'id: %s\n' "$id"
+    printf 'from: %s\n' "$from"
+    printf 'to: %s\n' "$to"
+    printf 'intent: %s\n' "$intent"
+    [[ -n "$pr"    ]] && printf 'pr: %s\n'    "$pr"
+    [[ -n "$issue" ]] && printf 'issue: %s\n' "$issue"
+    [[ -n "$repo"  ]] && printf 'repo: %s\n'  "$repo"
+    printf 'created_at: %s\n' "$(_now)"
+    printf -- '---\n'
+    printf '%s\n' "$body"
+  } | _atomic_write "$msg"
+
+  _log "send id=$id from=$from to=$to intent=$intent"
+
+  # Wake the recipient — only if zellij is running, the recipient is registered,
+  # idle, and has a tab name. Any other case is a silent no-op (logged).
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
+    return 0
+  fi
+  local rs
+  rs=$(_session_file "$to")
+  if [[ ! -f "$rs" ]]; then
+    _log "send: no session for $to — message queued (id=$id)"
+    return 0
+  fi
+  local rstate rtab
+  rstate=$(_session_field "$rs" STATE || true)
+  rtab=$(_session_field "$rs" TAB || true)
+  if [[ "$rstate" != "idle" ]]; then
+    _log "send: $to is busy (state=$rstate) — queued (id=$id)"
+    return 0
+  fi
+  if [[ -z "$rtab" ]]; then
+    _log "send: $to has no TAB — queued (id=$id)"
+    return 0
+  fi
+  zellij action go-to-tab-name "$rtab" >/dev/null 2>&1 || {
+    _log "send: go-to-tab-name $rtab failed — queued (id=$id)"; return 0; }
+  # Only ever write the literal string "radio check\n" — never the message body
+  # or any caller-supplied data. `zellij write-chars` injects directly into the
+  # recipient's TUI input buffer; writing anything else risks corrupting the
+  # agent's unsaved prompt or smuggling content into a TUI command. The
+  # recipient reads the actual message via `radio check` / `radio read`.
+  zellij action write-chars "radio check"$'\n' >/dev/null 2>&1 || {
+    _log "send: write-chars failed for $to — queued (id=$id)"; return 0; }
+  _log "send: woke $to via tab=$rtab (id=$id)"
+}
+
+cmd_check() {
+  _require_role
+  local inbox
+  inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
+  [[ -d "$inbox" ]] || { mkdir -p "$inbox"; return 0; }
+  shopt -s nullglob
+  local any=0
+  for f in "$inbox"/*.md; do
+    any=1
+    local id from intent oneline
+    id=$(basename "$f" .md)
+    from=$(awk -F': ' '/^from:/{print $2; exit}' "$f")
+    intent=$(awk -F': ' '/^intent:/{print $2; exit}' "$f")
+    # First non-frontmatter, non-blank line:
+    oneline=$(awk '/^---$/ { f++; next } f >= 2 && NF { print; exit }' "$f")
+    printf '%s\tfrom=%s\tintent=%s\t%s\n' "$id" "$from" "$intent" "$oneline"
+  done
+  shopt -u nullglob
+  [[ "$any" -eq 1 ]] || echo "(no unread messages)"
+}
+
+cmd_read() {
+  _require_role
+  local id="${1:-}"
+  [[ -n "$id" ]] || { echo "read: <id> required" >&2; exit 2; }
+  local f
+  f="$(_inbox_dir "$TASK_FORCE_ROLE")/${id}.md"
+  if [[ ! -f "$f" ]]; then
+    f="$(_processed_dir "$TASK_FORCE_ROLE")/${id}.md"
+  fi
+  [[ -f "$f" ]] || { echo "read: message $id not found" >&2; exit 1; }
+  cat "$f"
+}
+
+cmd_ack() {
+  _require_role
+  local id="${1:-}"
+  [[ -n "$id" ]] || { echo "ack: <id> required" >&2; exit 2; }
+  local inbox processed
+  inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
+  processed=$(_processed_dir "$TASK_FORCE_ROLE")
+  local src="$inbox/${id}.md"
+  [[ -f "$src" ]] || { echo "ack: message $id not in inbox" >&2; exit 1; }
+  mkdir -p "$processed"
+  mv -f "$src" "$processed/"
+  _log "ack id=$id role=$TASK_FORCE_ROLE"
+}
+
+cmd_orphans() {
+  [[ -d "$SESSIONS_DIR" ]] || return 0
+  local now_epoch
+  now_epoch=$(date -u +%s)
+  shopt -s nullglob
+  for f in "$SESSIONS_DIR"/*.info; do
+    local hb hb_epoch role age
+    hb=$(_session_field "$f" LAST_HEARTBEAT || true)
+    role=$(_session_field "$f" ROLE || basename "$f" .info)
+    if [[ -z "$hb" ]]; then
+      printf '%s\t(no LAST_HEARTBEAT)\n' "$role"
+      continue
+    fi
+    # POSIX-portable parse of UTC ISO-8601 (YYYY-MM-DDTHH:MM:SSZ) -> epoch.
+    # GNU date supports -d; BSD date wants -j -f. Try GNU first, then BSD.
+    hb_epoch=$(date -u -d "$hb" +%s 2>/dev/null \
+               || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$hb" +%s 2>/dev/null \
+               || echo 0)
+    age=$(( now_epoch - hb_epoch ))
+    if (( age > 3600 )); then
+      printf '%s\tage=%ss\thb=%s\n' "$role" "$age" "$hb"
+    fi
+  done
+  shopt -u nullglob
+}
+
+# ----- dispatch -------------------------------------------------------------
+
+mkdir -p "$SESSIONS_DIR" "$MAILBOX_DIR"
+sub="${1:-}"
+[[ -n "$sub" ]] || usage
+shift || true
+case "$sub" in
+  send)        cmd_send "$@" ;;
+  check)       cmd_check ;;
+  read)        cmd_read "$@" ;;
+  ack)         cmd_ack "$@" ;;
+  register)    cmd_register "$@" ;;
+  ready)       cmd_ready ;;
+  busy)        cmd_busy ;;
+  unregister)  cmd_unregister ;;
+  orphans)     cmd_orphans ;;
+  -h|--help)   usage 0 ;;
+  *) echo "radio: unknown subcommand '$sub'" >&2; usage 1 ;;
+esac
+# endregion:body

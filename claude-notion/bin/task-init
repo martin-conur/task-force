@@ -3,16 +3,18 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: task-init [--workflow | --commands] [--force | --restore] [--help-ids]
+Usage: task-init [--workflow | --commands | --hooks] [--force | --restore] [--help-ids]
 
 Set up the current repo for the claude-notion workflow:
   - Create .claude/notion-workflow.md from the bundled template
   - Add @.claude/notion-workflow.md to CLAUDE.md so it auto-loads in every session
   - Install /pm, /planner, /worker slash commands into .claude/commands/
+  - Merge radio PM↔worker messaging hooks into .claude/settings.json
 
 Scope (which categories of files to touch):
   --workflow       Workflow doc only (and CLAUDE.md import)
   --commands       Slash commands only
+  --hooks          Radio hooks (settings.json) only
   (none)           All of the above (default)
 
 Overwrite policy when a target file already exists:
@@ -67,6 +69,7 @@ while [[ $# -gt 0 ]]; do
     --restore)  RESTORE=true; shift ;;
     --workflow) SCOPE="workflow"; shift ;;
     --commands) SCOPE="commands"; shift ;;
+    --hooks)    SCOPE="hooks"; shift ;;
     --help-ids) HELP_IDS=true; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
@@ -120,7 +123,7 @@ mkdir -p "$REPO_ROOT/.claude"
 
 # The notion template has no flag-driven placeholders — its IDs are filled in
 # manually after init via the MCP. So we just install the raw template.
-if [[ "$SCOPE" != "commands" ]]; then
+if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   INSTALL_POLICY="$POLICY" install_file "$TEMPLATE" "$TARGET" "notion-workflow.md"
 
   IMPORT_LINE="@.claude/notion-workflow.md"
@@ -137,7 +140,7 @@ if [[ "$SCOPE" != "commands" ]]; then
   fi
 fi
 
-if [[ "$SCOPE" != "workflow" ]]; then
+if [[ "$SCOPE" != "workflow" && "$SCOPE" != "hooks" ]]; then
   COMMANDS_DIR="$REPO_ROOT/.claude/commands"
   COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
   mkdir -p "$COMMANDS_DIR"
@@ -146,6 +149,55 @@ if [[ "$SCOPE" != "workflow" ]]; then
     cmd_target="$COMMANDS_DIR/$cmd_name"
     INSTALL_POLICY="$POLICY" install_file "$cmd" "$cmd_target" "/$(basename "$cmd_name" .md)"
   done
+fi
+
+# -------- radio hooks merge (jq-based, idempotent, non-destructive) ---------
+# Adds 3 hook entries to <repo>/.claude/settings.json so the worker / PM agent
+# self-registers with the radio mailbox on startup and signals busy/idle around
+# every user prompt. The jq merge is inherently idempotent (an entry is added
+# only if no existing hook command starts with "radio "), so we run it on every
+# in-scope invocation regardless of the overwrite policy — there is nothing
+# for --force / --restore / --prompt to disambiguate at the entry level.
+# Pre-existing user hooks (e.g. ./scripts/pre-tool-lint.sh on Stop) are
+# preserved.
+_radio_install_hooks() {
+  local settings_file="$REPO_ROOT/.claude/settings.json"
+  local loadout="claude-notion"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required to merge radio hooks into $settings_file" >&2
+    echo "       Install jq (https://jqlang.github.io/jq/) and re-run task-init." >&2
+    exit 1
+  fi
+
+  local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout $loadout"
+  local busy_cmd="radio busy"
+  local stop_cmd="radio ready && radio check"
+
+  mkdir -p "$(dirname "$settings_file")"
+  [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
+
+  local tmp="${settings_file}.tmp.$$"
+  jq \
+    --arg sess "$register_cmd" \
+    --arg ups  "$busy_cmd" \
+    --arg stop "$stop_cmd" \
+    '
+    def add_radio(arr; cmd):
+      if (arr // []) | any((.hooks // []) | any((.command // "") | startswith("radio "))) then arr
+      else (arr // []) + [{hooks: [{type: "command", command: cmd}]}]
+      end;
+    .hooks //= {}
+    | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
+    | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
+    | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
+    ' "$settings_file" >"$tmp"
+  mv -f "$tmp" "$settings_file"
+  echo "✓ Merged radio hooks into $settings_file"
+}
+
+if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then
+  _radio_install_hooks
 fi
 
 print_ids_guide

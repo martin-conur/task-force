@@ -16,6 +16,10 @@ ln -sf "$SCRIPT_DIR/../bin/task-work" ~/.local/bin/task-work
 echo "  ✓ Script: task-work (shared dispatcher)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-done" ~/.local/bin/task-done
 echo "  ✓ Script: task-done (shared dispatcher)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-pm" ~/.local/bin/task-pm
+echo "  ✓ Script: task-pm (shared dispatcher)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/bin/radio" ~/.local/bin/radio
+echo "  ✓ Script: radio (PM↔worker mailbox CLI)"; sleep 0.05
 
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'

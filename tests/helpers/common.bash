@@ -37,6 +37,10 @@ KIRO_LOCAL_TASK_DONE="$REPO_ROOT_REAL/kiro-local/bin/task-done"
 KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
 KIRO_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/kiro-local/bin/task-board"
 KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
+RADIO="$REPO_ROOT_REAL/claude-gh/bin/radio"
+TASK_PM_CLAUDE="$REPO_ROOT_REAL/claude-gh/bin/task-pm"
+TASK_PM_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-pm"
+TASK_PM_DISPATCHER="$REPO_ROOT_REAL/bin/task-pm"
 
 # Creates a temp directory with a git repo, sets up $MAIN_REPO,
 # $REPO_NAME, and $WORKTREE_BASE.
@@ -67,6 +71,13 @@ setup_worktree() {
     > "$WORKTREE_BASE/.$slug.info"
 }
 
+# Creates a tempdir for $TASK_FORCE_HOME (radio mailbox root) and exports it.
+# Pair with teardown_all() which cleans it up.
+setup_task_force_home() {
+  TASK_FORCE_HOME=$(mktemp -d)
+  export TASK_FORCE_HOME
+}
+
 # Puts stub scripts first on PATH and sets STUB_CALLS_DIR for recording.
 setup_stubs() {
   STUB_BIN=$(mktemp -d)
@@ -87,9 +98,10 @@ teardown_all() {
     git -C "$MAIN_REPO" worktree prune 2>/dev/null || true
     rm -rf "$MAIN_REPO"
   fi
-  [[ -z "${WORKTREE_BASE:-}"  ]] || rm -rf "$WORKTREE_BASE"
-  [[ -z "${STUB_BIN:-}"       ]] || rm -rf "$STUB_BIN"
-  [[ -z "${STUB_CALLS_DIR:-}" ]] || rm -rf "$STUB_CALLS_DIR"
+  [[ -z "${WORKTREE_BASE:-}"   ]] || rm -rf "$WORKTREE_BASE"
+  [[ -z "${STUB_BIN:-}"        ]] || rm -rf "$STUB_BIN"
+  [[ -z "${STUB_CALLS_DIR:-}"  ]] || rm -rf "$STUB_CALLS_DIR"
+  [[ -z "${TASK_FORCE_HOME:-}" ]] || rm -rf "$TASK_FORCE_HOME"
 }
 
 # Read the recorded calls for a stub command.

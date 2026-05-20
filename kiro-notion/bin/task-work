@@ -204,12 +204,21 @@ aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 printf 'BASE_BRANCH=%s\nSLUG=%s\nNOTION_URL=%s\n' "$BASE_BRANCH" "$SLUG" "$NOTION_URL" > "$INFO_FILE"
 
+# region:radio-env-injection
+# Inject radio session env vars into the spawned command so the agent's
+# SessionStart hook can register with the radio mailbox. The prefix is added
+# to the cmd string passed to aw_launch_tab; VAR=val syntax in front of a
+# command exports those vars to that command's environment only.
+TASK_FORCE_ROLE_VALUE="worker-${REPO_NAME}-${SLUG}"
+RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_TAB=$(printf %q "$SLUG") "
+# endregion:radio-env-injection
+
 # region:worktree-creation-post-info
 echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" ""
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "$(build_kiro_cmd)"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_kiro_cmd)"
 fi
 
 if [[ -n "$NO_LAUNCH" ]]; then

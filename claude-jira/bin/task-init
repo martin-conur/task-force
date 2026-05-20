@@ -38,13 +38,13 @@ done
 # Interactive prompts when running from a terminal and values are still missing
 if [[ -t 0 ]]; then
   if [[ -z "$SITE" ]]; then
-    read -rp "Jira site URL (e.g. https://acme.atlassian.net) [blank → leaves {SITE}]: " SITE
+    read -erp "Jira site URL (e.g. https://acme.atlassian.net) [blank → leaves {SITE}]: " SITE
   fi
   if [[ -z "$KEY" ]]; then
-    read -rp "Project key (e.g. PROJ) [blank → leaves {KEY}]: " KEY
+    read -erp "Project key (e.g. PROJ) [blank → leaves {KEY}]: " KEY
   fi
   if [[ -z "$BOARD" ]]; then
-    read -rp "Board name (e.g. My Board) [blank → leaves {BOARD}]: " BOARD
+    read -erp "Board name (e.g. My Board) [blank → leaves {BOARD}]: " BOARD
   fi
 fi
 

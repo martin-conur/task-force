@@ -63,22 +63,22 @@ fi
 if [[ -t 0 ]]; then
   if [[ "$OWNER_VIA_FLAG" == false ]]; then
     if [[ -n "$OWNER" ]]; then
-      read -rp "GitHub owner [$OWNER]: " _input
+      read -erp "GitHub owner [$OWNER]: " _input
       [[ -n "${_input:-}" ]] && OWNER="$_input"
     else
-      read -rp "GitHub owner (user or org) [blank → leaves {OWNER}]: " OWNER
+      read -erp "GitHub owner (user or org) [blank → leaves {OWNER}]: " OWNER
     fi
   fi
   if [[ "$REPO_VIA_FLAG" == false ]]; then
     if [[ -n "$REPO" ]]; then
-      read -rp "Repository name [$REPO]: " _input
+      read -erp "Repository name [$REPO]: " _input
       [[ -n "${_input:-}" ]] && REPO="$_input"
     else
-      read -rp "Repository name [blank → leaves {REPO}]: " REPO
+      read -erp "Repository name [blank → leaves {REPO}]: " REPO
     fi
   fi
   if [[ "$PROJECT_VIA_FLAG" == false ]]; then
-    read -rp "Project number (find at: github.com/users/OWNER/projects/N or github.com/orgs/OWNER/projects/N) [blank → leaves {PROJECT}]: " PROJECT
+    read -erp "Project number (find at: github.com/users/OWNER/projects/N or github.com/orgs/OWNER/projects/N) [blank → leaves {PROJECT}]: " PROJECT
   fi
 fi
 

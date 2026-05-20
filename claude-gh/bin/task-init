@@ -120,6 +120,9 @@ mkdir -p "$REPO_ROOT/.claude"
 # an existing workflow file when the user did not pass a flag and the variable
 # is still empty (interactive prompts run after this so the user can still
 # override).
+# Backticks in the regex patterns match the literal backticks rendered in the
+# markdown workflow doc (`OWNER`). shellcheck would otherwise warn SC2016.
+# shellcheck disable=SC2016
 _preserve_placeholders() {
   local existing="$1"
   [[ -f "$existing" ]] || return 0

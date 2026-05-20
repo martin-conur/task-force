@@ -61,8 +61,8 @@ If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes
 
 Examples:
 ```bash
-task-work add-auth "https://github.com/martin-conur/task-force/issues/42"
-task-work https://github.com/martin-conur/task-force/issues/42
+task-work add-auth "https://github.com/martin-conur/agentic-workflow/issues/42"
+task-work https://github.com/martin-conur/agentic-workflow/issues/42
 task-work refactor-auth --plan
 task-work issue-99 --from task/issue-46 --base main --auto   # stack on an in-flight branch
 task-work spike-idea --no-launch

@@ -96,7 +96,7 @@ if [[ -z "$TARGET" ]]; then
     echo "Which AI tool?"
     echo "  1) Claude Code"
     echo "  2) Kiro"
-    read -rp "Choice [1-2]: " tool_choice
+    read -erp "Choice [1-2]: " tool_choice
 
     case "$tool_choice" in
       1)
@@ -106,7 +106,7 @@ if [[ -z "$TARGET" ]]; then
         echo "  2) Notion (Notion MCP)"
         echo "  3) GitHub Projects (GitHub MCP)"
         echo "  4) Local markdown (no external tracker)"
-        read -rp "Choice [1-4]: " board_choice
+        read -erp "Choice [1-4]: " board_choice
         case "$board_choice" in
           1) TARGET="claude-jira" ;;
           2) TARGET="claude-notion" ;;
@@ -120,7 +120,7 @@ if [[ -z "$TARGET" ]]; then
         echo "  1) Notion (Notion MCP)"
         echo "  2) GitHub Projects (GitHub MCP)"
         echo "  3) Local markdown (no external tracker)"
-        read -rp "Choice [1-3]: " board_choice
+        read -erp "Choice [1-3]: " board_choice
         case "$board_choice" in
           1) TARGET="kiro-notion" ;;
           2) TARGET="kiro-gh" ;;

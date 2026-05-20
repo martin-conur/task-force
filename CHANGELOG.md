@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Installer prompts: arrow keys (↑/↓/←/→) now provide readline navigation instead of echoing raw escape sequences (`^[[A`). Switched `read -rp` → `read -erp` in `install.sh`, `task-init`, and `*/bin/task-init`. (#23)
+
 ## [0.1.0] — 2026-05-19
 
 First feature release since `v0.0.1`. Highlights: two new local-tracking loadouts (`claude-local`, `kiro-local`), `--from` / `--plan` / `--auto` flags for `task-work`, a CI drift-check guardrail across all 7 loadouts, macOS CI coverage, and a string of safety fixes for `task-done` / submodules / stale-base worktrees.

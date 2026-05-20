@@ -13,10 +13,10 @@ Install an agentic-workflow implementation.
 Implementations:
   claude-jira    Claude Code + Jira (Atlassian MCP)
   claude-notion  Claude Code + Notion MCP
-  claude-gh      Claude Code + GitHub Projects (GitHub MCP)
+  claude-gh      Claude Code + GitHub Projects (gh CLI)
   claude-local   Claude Code + local markdown task tracking (no external tracker)
   kiro-notion    Kiro CLI + Notion MCP
-  kiro-gh        Kiro CLI + GitHub Projects (GitHub MCP)
+  kiro-gh        Kiro CLI + GitHub Projects (gh CLI)
   kiro-local     Kiro CLI + local markdown task tracking (no external tracker)
   all            Install all seven
 
@@ -104,7 +104,7 @@ if [[ -z "$TARGET" ]]; then
         echo "Which board/tracker?"
         echo "  1) Jira (Atlassian MCP)"
         echo "  2) Notion (Notion MCP)"
-        echo "  3) GitHub Projects (GitHub MCP)"
+        echo "  3) GitHub Projects (gh CLI)"
         echo "  4) Local markdown (no external tracker)"
         read -erp "Choice [1-4]: " board_choice
         case "$board_choice" in
@@ -118,7 +118,7 @@ if [[ -z "$TARGET" ]]; then
         echo ""
         echo "Which board/tracker?"
         echo "  1) Notion (Notion MCP)"
-        echo "  2) GitHub Projects (GitHub MCP)"
+        echo "  2) GitHub Projects (gh CLI)"
         echo "  3) Local markdown (no external tracker)"
         read -erp "Choice [1-3]: " board_choice
         case "$board_choice" in

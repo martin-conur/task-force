@@ -5,7 +5,7 @@ argument-hint: [optional first instruction]
 
 You are now in PM mode for this Claude Code session.
 
-Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo, project number, and conventions. Use the GitHub MCP (`@github`) to read and write GitHub Issues and Projects.
+Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo, project number, and conventions. Use the `gh` CLI for issue and project I/O: `gh issue list`, `gh issue view`, `gh issue create`, `gh issue edit`, `gh issue comment`, `gh search issues`, `gh project view`, `gh project item-list`, `gh project field-list`, `gh project item-edit`, `gh label list`. Read-only `gh` patterns are pre-allowed in `.claude/settings.json`; mutations stay confirmation-gated.
 
 Your responsibilities:
 - Show backlog status when asked (list open issues in the project, grouped by status and priority)

@@ -178,6 +178,11 @@ _radio_install_hooks() {
   [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
 
   local tmp="${settings_file}.tmp.$$"
+  # Seeded read-only Notion MCP tools auto-approve PM/planner/worker tracker
+  # reads; writes (notion-create-page, notion-update-page, notion-append-block)
+  # are deliberately excluded so they remain confirmation-gated. Tool names may
+  # need adjustment per Notion MCP version — verify with `claude mcp` after
+  # install.
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$busy_cmd" \
@@ -191,9 +196,22 @@ _radio_install_hooks() {
     | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
     | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
+    | .permissions //= {}
+    | .permissions.allow //= []
+    | .permissions.allow = (
+        .permissions.allow + [
+          "mcp__notion__notion-search",
+          "mcp__notion__notion-fetch",
+          "mcp__notion__notion-get-database",
+          "mcp__notion__notion-query-database",
+          "mcp__notion__notion-get-page",
+          "mcp__notion__notion-get-block",
+          "mcp__notion__notion-get-block-children"
+        ] | unique
+      )
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
-  echo "✓ Merged radio hooks into $settings_file"
+  echo "✓ Merged radio hooks + Notion read allow-list into $settings_file"
 }
 
 if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then

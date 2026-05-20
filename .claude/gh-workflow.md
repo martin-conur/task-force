@@ -9,19 +9,25 @@ Then reference it from `CLAUDE.md` at your project root so every Claude Code ses
 @.claude/gh-workflow.md
 ```
 
-### GitHub MCP (Claude Code)
+### GitHub CLI (`gh`)
 
-This workflow requires the GitHub MCP server configured in Claude Code. Verify with:
+This workflow uses the [`gh` CLI](https://cli.github.com) for issue / project / PR I/O. Verify you're authenticated:
 
 ```bash
-claude mcp list
+gh auth status
 ```
 
-You should see a `github` entry. If not, add it (requires `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment):
+If not, run `gh auth login` (needs `repo` + `project` scopes). The PM / planner / worker prompts shell out to `gh` directly; read-only patterns (`gh issue view *`, `gh project view *`, `gh search issues *`, etc.) are pre-allowed in `.claude/settings.json` by `task-init claude-gh`, so reads don't trigger permission prompts. Mutations (`gh issue edit`, `gh pr merge`, …) stay confirmation-gated.
+
+#### Optional: GitHub MCP for richer Projects v2 mutations
+
+`gh project item-edit` covers the common single-select / number / text mutations. If you frequently mutate iteration fields or want a higher-level Projects v2 API, add the GitHub MCP as an opt-in:
 
 ```bash
 claude mcp add --transport stdio github -- npx -y @github/github-mcp-server
 ```
+
+(Requires `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment.)
 
 ### GitHub Repository
 
@@ -61,8 +67,8 @@ If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes
 
 Examples:
 ```bash
-task-work add-auth "https://github.com/martin-conur/agentic-workflow/issues/42"
-task-work https://github.com/martin-conur/agentic-workflow/issues/42
+task-work add-auth "https://github.com/martin-conur/task-force/issues/42"
+task-work https://github.com/martin-conur/task-force/issues/42
 task-work refactor-auth --plan
 task-work issue-99 --from task/issue-46 --base main --auto   # stack on an in-flight branch
 task-work spike-idea --no-launch
@@ -72,3 +78,26 @@ task-work spike-idea --no-launch
 
 - `--force` — skip all confirmation prompts
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
+### PM ↔ worker messaging (radio)
+
+When you finish your task and have nothing pending, the `radio ready` step will
+run automatically via your `Stop` hook — you don't need to invoke it manually.
+If you ever want to nudge the PM (or a worker) outside the normal flow, run:
+
+```bash
+radio send --to <role> --intent <kind> [--pr N] [--issue N]
+```
+
+Intents are free-form labels (`review-requested`, `re-review-requested`,
+`approved`, etc.); the body comes from `--body` or stdin. PR review *content*
+still lives in `gh pr comment`s — `radio` only carries the routing ping.
+
+To launch the PM agent in this repo, run `task-pm` from any tab — it renames
+the current zellij tab to `pm`, registers via the `SessionStart` hook, and
+starts the PM agent in-place.
+
+If a worker tab dies unexpectedly (or Claude resumes a session without
+re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.
+Run `radio orphans` to list any session whose heartbeat is older than 1 hour —
+those entries are safe to delete (`rm ~/.task-force/radio/sessions/<role>.info`)
+or leave for the next legitimate `radio register` to overwrite.

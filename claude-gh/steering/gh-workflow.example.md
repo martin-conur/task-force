@@ -9,19 +9,25 @@ Then reference it from `CLAUDE.md` at your project root so every Claude Code ses
 @.claude/gh-workflow.md
 ```
 
-### GitHub MCP (Claude Code)
+### GitHub CLI (`gh`)
 
-This workflow requires the GitHub MCP server configured in Claude Code. Verify with:
+This workflow uses the [`gh` CLI](https://cli.github.com) for issue / project / PR I/O. Verify you're authenticated:
 
 ```bash
-claude mcp list
+gh auth status
 ```
 
-You should see a `github` entry. If not, add it (requires `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment):
+If not, run `gh auth login` (needs `repo` + `project` scopes). The PM / planner / worker prompts shell out to `gh` directly; read-only patterns (`gh issue view *`, `gh project view *`, `gh search issues *`, etc.) are pre-allowed in `.claude/settings.json` by `task-init claude-gh`, so reads don't trigger permission prompts. Mutations (`gh issue edit`, `gh pr merge`, …) stay confirmation-gated.
+
+#### Optional: GitHub MCP for richer Projects v2 mutations
+
+`gh project item-edit` covers the common single-select / number / text mutations. If you frequently mutate iteration fields or want a higher-level Projects v2 API, add the GitHub MCP as an opt-in:
 
 ```bash
 claude mcp add --transport stdio github -- npx -y @github/github-mcp-server
 ```
+
+(Requires `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment.)
 
 ### GitHub Repository
 

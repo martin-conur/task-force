@@ -402,3 +402,49 @@ EOF
     assert_output "1"
   done
 }
+
+# ---------------------------------------------------------------------------
+# gh read-only allow-list seeding into .claude/settings.json
+# ---------------------------------------------------------------------------
+
+@test "seeds gh read-only patterns into permissions.allow" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "Bash(gh issue view *)"
+  assert_output --partial "Bash(gh project view *)"
+  assert_output --partial "Bash(gh search issues *)"
+  assert_output --partial "Bash(gh pr view *)"
+  # Mutations must NOT be auto-allowed.
+  refute_output --partial "gh issue edit"
+  refute_output --partial "gh pr merge"
+  refute_output --partial "gh project item-edit"
+}
+
+@test "idempotent: re-run does not duplicate gh allow-list entries" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  local before
+  before=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  run "$CLAUDE_GH_TASK_INIT" --force
+  assert_success
+  local after
+  after=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  assert_equal "$before" "$after"
+}
+
+@test "preserves a pre-existing user permissions.allow entry" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": ["Bash(custom *)"]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "Bash(custom *)"
+  assert_output --partial "Bash(gh issue view *)"
+}

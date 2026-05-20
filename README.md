@@ -36,10 +36,10 @@ Inspired by [How I run 4–8 parallel coding agents](https://schipper.ai/posts/p
 |-------|----------|--------------|--------|
 | **claude-jira**   | Claude Code | Jira (Atlassian MCP)                  | [`claude-jira/`](claude-jira/)     |
 | **claude-notion** | Claude Code | Notion (Notion MCP)                   | [`claude-notion/`](claude-notion/) |
-| **claude-gh**     | Claude Code | GitHub Projects (GitHub MCP)          | [`claude-gh/`](claude-gh/)         |
+| **claude-gh**     | Claude Code | GitHub Projects (gh CLI)              | [`claude-gh/`](claude-gh/)         |
 | **claude-local**  | Claude Code | Local markdown files (Obsidian-style) | [`claude-local/`](claude-local/)   |
 | **kiro-notion**   | Kiro CLI    | Notion (Notion MCP)                   | [`kiro-notion/`](kiro-notion/)     |
-| **kiro-gh**       | Kiro CLI    | GitHub Projects (GitHub MCP)          | [`kiro-gh/`](kiro-gh/)             |
+| **kiro-gh**       | Kiro CLI    | GitHub Projects (gh CLI)              | [`kiro-gh/`](kiro-gh/)             |
 | **kiro-local**    | Kiro CLI    | Local markdown files (Obsidian-style) | [`kiro-local/`](kiro-local/)       |
 
 All seven share the same shape — same roles, same `task-work` / `task-done` commands, same Zellij workflow. The only thing that changes is which AI flies the missions and where the briefings (or markdown task files) live.
@@ -56,7 +56,7 @@ You always need:
 - [gh CLI](https://cli.github.com) — opens pull requests
 - Git
 - Either [Claude Code](https://docs.claude.com/claude-code) or [Kiro CLI](https://kiro.dev)
-- The MCP server matching your tracker — see [Per-combo setup](#per-combo-setup)
+- For Jira / Notion trackers, the matching MCP server; for GitHub Projects, just the `gh` CLI authenticated (`gh auth status`) — see [Per-combo setup](#per-combo-setup)
 
 ### 2. Clone and install
 
@@ -230,16 +230,25 @@ Spawn workers with `task-work <notion-url>`. Same `/pm`, `/planner`, `/worker` r
 
 ### claude-gh — Claude Code + GitHub Projects
 
-**Need:** Claude Code with the GitHub MCP added, plus a `GITHUB_PERSONAL_ACCESS_TOKEN` (repo + project scopes) in your environment.
+**Need:** the [`gh` CLI](https://cli.github.com) authenticated (`gh auth status`; `gh auth login` if not — needs `repo` + `project` scopes).
 
 ```bash
-claude mcp add --transport stdio github -- npx -y @github/github-mcp-server
 ./install.sh claude-gh
 cd ~/my-project
 task-init claude-gh           # auto-detects owner/repo from your git remote
 ```
 
+`task-init claude-gh` seeds a read-only `gh` allow-list into `.claude/settings.json` (`gh issue view *`, `gh project view *`, `gh search issues *`, etc.) so the PM / planner / worker read freely; mutations (`gh issue edit`, `gh pr merge`) stay confirmation-gated.
+
 Spawn workers with `task-work <github-issue-url>`. The issue number becomes the worktree slug (`issue-42`).
+
+**Optional add-on:** if you frequently mutate Projects v2 iteration / number fields, add the GitHub MCP:
+
+```bash
+claude mcp add --transport stdio github -- npx -y @github/github-mcp-server
+```
+
+(requires `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment)
 
 ### claude-local — Claude Code + local markdown task tracking
 
@@ -301,7 +310,7 @@ Agents are bound to Kiro shortcuts:
 
 ### kiro-gh — Kiro CLI + GitHub Projects
 
-**Need:** Kiro CLI plus `GITHUB_PERSONAL_ACCESS_TOKEN` (repo + project scopes).
+**Need:** the [`gh` CLI](https://cli.github.com) authenticated (`gh auth status`; `gh auth login` if not — needs `repo` + `project` scopes). The bundled Kiro agents shell out to `gh` via `execute_bash`.
 
 ```bash
 ./install.sh kiro-gh
@@ -310,6 +319,8 @@ task-init kiro-gh
 ```
 
 Same Kiro shortcuts as `kiro-notion`.
+
+**Optional add-on:** if you frequently mutate Projects v2 iteration / number fields, add the GitHub MCP to each agent's `mcpServers` block in `.kiro/agents/*.json` and set `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment.
 
 ### kiro-local — Kiro CLI + local markdown task tracking
 

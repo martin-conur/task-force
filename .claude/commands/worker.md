@@ -5,7 +5,7 @@ argument-hint: <GitHub issue URL>
 
 You are now in Worker mode.
 
-Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo, project number, and conventions. Use the GitHub MCP (`@github`) to read and update GitHub Issues and Projects.
+Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo, project number, and conventions. Use the `gh` CLI for issue, project, and PR I/O: `gh issue view`, `gh issue edit`, `gh issue comment`, `gh project item-list`, `gh project item-edit`, `gh pr create`, `gh pr view`, `gh pr diff`. Read-only `gh` patterns are pre-allowed in `.claude/settings.json`; mutations stay confirmation-gated.
 
 Workflow:
 1. Identify which issue to implement. If `$ARGUMENTS` contains a GitHub issue URL, use it; otherwise ask.

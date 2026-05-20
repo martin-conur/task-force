@@ -3,16 +3,27 @@
 Copy this file to your project's `.kiro/steering/gh-workflow.md` and fill in your details.
 Or run `task-init kiro-gh` in your project root to do this automatically.
 
-### GitHub MCP (Kiro)
+### GitHub CLI (`gh`)
 
-This workflow requires the GitHub MCP server configured in Kiro. Add it to your agent definitions'
-`mcpServers` block (already done in the bundled agents):
+This workflow uses the [`gh` CLI](https://cli.github.com) for issue / project / PR I/O. Verify you're authenticated:
 
-```json
-"github": { "command": "npx", "args": ["-y", "@github/github-mcp-server"] }
+```bash
+gh auth status
 ```
 
-Set `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment before running Kiro.
+If not, run `gh auth login` (needs `repo` + `project` scopes). The bundled PM / planner / worker agents shell out to `gh` directly via `execute_bash`. Mutations stay confirmation-gated; with `--trust-all` on `task-work`, every `gh` call is auto-approved.
+
+#### Optional: GitHub MCP for richer Projects v2 mutations
+
+`gh project item-edit` covers the common single-select / number / text mutations. If you frequently mutate iteration fields or want a higher-level Projects v2 API, add the GitHub MCP to each agent's `mcpServers` block (the bundled agents ship without it; add it back if you want it):
+
+```json
+"mcpServers": {
+  "github": { "command": "npx", "args": ["-y", "@github/github-mcp-server"] }
+}
+```
+
+Set `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment before running Kiro, and add `@github` to each agent's `tools` (and `allowedTools` to skip the confirmation).
 
 ### GitHub Repository
 

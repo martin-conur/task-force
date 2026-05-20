@@ -2,28 +2,60 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-init [--force]"
-  echo ""
-  echo "Set up the current repo for the kiro-local workflow:"
-  echo "  - Create .kiro/steering/local-workflow.md from the bundled template"
-  echo "  - Install pm, planner, worker agents into .kiro/agents/"
-  echo "  - Create tasks/{README.md, _board.md} with starter content"
-  echo "  - Append .git/task-force/ to .gitignore (create if missing)"
-  echo ""
-  echo "Options:"
-  echo "  --force   Overwrite .kiro/steering/local-workflow.md and project-level agents if present"
+  cat <<'EOF'
+Usage: task-init [--workflow | --commands] [--force | --restore]
+
+Set up the current repo for the kiro-local workflow:
+  - Create .kiro/steering/local-workflow.md from the bundled template
+  - Install pm, planner, worker agents into .kiro/agents/
+  - Create tasks/{README.md, _board.md} with starter content
+  - Append .git/task-force/ to .gitignore (create if missing)
+
+Scope (which categories of files to touch):
+  --workflow       Workflow doc only (and tasks scaffolding / .gitignore)
+  --commands       Agents only
+  (none)           All of the above (default)
+
+Overwrite policy when a target file already exists:
+  --force          Overwrite all targets (no prompt)
+  --restore        Only fill missing targets; never touch existing files
+  (TTY default)    Per-file prompt: [k]eep / [o]verwrite / [d]iff
+  (non-TTY)        Silently keep existing files (script-safe)
+
+--force and --restore are mutually exclusive.
+EOF
   exit 1
 }
 
 FORCE=false
+RESTORE=false
+SCOPE="all"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --force)   FORCE=true; shift;;
-    -h|--help) usage;;
+    --force)    FORCE=true; shift;;
+    --restore)  RESTORE=true; shift;;
+    --workflow) SCOPE="workflow"; shift;;
+    --commands) SCOPE="commands"; shift;;
+    -h|--help)  usage;;
     *) echo "Unknown option: $1"; usage;;
   esac
 done
+
+if [[ "$FORCE" == true && "$RESTORE" == true ]]; then
+  echo "Error: --force and --restore are mutually exclusive" >&2
+  exit 2
+fi
+
+if [[ "$FORCE" == true ]]; then
+  POLICY="force"
+elif [[ "$RESTORE" == true ]]; then
+  POLICY="restore"
+elif [[ -t 0 ]]; then
+  POLICY="prompt"
+else
+  POLICY="keep"
+fi
 
 # Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
 src="${BASH_SOURCE[0]}"
@@ -34,6 +66,9 @@ while [ -L "$src" ]; do
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
 TEMPLATE="$SCRIPT_DIR/../steering/local-workflow.example.md"
+LIB_DIR="$SCRIPT_DIR/../../lib"
+# shellcheck source=lib/install-file.sh
+. "$LIB_DIR/install-file.sh"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -48,35 +83,27 @@ TASKS_DIR="$REPO_ROOT/tasks"
 
 mkdir -p "$REPO_ROOT/.kiro/steering"
 
-if [[ -f "$TARGET" && "$FORCE" != true ]]; then
-  echo "$TARGET already exists. Use --force to overwrite."
-  exit 1
+if [[ "$SCOPE" != "commands" ]]; then
+  INSTALL_POLICY="$POLICY" install_file "$TEMPLATE" "$TARGET" "local-workflow.md"
 fi
 
-cp "$TEMPLATE" "$TARGET"
-echo "✓ Wrote $TARGET"
+if [[ "$SCOPE" != "workflow" ]]; then
+  AGENTS_DIR="$REPO_ROOT/.kiro/agents"
+  AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
+  mkdir -p "$AGENTS_DIR"
+  for agent in "$AGENTS_SRC"/*.json; do
+    agent_name=$(basename "$agent")
+    agent_target="$AGENTS_DIR/$agent_name"
+    INSTALL_POLICY="$POLICY" install_file "$agent" "$agent_target" "agent: $agent_name"
+  done
+fi
 
-# Project-level agents → <project>/.kiro/agents/
-AGENTS_DIR="$REPO_ROOT/.kiro/agents"
-AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
-mkdir -p "$AGENTS_DIR"
-for agent in "$AGENTS_SRC"/*.json; do
-  agent_name=$(basename "$agent")
-  agent_target="$AGENTS_DIR/$agent_name"
-  if [[ ( -e "$agent_target" || -L "$agent_target" ) && "$FORCE" != true ]]; then
-    echo "⚠ $agent_target already exists — skipping (use --force to overwrite)"
-  else
-    rm -f "$agent_target"
-    cp "$agent" "$agent_target"
-    echo "✓ Agent: $agent_name"
-  fi
-done
-
-# tasks/ skeleton
-mkdir -p "$TASKS_DIR"
-TASKS_README="$TASKS_DIR/README.md"
-if [[ ! -f "$TASKS_README" ]]; then
-  cat > "$TASKS_README" <<'EOF'
+# tasks/ skeleton — already idempotent; only touch when scope includes workflow.
+if [[ "$SCOPE" != "commands" ]]; then
+  mkdir -p "$TASKS_DIR"
+  TASKS_README="$TASKS_DIR/README.md"
+  if [[ ! -f "$TASKS_README" ]]; then
+    cat > "$TASKS_README" <<'EOF'
 # Tasks
 
 This directory holds the project's task backlog as individual markdown files.
@@ -127,14 +154,14 @@ pr: ""
 - `task-work tasks/NNN-slug.md` — open a worktree + worker session
 - `task-done --remove-worktree` — clean up after the PR is open
 EOF
-  echo "✓ Wrote $TASKS_README"
-else
-  echo "✓ $TASKS_README already exists — left alone"
-fi
+    echo "✓ Wrote $TASKS_README"
+  else
+    echo "✓ $TASKS_README already exists — left alone"
+  fi
 
-BOARD="$TASKS_DIR/_board.md"
-if [[ ! -f "$BOARD" ]]; then
-  cat > "$BOARD" <<'EOF'
+  BOARD="$TASKS_DIR/_board.md"
+  if [[ ! -f "$BOARD" ]]; then
+    cat > "$BOARD" <<'EOF'
 <!-- AUTOGENERATED by task-board — do not edit by hand -->
 
 # Board
@@ -151,23 +178,24 @@ _(none)_
 
 _(none yet)_
 EOF
-  echo "✓ Wrote $BOARD"
-else
-  echo "✓ $BOARD already exists — left alone"
-fi
-
-# Ensure .git/task-force/ is gitignored
-IGNORE_LINE=".git/task-force/"
-if [[ -f "$GITIGNORE" ]]; then
-  if grep -qxF "$IGNORE_LINE" "$GITIGNORE"; then
-    echo "✓ .gitignore already excludes $IGNORE_LINE"
+    echo "✓ Wrote $BOARD"
   else
-    printf '\n%s\n' "$IGNORE_LINE" >> "$GITIGNORE"
-    echo "✓ Appended $IGNORE_LINE to .gitignore"
+    echo "✓ $BOARD already exists — left alone"
   fi
-else
-  printf '%s\n' "$IGNORE_LINE" > "$GITIGNORE"
-  echo "✓ Created .gitignore with $IGNORE_LINE"
+
+  # Ensure .git/task-force/ is gitignored
+  IGNORE_LINE=".git/task-force/"
+  if [[ -f "$GITIGNORE" ]]; then
+    if grep -qxF "$IGNORE_LINE" "$GITIGNORE"; then
+      echo "✓ .gitignore already excludes $IGNORE_LINE"
+    else
+      printf '\n%s\n' "$IGNORE_LINE" >> "$GITIGNORE"
+      echo "✓ Appended $IGNORE_LINE to .gitignore"
+    fi
+  else
+    printf '%s\n' "$IGNORE_LINE" > "$GITIGNORE"
+    echo "✓ Created .gitignore with $IGNORE_LINE"
+  fi
 fi
 
 echo ""

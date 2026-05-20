@@ -114,15 +114,18 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# --force and overwrite guard
+# Overwrite policy: --force / --restore / default (TTY prompt / non-TTY keep)
 # ---------------------------------------------------------------------------
 
-@test "fails if .kiro/steering/gh-workflow.md already exists (no --force)" {
-  run "$KIRO_GH_TASK_INIT"
+@test "non-TTY default: existing workflow doc is kept silently (exit 0)" {
+  run "$KIRO_GH_TASK_INIT" --owner old
   assert_success
-  run "$KIRO_GH_TASK_INIT"
-  assert_failure
-  assert_output --partial "already exists"
+  run "$KIRO_GH_TASK_INIT" --owner ignored
+  assert_success
+  assert_output --partial "kept"
+  run cat "$TARGET_DIR/.kiro/steering/gh-workflow.md"
+  assert_output --partial "old"
+  refute_output --partial "ignored"
 }
 
 @test "--force overwrites existing gh-workflow.md" {
@@ -133,6 +136,66 @@ teardown() {
   run cat "$TARGET_DIR/.kiro/steering/gh-workflow.md"
   assert_output --partial "new"
   refute_output --partial "**Owner**: \`old\`"
+}
+
+@test "--force + --restore is rejected" {
+  run "$KIRO_GH_TASK_INIT" --force --restore
+  assert_failure
+  assert_output --partial "mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
+# --restore: fill missing only
+# ---------------------------------------------------------------------------
+
+@test "--restore restores a deleted agent without touching workflow" {
+  run "$KIRO_GH_TASK_INIT" --owner acme --repo widget --project 7
+  assert_success
+  cp "$TARGET_DIR/.kiro/steering/gh-workflow.md" "$BATS_TEST_TMPDIR/workflow.before"
+  rm "$TARGET_DIR/.kiro/agents/pm.json"
+  run "$KIRO_GH_TASK_INIT" --restore
+  assert_success
+  assert [ -f "$TARGET_DIR/.kiro/agents/pm.json" ]
+  run cmp -s "$BATS_TEST_TMPDIR/workflow.before" "$TARGET_DIR/.kiro/steering/gh-workflow.md"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# --workflow / --commands scope flags
+# ---------------------------------------------------------------------------
+
+@test "--commands installs agents without writing workflow doc" {
+  run "$KIRO_GH_TASK_INIT" --commands
+  assert_success
+  assert [ ! -f "$TARGET_DIR/.kiro/steering/gh-workflow.md" ]
+  for agent in pm planner worker; do
+    assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
+  done
+}
+
+@test "--workflow installs workflow doc without writing agents" {
+  run "$KIRO_GH_TASK_INIT" --workflow
+  assert_success
+  assert [ -f "$TARGET_DIR/.kiro/steering/gh-workflow.md" ]
+  assert [ ! -d "$TARGET_DIR/.kiro/agents" ]
+}
+
+# ---------------------------------------------------------------------------
+# Placeholder preservation
+# ---------------------------------------------------------------------------
+
+@test "--force preserves filled-in {OWNER}/{REPO}/{PROJECT} when no flags passed" {
+  run "$KIRO_GH_TASK_INIT" --owner acme --repo widget --project 7
+  assert_success
+  run "$KIRO_GH_TASK_INIT" --force
+  assert_success
+  run cat "$TARGET_DIR/.kiro/steering/gh-workflow.md"
+  assert_output --partial "acme"
+  assert_output --partial "widget"
+  assert_output --partial "**Project number**: \`7\`"
+  refute_output --partial "{OWNER}"
+  refute_output --partial "{REPO}"
+  refute_output --partial "{PROJECT}"
 }
 
 # ---------------------------------------------------------------------------

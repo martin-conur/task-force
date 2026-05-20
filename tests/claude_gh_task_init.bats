@@ -163,15 +163,18 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# --force and overwrite guard
+# Overwrite policy: --force / --restore / default (TTY prompt / non-TTY keep)
 # ---------------------------------------------------------------------------
 
-@test "fails if .claude/gh-workflow.md already exists (no --force)" {
-  run "$CLAUDE_GH_TASK_INIT"
+@test "non-TTY default: existing workflow doc is kept silently (exit 0)" {
+  run "$CLAUDE_GH_TASK_INIT" --owner old
   assert_success
-  run "$CLAUDE_GH_TASK_INIT"
-  assert_failure
-  assert_output --partial "already exists"
+  run "$CLAUDE_GH_TASK_INIT" --owner ignored
+  assert_success
+  assert_output --partial "kept"
+  run cat "$TARGET_DIR/.claude/gh-workflow.md"
+  assert_output --partial "old"
+  refute_output --partial "ignored"
 }
 
 @test "--force overwrites existing gh-workflow.md" {
@@ -182,6 +185,106 @@ teardown() {
   run cat "$TARGET_DIR/.claude/gh-workflow.md"
   assert_output --partial "new"
   refute_output --partial "**Owner**: \`old\`"
+}
+
+@test "--force + --restore is rejected" {
+  run "$CLAUDE_GH_TASK_INIT" --force --restore
+  assert_failure
+  assert_output --partial "mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
+# --restore: fill missing only
+# ---------------------------------------------------------------------------
+
+@test "--restore restores a deleted slash command without touching workflow" {
+  run "$CLAUDE_GH_TASK_INIT" --owner acme --repo widget --project 7
+  assert_success
+  # Snapshot workflow doc, delete one command.
+  cp "$TARGET_DIR/.claude/gh-workflow.md" "$BATS_TEST_TMPDIR/workflow.before"
+  rm "$TARGET_DIR/.claude/commands/pm.md"
+  run "$CLAUDE_GH_TASK_INIT" --restore
+  assert_success
+  assert [ -f "$TARGET_DIR/.claude/commands/pm.md" ]
+  run cmp -s "$BATS_TEST_TMPDIR/workflow.before" "$TARGET_DIR/.claude/gh-workflow.md"
+  assert_success
+}
+
+@test "--restore leaves existing slash commands alone" {
+  mkdir -p "$TARGET_DIR/.claude/commands"
+  echo "custom content" > "$TARGET_DIR/.claude/commands/pm.md"
+  run "$CLAUDE_GH_TASK_INIT" --restore
+  assert_success
+  run cat "$TARGET_DIR/.claude/commands/pm.md"
+  assert_output "custom content"
+  # And fills in the missing ones
+  assert [ -f "$TARGET_DIR/.claude/commands/planner.md" ]
+  assert [ -f "$TARGET_DIR/.claude/commands/worker.md" ]
+}
+
+# ---------------------------------------------------------------------------
+# --workflow / --commands scope flags
+# ---------------------------------------------------------------------------
+
+@test "--commands installs slash commands without writing workflow doc" {
+  run "$CLAUDE_GH_TASK_INIT" --commands
+  assert_success
+  assert [ ! -f "$TARGET_DIR/.claude/gh-workflow.md" ]
+  for cmd in pm planner worker; do
+    assert [ -f "$TARGET_DIR/.claude/commands/$cmd.md" ]
+  done
+}
+
+@test "--workflow installs workflow doc without writing slash commands" {
+  run "$CLAUDE_GH_TASK_INIT" --workflow
+  assert_success
+  assert [ -f "$TARGET_DIR/.claude/gh-workflow.md" ]
+  assert [ ! -d "$TARGET_DIR/.claude/commands" ]
+}
+
+@test "--commands --force overwrites pre-existing slash commands, leaves workflow alone" {
+  run "$CLAUDE_GH_TASK_INIT" --owner acme --repo widget --project 7
+  assert_success
+  cp "$TARGET_DIR/.claude/gh-workflow.md" "$BATS_TEST_TMPDIR/workflow.before"
+  echo "stale pm" > "$TARGET_DIR/.claude/commands/pm.md"
+  run "$CLAUDE_GH_TASK_INIT" --commands --force
+  assert_success
+  run cmp -s "$BATS_TEST_TMPDIR/workflow.before" "$TARGET_DIR/.claude/gh-workflow.md"
+  assert_success
+  run cmp -s "$REPO_ROOT_REAL/claude-gh/commands/pm.md" "$TARGET_DIR/.claude/commands/pm.md"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# Placeholder preservation
+# ---------------------------------------------------------------------------
+
+@test "--force preserves filled-in {OWNER}/{REPO}/{PROJECT} when no flags passed" {
+  run "$CLAUDE_GH_TASK_INIT" --owner acme --repo widget --project 7
+  assert_success
+  # Re-run with --force and no flag values — placeholders should be carried forward.
+  run "$CLAUDE_GH_TASK_INIT" --force
+  assert_success
+  run cat "$TARGET_DIR/.claude/gh-workflow.md"
+  assert_output --partial "acme"
+  assert_output --partial "widget"
+  assert_output --partial "**Project number**: \`7\`"
+  refute_output --partial "{OWNER}"
+  refute_output --partial "{REPO}"
+  refute_output --partial "{PROJECT}"
+}
+
+@test "this-run flag value beats preserved value" {
+  run "$CLAUDE_GH_TASK_INIT" --owner acme --repo widget --project 7
+  assert_success
+  run "$CLAUDE_GH_TASK_INIT" --owner other --force
+  assert_success
+  run cat "$TARGET_DIR/.claude/gh-workflow.md"
+  assert_output --partial "other"
+  refute_output --partial "**Owner**: \`acme\`"
+  # REPO and PROJECT still preserved
+  assert_output --partial "widget"
+  assert_output --partial "**Project number**: \`7\`"
 }
 
 # ---------------------------------------------------------------------------

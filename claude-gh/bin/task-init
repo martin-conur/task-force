@@ -2,20 +2,34 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-init [--owner OWNER] [--repo REPO] [--project N] [--force]"
-  echo ""
-  echo "Set up the current repo for the claude-gh workflow:"
-  echo "  - Create .claude/gh-workflow.md from the bundled template"
-  echo "  - Substitute owner / repo / project number if provided"
-  echo "    (auto-detected from git remote when possible; missing values prompted interactively)"
-  echo "  - Add @.claude/gh-workflow.md to CLAUDE.md so it auto-loads in every session"
-  echo "  - Install /pm, /planner, /worker slash commands into .claude/commands/"
-  echo ""
-  echo "Options:"
-  echo "  --owner OWNER    GitHub user or org name"
-  echo "  --repo  REPO     Repository name"
-  echo "  --project N      GitHub Projects board number"
-  echo "  --force          Overwrite .claude/gh-workflow.md and project-level slash commands if present"
+  cat <<'EOF'
+Usage: task-init [--owner OWNER] [--repo REPO] [--project N]
+                 [--workflow | --commands]
+                 [--force | --restore]
+
+Set up the current repo for the claude-gh workflow:
+  - Create .claude/gh-workflow.md from the bundled template
+  - Substitute owner / repo / project number if provided
+    (auto-detected from git remote when possible; missing values prompted interactively)
+  - Add @.claude/gh-workflow.md to CLAUDE.md so it auto-loads in every session
+  - Install /pm, /planner, /worker slash commands into .claude/commands/
+
+Scope (which categories of files to touch):
+  --workflow       Workflow doc only (and CLAUDE.md import)
+  --commands       Slash commands only
+  (none)           All of the above (default)
+
+Overwrite policy when a target file already exists:
+  --force          Overwrite all targets (no prompt)
+  --restore        Only fill missing targets; never touch existing files
+  (TTY default)    Per-file prompt: [k]eep / [o]verwrite / [d]iff
+  (non-TTY)        Silently keep existing files (script-safe)
+
+When refreshing an existing workflow doc, previously-filled {OWNER} / {REPO} /
+{PROJECT} values are automatically preserved (this-run flags take precedence).
+
+--force and --restore are mutually exclusive.
+EOF
   exit 1
 }
 
@@ -23,20 +37,41 @@ OWNER=""
 REPO=""
 PROJECT=""
 FORCE=false
+RESTORE=false
+SCOPE="all"
 OWNER_VIA_FLAG=false
 REPO_VIA_FLAG=false
 PROJECT_VIA_FLAG=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --owner)   OWNER="$2";   OWNER_VIA_FLAG=true;   shift 2;;
-    --repo)    REPO="$2";    REPO_VIA_FLAG=true;    shift 2;;
-    --project) PROJECT="$2"; PROJECT_VIA_FLAG=true; shift 2;;
-    --force)   FORCE=true; shift;;
-    -h|--help) usage;;
+    --owner)    OWNER="$2";   OWNER_VIA_FLAG=true;   shift 2;;
+    --repo)     REPO="$2";    REPO_VIA_FLAG=true;    shift 2;;
+    --project)  PROJECT="$2"; PROJECT_VIA_FLAG=true; shift 2;;
+    --force)    FORCE=true; shift;;
+    --restore)  RESTORE=true; shift;;
+    --workflow) SCOPE="workflow"; shift;;
+    --commands) SCOPE="commands"; shift;;
+    -h|--help)  usage;;
     *) echo "Unknown option: $1"; usage;;
   esac
 done
+
+if [[ "$FORCE" == true && "$RESTORE" == true ]]; then
+  echo "Error: --force and --restore are mutually exclusive" >&2
+  exit 2
+fi
+
+# Pick the install policy that install_file will consult.
+if [[ "$FORCE" == true ]]; then
+  POLICY="force"
+elif [[ "$RESTORE" == true ]]; then
+  POLICY="restore"
+elif [[ -t 0 ]]; then
+  POLICY="prompt"
+else
+  POLICY="keep"
+fi
 
 # Escape special sed replacement characters (|, &, \) to prevent injection
 _sed_escape() { printf '%s' "$1" | sed 's/[|&\]/\\&/g'; }
@@ -51,37 +86,6 @@ _detect_gh_remote() {
   fi
 }
 
-if [[ "$OWNER_VIA_FLAG" == false ]] || [[ "$REPO_VIA_FLAG" == false ]]; then
-  _detected=$(_detect_gh_remote 2>/dev/null) || true
-  if [[ -n "${_detected:-}" ]]; then
-    [[ "$OWNER_VIA_FLAG" == false ]] && OWNER="${_detected%% *}"
-    [[ "$REPO_VIA_FLAG"  == false ]] && REPO="${_detected##* }"
-  fi
-fi
-
-# Interactive prompts when running from a terminal (skipped for values set via flag)
-if [[ -t 0 ]]; then
-  if [[ "$OWNER_VIA_FLAG" == false ]]; then
-    if [[ -n "$OWNER" ]]; then
-      read -erp "GitHub owner [$OWNER]: " _input
-      [[ -n "${_input:-}" ]] && OWNER="$_input"
-    else
-      read -erp "GitHub owner (user or org) [blank → leaves {OWNER}]: " OWNER
-    fi
-  fi
-  if [[ "$REPO_VIA_FLAG" == false ]]; then
-    if [[ -n "$REPO" ]]; then
-      read -erp "Repository name [$REPO]: " _input
-      [[ -n "${_input:-}" ]] && REPO="$_input"
-    else
-      read -erp "Repository name [blank → leaves {REPO}]: " REPO
-    fi
-  fi
-  if [[ "$PROJECT_VIA_FLAG" == false ]]; then
-    read -erp "Project number (find at: github.com/users/OWNER/projects/N or github.com/orgs/OWNER/projects/N) [blank → leaves {PROJECT}]: " PROJECT
-  fi
-fi
-
 # Resolve script path through symlinks (install.sh symlinks into ~/.local/bin)
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -91,6 +95,11 @@ while [ -L "$src" ]; do
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
 TEMPLATE="$SCRIPT_DIR/../steering/gh-workflow.example.md"
+LIB_DIR="$SCRIPT_DIR/../../lib"
+# shellcheck source=lib/install-file.sh
+. "$LIB_DIR/install-file.sh"
+# shellcheck source=lib/preserve-placeholders.sh
+. "$LIB_DIR/preserve-placeholders.sh"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -104,51 +113,113 @@ CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 
 mkdir -p "$REPO_ROOT/.claude"
 
-if [[ -f "$TARGET" && "$FORCE" != true ]]; then
-  echo "$TARGET already exists. Use --force to overwrite."
-  exit 1
-fi
-
-sed_args=()
-[[ -n "$OWNER"   ]] && sed_args+=(-e "s|{OWNER}|$(_sed_escape "$OWNER")|g")
-[[ -n "$REPO"    ]] && sed_args+=(-e "s|{REPO}|$(_sed_escape "$REPO")|g")
-[[ -n "$PROJECT" ]] && sed_args+=(-e "s|{PROJECT}|$(_sed_escape "$PROJECT")|g")
-
-if [[ ${#sed_args[@]} -gt 0 ]]; then
-  sed "${sed_args[@]}" "$TEMPLATE" > "$TARGET"
-else
-  cp "$TEMPLATE" "$TARGET"
-fi
-echo "✓ Wrote $TARGET"
-
-IMPORT_LINE="@.claude/gh-workflow.md"
-if [[ -f "$CLAUDE_MD" ]]; then
-  if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
-    echo "✓ CLAUDE.md already references gh-workflow.md"
-  else
-    printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
-    echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
+# Loadout-specific placeholder extractor. Fills in OWNER / REPO / PROJECT from
+# an existing workflow file when the user did not pass a flag and the variable
+# is still empty (interactive prompts run after this so the user can still
+# override).
+_preserve_placeholders() {
+  local existing="$1"
+  [[ -f "$existing" ]] || return 0
+  local v
+  if [[ "$OWNER_VIA_FLAG" == false && -z "$OWNER" ]]; then
+    v=$(extract_existing_value "$existing" '^- \*\*Owner\*\*: `([^`]+)`.*' '{OWNER}')
+    if [[ -n "$v" ]]; then OWNER="$v"; fi
   fi
-else
-  printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
-  echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+  if [[ "$REPO_VIA_FLAG" == false && -z "$REPO" ]]; then
+    v=$(extract_existing_value "$existing" '^- \*\*Repo\*\*: `([^`]+)`.*' '{REPO}')
+    if [[ -n "$v" ]]; then REPO="$v"; fi
+  fi
+  if [[ "$PROJECT_VIA_FLAG" == false && -z "$PROJECT" ]]; then
+    v=$(extract_existing_value "$existing" '^- \*\*Project number\*\*: `([^`]+)`.*' '{PROJECT}')
+    if [[ -n "$v" ]]; then PROJECT="$v"; fi
+  fi
+  return 0
+}
+
+# Only do prompts / detect / placeholder preservation when we're actually going
+# to render the workflow.
+if [[ "$SCOPE" != "commands" ]]; then
+  _preserve_placeholders "$TARGET"
+
+  if [[ "$OWNER_VIA_FLAG" == false ]] || [[ "$REPO_VIA_FLAG" == false ]]; then
+    _detected=$(_detect_gh_remote 2>/dev/null) || true
+    if [[ -n "${_detected:-}" ]]; then
+      [[ "$OWNER_VIA_FLAG" == false && -z "$OWNER" ]] && OWNER="${_detected%% *}"
+      [[ "$REPO_VIA_FLAG"  == false && -z "$REPO"  ]] && REPO="${_detected##* }"
+    fi
+  fi
+
+  # Interactive prompts when running from a terminal (skipped for values set via flag).
+  if [[ -t 0 ]]; then
+    if [[ "$OWNER_VIA_FLAG" == false ]]; then
+      if [[ -n "$OWNER" ]]; then
+        read -erp "GitHub owner [$OWNER]: " _input
+        [[ -n "${_input:-}" ]] && OWNER="$_input"
+      else
+        read -erp "GitHub owner (user or org) [blank → leaves {OWNER}]: " OWNER
+      fi
+    fi
+    if [[ "$REPO_VIA_FLAG" == false ]]; then
+      if [[ -n "$REPO" ]]; then
+        read -erp "Repository name [$REPO]: " _input
+        [[ -n "${_input:-}" ]] && REPO="$_input"
+      else
+        read -erp "Repository name [blank → leaves {REPO}]: " REPO
+      fi
+    fi
+    if [[ "$PROJECT_VIA_FLAG" == false ]]; then
+      if [[ -n "$PROJECT" ]]; then
+        read -erp "Project number [$PROJECT]: " _input
+        [[ -n "${_input:-}" ]] && PROJECT="$_input"
+      else
+        read -erp "Project number (find at: github.com/users/OWNER/projects/N or github.com/orgs/OWNER/projects/N) [blank → leaves {PROJECT}]: " PROJECT
+      fi
+    fi
+  fi
+
+  # Render the template into a temp file, then hand to install_file so the
+  # overwrite policy (force / restore / prompt / keep) is honored uniformly.
+  TMP_RENDERED=$(mktemp)
+  trap 'rm -f "$TMP_RENDERED"' EXIT
+
+  sed_args=()
+  [[ -n "$OWNER"   ]] && sed_args+=(-e "s|{OWNER}|$(_sed_escape "$OWNER")|g")
+  [[ -n "$REPO"    ]] && sed_args+=(-e "s|{REPO}|$(_sed_escape "$REPO")|g")
+  [[ -n "$PROJECT" ]] && sed_args+=(-e "s|{PROJECT}|$(_sed_escape "$PROJECT")|g")
+
+  if [[ ${#sed_args[@]} -gt 0 ]]; then
+    sed "${sed_args[@]}" "$TEMPLATE" > "$TMP_RENDERED"
+  else
+    cp "$TEMPLATE" "$TMP_RENDERED"
+  fi
+
+  INSTALL_POLICY="$POLICY" install_file "$TMP_RENDERED" "$TARGET" "gh-workflow.md"
+
+  IMPORT_LINE="@.claude/gh-workflow.md"
+  if [[ -f "$CLAUDE_MD" ]]; then
+    if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
+      echo "✓ CLAUDE.md already references gh-workflow.md"
+    else
+      printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
+      echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
+    fi
+  else
+    printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
+    echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+  fi
 fi
 
 # Project-level slash commands → <project>/.claude/commands/
-COMMANDS_DIR="$REPO_ROOT/.claude/commands"
-COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
-mkdir -p "$COMMANDS_DIR"
-for cmd in "$COMMANDS_SRC"/*.md; do
-  cmd_name=$(basename "$cmd")
-  cmd_target="$COMMANDS_DIR/$cmd_name"
-  if [[ ( -e "$cmd_target" || -L "$cmd_target" ) && "$FORCE" != true ]]; then
-    echo "⚠ $cmd_target already exists — skipping (use --force to overwrite)"
-  else
-    rm -f "$cmd_target"
-    cp "$cmd" "$cmd_target"
-    echo "✓ Slash command: /$(basename "$cmd_name" .md)"
-  fi
-done
+if [[ "$SCOPE" != "workflow" ]]; then
+  COMMANDS_DIR="$REPO_ROOT/.claude/commands"
+  COMMANDS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/commands
+  mkdir -p "$COMMANDS_DIR"
+  for cmd in "$COMMANDS_SRC"/*.md; do
+    cmd_name=$(basename "$cmd")
+    cmd_target="$COMMANDS_DIR/$cmd_name"
+    INSTALL_POLICY="$POLICY" install_file "$cmd" "$cmd_target" "/$(basename "$cmd_name" .md)"
+  done
+fi
 
 echo ""
 echo "Done. Open .claude/gh-workflow.md to fill in any remaining {placeholders}."

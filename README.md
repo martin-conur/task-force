@@ -88,6 +88,39 @@ task-init claude-gh
 
 This writes a workflow config (e.g. `.claude/gh-workflow.md` or `.kiro/steering/notion-workflow.md`) so your agents know which board to read from. After that, `task-work` and `task-done` **auto-detect** the right combo from that file — see [How the dispatchers work](#how-the-dispatchers-work).
 
+#### Re-running `task-init`
+
+`task-init` is safe to re-run any time you want to pull in new template scaffolding or restore deleted files. Two orthogonal axes of control:
+
+**Scope** — which categories of files to touch:
+
+| Flag         | Files touched                                           |
+|--------------|---------------------------------------------------------|
+| _(none)_     | workflow doc + slash commands / agents + tasks/ for local |
+| `--workflow` | workflow doc only (+ CLAUDE.md import for Claude loadouts) |
+| `--commands` | slash commands / agents only                            |
+
+**Overwrite policy** — what to do when a target file already exists:
+
+| Flag        | Existing file behavior                                                                  |
+|-------------|-----------------------------------------------------------------------------------------|
+| _(TTY)_     | per-file prompt: `[k]eep / [o]verwrite / [d]iff` (default = keep)                       |
+| _(non-TTY)_ | silently keep (exit 0) — script-safe                                                    |
+| `--force`   | overwrite everything in scope, no prompt                                                |
+| `--restore` | fill missing files only; never touch anything that exists                               |
+
+`--force` and `--restore` are mutually exclusive.
+
+When the workflow doc is re-rendered, previously-filled `{OWNER}` / `{REPO}` / `{PROJECT}` / `{SITE}` / `{KEY}` / `{BOARD}` values are **carried forward automatically**. Precedence: this-run flag → existing-file value → `{PLACEHOLDER}`. So `task-init claude-gh --force` after you've already filled in your IDs does the right thing (refreshes the template, keeps your values).
+
+Common use cases:
+
+```bash
+task-init claude-gh --restore                # restore a deleted slash command, leave everything else alone
+task-init claude-gh --commands --force       # refresh slash commands to current templates
+task-init claude-gh --workflow               # pull in template updates, keep current scope's other files
+```
+
 ### 4. Fly
 
 Open Zellij, start your AI tool, and brief the PM:
@@ -170,7 +203,7 @@ cd ~/my-project
 task-init claude-jira --site https://acme.atlassian.net --key PROJ --board "My Board"
 ```
 
-This writes `.claude/jira-workflow.md` and references it from `CLAUDE.md` so every session loads it. Pass `--force` to overwrite an existing config.
+This writes `.claude/jira-workflow.md` and references it from `CLAUDE.md` so every session loads it. See [Re-running `task-init`](#re-running-task-init) for the `--force` / `--restore` / `--workflow` / `--commands` flags.
 
 | Role | How to invoke |
 |------|---------------|

@@ -2,15 +2,29 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: task-init [--force] [--help-ids]"
-  echo ""
-  echo "Set up the current repo for the kiro-notion workflow:"
-  echo "  - Create .kiro/steering/notion-workflow.md from the bundled template"
-  echo "  - Install pm, planner, worker agents into .kiro/agents/"
-  echo ""
-  echo "Options:"
-  echo "  --force      Overwrite .kiro/steering/notion-workflow.md and project-level agents if present"
-  echo "  --help-ids   Print guide for finding Notion database IDs (no setup)"
+  cat <<'EOF'
+Usage: task-init [--workflow | --commands] [--force | --restore] [--help-ids]
+
+Set up the current repo for the kiro-notion workflow:
+  - Create .kiro/steering/notion-workflow.md from the bundled template
+  - Install pm, planner, worker agents into .kiro/agents/
+
+Scope (which categories of files to touch):
+  --workflow       Workflow doc only
+  --commands       Agents only
+  (none)           All of the above (default)
+
+Overwrite policy when a target file already exists:
+  --force          Overwrite all targets (no prompt)
+  --restore        Only fill missing targets; never touch existing files
+  (TTY default)    Per-file prompt: [k]eep / [o]verwrite / [d]iff
+  (non-TTY)        Silently keep existing files (script-safe)
+
+--force and --restore are mutually exclusive.
+
+Other:
+  --help-ids       Print guide for finding Notion database IDs (no setup)
+EOF
   exit 1
 }
 
@@ -42,11 +56,16 @@ GUIDE
 }
 
 FORCE=false
+RESTORE=false
+SCOPE="all"
 HELP_IDS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --force) FORCE=true; shift ;;
+    --force)    FORCE=true; shift ;;
+    --restore)  RESTORE=true; shift ;;
+    --workflow) SCOPE="workflow"; shift ;;
+    --commands) SCOPE="commands"; shift ;;
     --help-ids) HELP_IDS=true; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
@@ -58,6 +77,21 @@ if [[ "$HELP_IDS" == true ]]; then
   exit 0
 fi
 
+if [[ "$FORCE" == true && "$RESTORE" == true ]]; then
+  echo "Error: --force and --restore are mutually exclusive" >&2
+  exit 2
+fi
+
+if [[ "$FORCE" == true ]]; then
+  POLICY="force"
+elif [[ "$RESTORE" == true ]]; then
+  POLICY="restore"
+elif [[ -t 0 ]]; then
+  POLICY="prompt"
+else
+  POLICY="keep"
+fi
+
 # Resolve script path through symlinks
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -67,6 +101,9 @@ while [ -L "$src" ]; do
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
 TEMPLATE="$SCRIPT_DIR/../steering/notion-workflow.example.md"
+LIB_DIR="$SCRIPT_DIR/../../lib"
+# shellcheck source=lib/install-file.sh
+. "$LIB_DIR/install-file.sh"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -79,28 +116,19 @@ TARGET="$REPO_ROOT/.kiro/steering/notion-workflow.md"
 
 mkdir -p "$REPO_ROOT/.kiro/steering"
 
-if [[ -f "$TARGET" && "$FORCE" != true ]]; then
-  echo "$TARGET already exists. Use --force to overwrite."
-  exit 1
+if [[ "$SCOPE" != "commands" ]]; then
+  INSTALL_POLICY="$POLICY" install_file "$TEMPLATE" "$TARGET" "notion-workflow.md"
 fi
 
-cp "$TEMPLATE" "$TARGET"
-echo "✓ Wrote $TARGET"
-
-# Project-level agents → <project>/.kiro/agents/
-AGENTS_DIR="$REPO_ROOT/.kiro/agents"
-AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
-mkdir -p "$AGENTS_DIR"
-for agent in "$AGENTS_SRC"/*.json; do
-  agent_name=$(basename "$agent")
-  agent_target="$AGENTS_DIR/$agent_name"
-  if [[ ( -e "$agent_target" || -L "$agent_target" ) && "$FORCE" != true ]]; then
-    echo "⚠ $agent_target already exists — skipping (use --force to overwrite)"
-  else
-    rm -f "$agent_target"
-    cp "$agent" "$agent_target"
-    echo "✓ Agent: $agent_name"
-  fi
-done
+if [[ "$SCOPE" != "workflow" ]]; then
+  AGENTS_DIR="$REPO_ROOT/.kiro/agents"
+  AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
+  mkdir -p "$AGENTS_DIR"
+  for agent in "$AGENTS_SRC"/*.json; do
+    agent_name=$(basename "$agent")
+    agent_target="$AGENTS_DIR/$agent_name"
+    INSTALL_POLICY="$POLICY" install_file "$agent" "$agent_target" "agent: $agent_name"
+  done
+fi
 
 print_ids_guide

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`task-init --restore`:** fill in only the files that are missing; never touch anything that already exists. Lets you restore a deleted slash command / agent without re-typing your board IDs. (#37)
+- **`task-init --workflow` / `--commands`:** scope the run to just the workflow doc, or just the slash commands / agents. Compose with `--force` / `--restore` for surgical refreshes. (#37)
+- **Per-file `[k]eep / [o]verwrite / [d]iff` prompt:** in a TTY, when a target already exists `task-init` prompts per file (default = keep). Old behavior was hard-fail with "Use --force." (#37)
+- **Placeholder preservation:** when re-rendering the workflow doc, previously-filled `{OWNER}` / `{REPO}` / `{PROJECT}` / `{SITE}` / `{KEY}` / `{BOARD}` values are carried forward automatically. Precedence: this-run flag → existing-file value → leave the `{PLACEHOLDER}` token. (#37)
+- **Shared helpers:** `lib/install-file.sh` (exists / prompt / diff / overwrite / keep decision) and `lib/preserve-placeholders.sh` (generic placeholder extractor), with unit tests in `tests/install_file.bats` and `tests/preserve_placeholders.bats`. (#37)
+
+### Changed
+
+- **`task-init` no longer hard-fails when target files exist.** In a TTY it now prompts per file (`[k]eep / [o]verwrite / [d]iff`, default = keep). In a non-TTY context it silently skips existing files and exits 0. `--force` (unchanged behavior) remains for unconditional overwrite. (#37)
+
 ### Fixed
 
 - Installer prompts: arrow keys (↑/↓/←/→) now provide readline navigation instead of echoing raw escape sequences (`^[[A`). Switched `read -rp` → `read -erp` in `install.sh`, `task-init`, and `*/bin/task-init`. (#23)

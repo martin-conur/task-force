@@ -67,23 +67,70 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# --force and overwrite guard
+# Overwrite policy: --force / --restore / default (TTY prompt / non-TTY keep)
 # ---------------------------------------------------------------------------
 
-@test "fails if .claude/notion-workflow.md already exists (no --force)" {
+@test "non-TTY default: existing workflow doc is kept silently (exit 0)" {
   run "$CLAUDE_NOTION_TASK_INIT"
   assert_success
+  echo "USER EDIT" >> "$TARGET_DIR/.claude/notion-workflow.md"
   run "$CLAUDE_NOTION_TASK_INIT"
-  assert_failure
-  assert_output --partial "already exists"
+  assert_success
+  assert_output --partial "kept"
+  run cat "$TARGET_DIR/.claude/notion-workflow.md"
+  assert_output --partial "USER EDIT"
 }
 
 @test "--force overwrites existing notion-workflow.md" {
   run "$CLAUDE_NOTION_TASK_INIT"
   assert_success
+  echo "USER EDIT" >> "$TARGET_DIR/.claude/notion-workflow.md"
   run "$CLAUDE_NOTION_TASK_INIT" --force
   assert_success
+  run cat "$TARGET_DIR/.claude/notion-workflow.md"
+  refute_output --partial "USER EDIT"
+}
+
+@test "--force + --restore is rejected" {
+  run "$CLAUDE_NOTION_TASK_INIT" --force --restore
+  assert_failure
+  assert_output --partial "mutually exclusive"
+}
+
+# ---------------------------------------------------------------------------
+# --restore: fill missing only
+# ---------------------------------------------------------------------------
+
+@test "--restore restores a deleted slash command without touching workflow" {
+  run "$CLAUDE_NOTION_TASK_INIT"
+  assert_success
+  cp "$TARGET_DIR/.claude/notion-workflow.md" "$BATS_TEST_TMPDIR/workflow.before"
+  rm "$TARGET_DIR/.claude/commands/pm.md"
+  run "$CLAUDE_NOTION_TASK_INIT" --restore
+  assert_success
+  assert [ -f "$TARGET_DIR/.claude/commands/pm.md" ]
+  run cmp -s "$BATS_TEST_TMPDIR/workflow.before" "$TARGET_DIR/.claude/notion-workflow.md"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# --workflow / --commands scope flags
+# ---------------------------------------------------------------------------
+
+@test "--commands installs slash commands without writing workflow doc" {
+  run "$CLAUDE_NOTION_TASK_INIT" --commands
+  assert_success
+  assert [ ! -f "$TARGET_DIR/.claude/notion-workflow.md" ]
+  for cmd in pm planner worker; do
+    assert [ -f "$TARGET_DIR/.claude/commands/$cmd.md" ]
+  done
+}
+
+@test "--workflow installs workflow doc without writing slash commands" {
+  run "$CLAUDE_NOTION_TASK_INIT" --workflow
+  assert_success
   assert [ -f "$TARGET_DIR/.claude/notion-workflow.md" ]
+  assert [ ! -d "$TARGET_DIR/.claude/commands" ]
 }
 
 # ---------------------------------------------------------------------------

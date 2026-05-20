@@ -259,3 +259,33 @@ teardown() {
   assert_failure
   assert_output --partial "not in a git repo"
 }
+
+# ---------------------------------------------------------------------------
+# radio hooks: .kiro/hooks/*.json
+# ---------------------------------------------------------------------------
+
+@test "writes 3 radio hook files into .kiro/hooks/" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  for name in radio-register radio-busy radio-ready; do
+    assert [ -f "$TARGET_DIR/.kiro/hooks/${name}.json" ]
+  done
+}
+
+@test "radio-register hook embeds the loadout name and uses agentSpawn" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run cat "$TARGET_DIR/.kiro/hooks/radio-register.json"
+  assert_output --partial "agentSpawn"
+  assert_output --partial "--loadout kiro-gh"
+  assert_output --partial "--agent kiro"
+}
+
+@test "radio-ready hook calls 'radio ready && radio check' on agentStop" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run cat "$TARGET_DIR/.kiro/hooks/radio-ready.json"
+  assert_output --partial "agentStop"
+  assert_output --partial "radio ready"
+  assert_output --partial "radio check"
+}

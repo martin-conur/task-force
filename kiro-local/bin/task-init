@@ -198,5 +198,42 @@ EOF
   fi
 fi
 
+# -------- radio hooks (one shell-command hook per agent lifecycle event) ----
+# Writes 3 hook files into <repo>/.kiro/hooks/ so the worker / PM agent
+# self-registers with the radio mailbox on startup and signals busy/idle around
+# every user prompt. Existing hook files starting with "radio-" are overwritten
+# only with --force (so user-customized hooks are preserved).
+_radio_install_hooks() {
+  local hooks_dir="$REPO_ROOT/.kiro/hooks"
+  local loadout="kiro-local"
+  mkdir -p "$hooks_dir"
+
+  _write_hook() {
+    local name="$1" trigger="$2" command="$3"
+    local target="$hooks_dir/${name}.json"
+    if [[ -f "$target" && "$FORCE" != true ]]; then
+      echo "⚠ $target already exists — skipping (use --force to overwrite)"
+      return
+    fi
+    cat >"$target" <<EOF
+{
+  "version": "1.0",
+  "name": "${name}",
+  "trigger": {"type": "${trigger}"},
+  "action": {"type": "shellCommand", "command": "${command}"},
+  "enabled": true
+}
+EOF
+    echo "✓ Hook: $name → ${trigger}"
+  }
+
+  _write_hook "radio-register" "agentSpawn" \
+    "radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${loadout}"
+  _write_hook "radio-busy"     "userPromptSubmit" "radio busy"
+  _write_hook "radio-ready"    "agentStop"        "radio ready && radio check"
+}
+
+_radio_install_hooks
+
 echo ""
 echo "Done. Start Kiro and launch the PM agent: kiro-cli chat --agent pm"

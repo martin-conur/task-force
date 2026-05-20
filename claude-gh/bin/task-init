@@ -221,5 +221,49 @@ if [[ "$SCOPE" != "workflow" ]]; then
   done
 fi
 
+# -------- radio hooks merge (jq-based, idempotent, non-destructive) ---------
+# Adds 3 hook entries to <repo>/.claude/settings.json so the worker / PM agent
+# self-registers with the radio mailbox on startup and signals busy/idle around
+# every user prompt. Pre-existing hooks (e.g. user's own Stop hook) are
+# preserved; entries are added only if no existing hook command starts with
+# "radio " (so re-running task-init is idempotent).
+_radio_install_hooks() {
+  local settings_file="$REPO_ROOT/.claude/settings.json"
+  local loadout="claude-gh"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required to merge radio hooks into $settings_file" >&2
+    echo "       Install jq (https://jqlang.github.io/jq/) and re-run task-init." >&2
+    exit 1
+  fi
+
+  local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout $loadout"
+  local busy_cmd="radio busy"
+  local stop_cmd="radio ready && radio check"
+
+  mkdir -p "$(dirname "$settings_file")"
+  [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
+
+  local tmp="${settings_file}.tmp.$$"
+  jq \
+    --arg sess "$register_cmd" \
+    --arg ups  "$busy_cmd" \
+    --arg stop "$stop_cmd" \
+    '
+    def add_radio(arr; cmd):
+      if (arr // []) | any((.hooks // []) | any((.command // "") | startswith("radio "))) then arr
+      else (arr // []) + [{hooks: [{type: "command", command: cmd}]}]
+      end;
+    .hooks //= {}
+    | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
+    | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
+    | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
+    ' "$settings_file" >"$tmp"
+  mv -f "$tmp" "$settings_file"
+  echo "✓ Merged radio hooks into $settings_file"
+}
+
+_radio_install_hooks
+
 echo ""
 echo "Done. Open .claude/gh-workflow.md to fill in any remaining {placeholders}."

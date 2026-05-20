@@ -74,3 +74,20 @@ claude mcp list
 ```
 
 You should see an `atlassian` entry. If not, see Atlassian's documentation for the Remote MCP server.
+### PM ↔ worker messaging (radio)
+
+When you finish your task and have nothing pending, the `radio ready` step will
+run automatically via your `Stop` hook — you don't need to invoke it manually.
+If you ever want to nudge the PM (or a worker) outside the normal flow, run:
+
+```bash
+radio send --to <role> --intent <kind> [--pr N] [--issue N]
+```
+
+Intents are free-form labels (`review-requested`, `re-review-requested`,
+`approved`, etc.); the body comes from `--body` or stdin. PR review *content*
+still lives in `gh pr comment`s — `radio` only carries the routing ping.
+
+To launch the PM agent in this repo, run `task-pm` from any tab — it renames
+the current zellij tab to `pm`, registers via the `SessionStart` hook, and
+starts the PM agent in-place.

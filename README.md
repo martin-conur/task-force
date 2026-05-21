@@ -354,6 +354,129 @@ Spawn workers with `task-work tasks/NNN-slug.md`. Same Kiro shortcuts as `kiro-n
 
 ---
 
+## PM ↔ worker messaging (radio)
+
+Once you've installed a Claude loadout, `task-init` auto-installs **radio** — a low-latency mailbox CLI under `~/.task-force/radio/` that lets the PM agent and worker agents ping each other directly. No human courier, seconds-level wake-up when the recipient tab is idle, queue-and-defer when busy. The `kiro-*` loadouts install the equivalent hooks under `.kiro/hooks/` instead.
+
+### Command surface
+
+| Command | What it does |
+|---------|--------------|
+| `radio send --to <role> --intent <kind> [--pr N] [--issue N] [--body TEXT]` | Send a message (e.g. `--to pm --intent review-requested --pr 42`); body can come from stdin |
+| `radio check`                       | List unread messages addressed to this role |
+| `radio read <id>`                   | Print one message |
+| `radio ack <id>`                    | Mark it acknowledged so it stops showing up in `check` |
+| `radio register` / `radio unregister` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`) |
+| `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
+| `radio orphans`                     | List session files whose heartbeat is >1h stale |
+
+Intents are free-form labels — `review-requested`, `re-review-requested`, `changes-requested`, `approved`, etc. PR review *content* still lives in `gh pr comment` / `gh pr review`; radio only carries the routing ping.
+
+### How wake-up works
+
+`radio send` reads the recipient's session file. If `STATE=idle`, it focuses the recipient's zellij tab via `zellij action go-to-tab-name` and on the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
+
+Role names are addressable strings, not free-form: the PM is `pm`, and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`.
+
+### The hooks that make it work
+
+`task-init claude-*` writes these into your project's `.claude/settings.json` automatically:
+
+| Hook              | Command                       | Why                                            |
+|-------------------|-------------------------------|------------------------------------------------|
+| `SessionStart`    | `radio register`              | Claims the role's session file for this tab    |
+| `UserPromptSubmit`| `radio busy`                  | Marks the session busy while a turn is running |
+| `Stop`            | `radio ready && radio check`  | Marks idle and surfaces any queued messages    |
+
+For the kiro loadouts the same logic lives in `.kiro/hooks/` and runs off Kiro's equivalent triggers.
+
+### Idle workers don't auto-act
+
+A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). This is deliberate: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body.
+
+### Cleanup
+
+If a tab dies unexpectedly (or Claude resumes without re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session older than an hour. Safe to `rm ~/.task-force/radio/sessions/<role>.info` or just leave it — the next legitimate `radio register` overwrites it.
+
+---
+
+## The normal workflow
+
+Here's what an end-to-end PR cycle looks like once everything is wired up:
+
+**1. Spin up the PM.** In any zellij tab:
+
+```bash
+task-pm
+```
+
+Renames the current tab to `pm`, registers via the `SessionStart` hook, and starts the PM agent in-place.
+
+**2. PM grooms the backlog and picks an issue.** From the PM tab:
+
+```text
+/pm show me the backlog          # or: gh issue list --state open
+/pm let's do issue 42
+```
+
+PM picks one and spawns a worker:
+
+```bash
+task-work issue-42 https://github.com/<owner>/<repo>/issues/42 --auto
+```
+
+This creates a worktree, opens a new zellij tab, and launches the worker agent (`--auto` runs it under auto-approve since the issue body is self-contained).
+
+**3. Worker implements.** In the worker tab the agent reads the spec, edits files, runs tests, commits with the issue title as a prefix, and opens the PR:
+
+```bash
+gh pr create --base main --head task/issue-42 --fill
+```
+
+**4. Worker pings PM.** Once the worker is done it's idle, so the `Stop` hook fires `radio ready`. The worker can nudge the PM directly:
+
+```bash
+radio send --to pm --intent review-requested --pr 42
+```
+
+PM's zellij tab gets focused; on its next turn end the `Stop` hook's `radio check` surfaces the ping.
+
+**5. PM reviews the PR.** From the PM tab:
+
+```bash
+gh pr view 42
+gh pr diff 42
+gh pr review 42 --comment --body "…"   # or: gh pr comment 42 --body "…"
+```
+
+**6. Round-trip until merge.** PM requests changes (worker roles are `worker-<reponame>-<slug>`; see `ls ~/.task-force/radio/sessions/`):
+
+```bash
+radio send --to worker-task-force-issue-42 --intent changes-requested --pr 42
+```
+
+The worker tab is focused, picks up the comments, pushes fixes, and pings back:
+
+```bash
+radio send --to pm --intent re-review-requested --pr 42
+```
+
+**7. Merge + cleanup.** PM merges:
+
+```bash
+gh pr merge 42 --squash --delete-branch
+```
+
+In the worker tab:
+
+```bash
+task-done --remove-worktree
+```
+
+That removes the worktree and closes the zellij tab. Done.
+
+---
+
 ## `task-work` flags
 
 Common to every combo:

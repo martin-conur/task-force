@@ -235,6 +235,7 @@ teardown() {
   assert_output --partial "mcp__notion__notion-search"
   assert_output --partial "mcp__notion__notion-fetch"
   assert_output --partial "mcp__notion__notion-query-data-sources"
+  assert_output --partial "Bash(radio *)"
   # Writes must NOT be auto-allowed.
   refute_output --partial "notion-create-pages"
   refute_output --partial "notion-update-page"

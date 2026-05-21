@@ -223,10 +223,13 @@ fi
 # Pre-existing user hooks (e.g. ./scripts/pre-tool-lint.sh on Stop) are
 # preserved.
 #
-# No permissions.allow seeding: claude-local has no external tracker. PM /
-# planner / worker reads are filesystem operations covered by Claude Code's
-# built-in Read / Grep / Glob tools (which don't need allow-list entries).
-# The PM's only shell-out is `task-board`, locally installed and routine.
+# No tracker-related permissions.allow seeding: claude-local has no external
+# tracker. PM / planner / worker reads are filesystem operations covered by
+# Claude Code's built-in Read / Grep / Glob tools (which don't need allow-list
+# entries). The PM's only shell-out is `task-board`, locally installed and
+# routine. The one exception is `Bash(radio *)`: the hooks installed here drive
+# local-only IPC with no external blast radius, so agent-initiated radio calls
+# are auto-allowed to keep PM↔worker coordination from prompting.
 _radio_install_hooks() {
   local settings_file="$REPO_ROOT/.claude/settings.json"
   local loadout="claude-local"
@@ -258,6 +261,13 @@ _radio_install_hooks() {
     | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
     | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
+    | .permissions //= {}
+    | .permissions.allow //= []
+    | .permissions.allow = (
+        .permissions.allow + [
+          "Bash(radio *)"
+        ] | unique
+      )
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
   echo "✓ Merged radio hooks into $settings_file"

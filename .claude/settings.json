@@ -46,7 +46,8 @@
       "Bash(gh project list *)",
       "Bash(gh project view *)",
       "Bash(gh repo view *)",
-      "Bash(gh search issues *)"
+      "Bash(gh search issues *)",
+      "Bash(radio *)"
     ]
   }
 }

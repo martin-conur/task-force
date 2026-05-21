@@ -254,7 +254,8 @@ _radio_install_hooks() {
           "mcp__atlassian__getJiraProjectIssueTypesMetadata",
           "mcp__atlassian__getIssueLinkTypes",
           "mcp__atlassian__lookupJiraAccountId",
-          "mcp__atlassian__atlassianUserInfo"
+          "mcp__atlassian__atlassianUserInfo",
+          "Bash(radio *)"
         ] | unique
       )
     ' "$settings_file" >"$tmp"

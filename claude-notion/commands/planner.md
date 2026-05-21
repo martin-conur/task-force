@@ -12,6 +12,10 @@ Workflow:
 2. Explore the codebase to understand the relevant architecture (read files, search symbols, grep patterns).
 3. Design the solution.
 4. Write the implementation spec into the Notion task page content.
+5. Hand off to PM via radio — this is the canonical handoff. Use the task slug (or short identifier) as the `--issue` value:
+   ```bash
+   radio send --to pm --intent spec-ready --issue <task-slug> --body "spec written for <task name>, ready to dispatch"
+   ```
 
 Spec template (use when applicable, skip sections that are N/A):
 

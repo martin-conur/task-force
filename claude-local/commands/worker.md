@@ -48,9 +48,11 @@ Workflow:
 
 7. **Commit** with the task title as prefix: `<Task title>: <short description>`.
 
-8. **Bump status to `done`** in the task file's frontmatter (same sed
-   pattern). Regenerate the board (`task-board`) and commit with a message
-   like `<Task title>: mark done`.
+8. **Bump status to `in-review`** in the task file's frontmatter (same sed
+   pattern, value `in-review`). If your project's `local-workflow.md` doesn't
+   define an in-review status, leave it at `in-progress` — do NOT mark `done`
+   yet. Regenerate the board (`task-board`) and commit with a message like
+   `<Task title>: ready for review`.
 
 9. **Open a pull request.**
    - Find the base branch:
@@ -62,11 +64,25 @@ Workflow:
      ```
    - Run: `gh pr create --base $BASE --head $(git rev-parse --abbrev-ref HEAD) --fill`
      This opens an editor so the user can review and submit the PR.
-   - After the PR is created, capture its URL and write it into the task
-     file's frontmatter `pr:` field (same sed pattern, key `pr`). Commit and
-     push with a message like `<Task title>: link PR`.
-   - Then tell the user: run `task-done --remove-worktree` to clean up the
-     worktree and close this tab.
+   - Capture the PR URL and write it into the task file's frontmatter `pr:`
+     field (same sed pattern, key `pr`). Commit and push with a message like
+     `<Task title>: link PR`.
+
+10. **Hand off to PM via radio** — this is the canonical handoff, not a
+    message to the user:
+    ```bash
+    radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"
+    ```
+
+11. **Idle** — do NOT run `task-done` yet. Wait for one of:
+    - **`changes-requested`** from PM: read the PR comments (`gh pr view <N> --comments`),
+      push more commits, then `radio send --to pm --intent re-review-requested --pr <N>`
+      and idle again.
+    - **`approved-and-merged`** from PM (or the user explicitly says
+      "cleanup"): bump status to `done` in the task file's frontmatter
+      (same sed pattern), regenerate the board, commit with a message like
+      `<Task title>: mark done`, then run `task-done --remove-worktree` to
+      clean up the worktree and close this tab.
 
 Always run tests after changes. If tests fail, fix before committing.
 Stay focused on the spec — don't add features beyond what's specified.

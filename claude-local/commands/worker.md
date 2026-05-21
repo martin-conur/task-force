@@ -48,13 +48,8 @@ Workflow:
 
 7. **Commit** with the task title as prefix: `<Task title>: <short description>`.
 
-8. **Bump status to `in-review`** in the task file's frontmatter (same sed
-   pattern, value `in-review`). If your project's `local-workflow.md` doesn't
-   define an in-review status, leave it at `in-progress` — do NOT mark `done`
-   yet. Regenerate the board (`task-board`) and commit with a message like
-   `<Task title>: ready for review`.
-
-9. **Open a pull request.**
+8. **Open a pull request first** (before bumping status), so a failed
+   `gh pr create` doesn't strand the task at `in-review` with no PR.
    - Find the base branch:
      ```bash
      WSLUG=$(git rev-parse --abbrev-ref HEAD | sed 's:task/::')
@@ -64,9 +59,13 @@ Workflow:
      ```
    - Run: `gh pr create --base $BASE --head $(git rev-parse --abbrev-ref HEAD) --fill`
      This opens an editor so the user can review and submit the PR.
-   - Capture the PR URL and write it into the task file's frontmatter `pr:`
-     field (same sed pattern, key `pr`). Commit and push with a message like
-     `<Task title>: link PR`.
+
+9. **Bump status to `in-review`** in the task file's frontmatter (same sed
+   pattern, value `in-review`) and write the PR URL into the `pr:` field.
+   If your project's `local-workflow.md` doesn't define an in-review status,
+   leave it at `in-progress` — do NOT mark `done` yet. Regenerate the board
+   (`task-board`) and commit with a message like
+   `<Task title>: ready for review (link PR)`.
 
 10. **Hand off to PM via radio** — this is the canonical handoff, not a
     message to the user:

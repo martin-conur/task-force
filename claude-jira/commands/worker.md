@@ -15,8 +15,7 @@ Workflow:
 5. Write tests for new features or bug fixes.
 6. Run tests to verify.
 7. Commit with the issue key as a prefix, e.g. `PROJ-123: <short description>`.
-8. Transition the issue to the **Status when in review** value from `.claude/jira-workflow.md` (typically `In Review`, same lookup pattern as step 3). If no matching transition is available, leave the issue in its current status — do NOT transition to Done yet.
-9. Create a pull request:
+8. Create a pull request first (before transitioning the issue), so a failed `gh pr create` doesn't strand the issue in "In Review" with no PR:
    - Find the base branch by running:
      ```bash
      WSLUG=$(git rev-parse --abbrev-ref HEAD | sed 's:task/::')
@@ -26,6 +25,7 @@ Workflow:
      ```
    - Run: `gh pr create --base $BASE --head $(git rev-parse --abbrev-ref HEAD) --fill`
      This opens an editor so the user can review and submit the PR.
+9. Transition the issue to the **Status when in review** value from `.claude/jira-workflow.md` (typically `In Review`, same lookup pattern as step 3). If no matching transition is available, leave the issue in its current status — do NOT transition to Done yet.
 10. Hand off to PM via radio — this is the canonical handoff, not a message to the user:
     ```bash
     radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"

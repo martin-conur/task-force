@@ -15,8 +15,7 @@ Workflow:
 5. Write tests for new features or bug fixes.
 6. Run tests to verify.
 7. Commit with the task name as a prefix: `<Task name>: <short description>`.
-8. Update the task's Status property in Notion to the **Status when in review** value from `.claude/notion-workflow.md` (typically `In Review`). If the Notion database has no In Review state, leave it at the **Status when starting work** value — do NOT set Done yet.
-9. Create a pull request:
+8. Create a pull request first (before bumping Status), so a failed `gh pr create` doesn't strand the task in "In Review" with no PR:
    - Find the base branch by running:
      ```bash
      WSLUG=$(git rev-parse --abbrev-ref HEAD | sed 's:task/::')
@@ -26,6 +25,7 @@ Workflow:
      ```
    - Run: `gh pr create --base $BASE --head $(git rev-parse --abbrev-ref HEAD) --fill`
      This opens an editor so the user can review and submit the PR.
+9. Update the task's Status property in Notion to the **Status when in review** value from `.claude/notion-workflow.md` (typically `In Review`). If the Notion database has no In Review state, leave it at the **Status when starting work** value — do NOT set Done yet.
 10. Hand off to PM via radio — this is the canonical handoff, not a message to the user:
     ```bash
     radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"

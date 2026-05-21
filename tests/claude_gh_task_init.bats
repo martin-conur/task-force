@@ -415,6 +415,7 @@ EOF
   assert_output --partial "Bash(gh project view *)"
   assert_output --partial "Bash(gh search issues *)"
   assert_output --partial "Bash(gh pr view *)"
+  assert_output --partial "Bash(radio *)"
   # Mutations must NOT be auto-allowed.
   refute_output --partial "gh issue edit"
   refute_output --partial "gh pr merge"

@@ -235,6 +235,45 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Radio allow-list seeding into .claude/settings.json
+# ---------------------------------------------------------------------------
+
+@test "seeds Bash(radio *) into permissions.allow" {
+  run "$CLAUDE_LOCAL_TASK_INIT"
+  assert_success
+  run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "Bash(radio *)"
+}
+
+@test "idempotent: re-run does not duplicate the radio allow-list entry" {
+  run "$CLAUDE_LOCAL_TASK_INIT"
+  assert_success
+  local before
+  before=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  run "$CLAUDE_LOCAL_TASK_INIT" --force
+  assert_success
+  local after
+  after=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  assert_equal "$before" "$after"
+}
+
+@test "preserves a pre-existing user permissions.allow entry" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": ["Bash(custom *)"]
+  }
+}
+EOF
+  run "$CLAUDE_LOCAL_TASK_INIT"
+  assert_success
+  run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "Bash(custom *)"
+  assert_output --partial "Bash(radio *)"
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

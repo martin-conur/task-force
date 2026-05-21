@@ -251,6 +251,7 @@ teardown() {
   assert_output --partial "mcp__atlassian__getJiraIssue"
   assert_output --partial "mcp__atlassian__searchJiraIssuesUsingJql"
   assert_output --partial "mcp__atlassian__getVisibleJiraProjects"
+  assert_output --partial "Bash(radio *)"
   # Writes must NOT be auto-allowed.
   refute_output --partial "createJiraIssue"
   refute_output --partial "editJiraIssue"

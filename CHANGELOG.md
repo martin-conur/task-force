@@ -6,8 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-21
+
+Headline: **PM ↔ worker radio messaging.** A persistent mailbox CLI plus a canonical 5-row handoff protocol baked into every role's prompt. Workers now defer `Status=Done` and worktree cleanup until the PM signals `approved-and-merged`, so the whole spec → review → merge loop runs through `radio send`.
+
 ### Added
 
+- **PM ↔ worker messaging (radio):** new `radio` mailbox CLI (`send` / `check` / `read` / `ack` / `register` / `ready` / `busy` / `unregister` / `orphans`) plus `task-pm` for in-place PM-tab takeover. Hook-driven session registration is auto-installed by every `task-init` (claude-\* via `.claude/settings.json` jq merge, kiro-\* via `.kiro/hooks/`). Idle recipients are woken via `zellij action go-to-tab-name`; busy recipients queue-and-defer. (#63)
+- **Canonical radio handoff protocol** baked into every role's prompt — 5 transitions: `spec-ready`, `review-requested`, `re-review-requested`, `changes-requested`, `approved-and-merged`. Worker now delays `Status=Done` and `task-done --remove-worktree` until PM signals `approved-and-merged`. (#75, #82)
+- **`task-init` seeds `Bash(radio *)`** into `.claude/settings.json` `permissions.allow` across all claude loadouts so radio calls don't trigger permission prompts. (#83)
 - **`task-init --restore`:** fill in only the files that are missing; never touch anything that already exists. Lets you restore a deleted slash command / agent without re-typing your board IDs. (#37)
 - **`task-init --workflow` / `--commands`:** scope the run to just the workflow doc, or just the slash commands / agents. Compose with `--force` / `--restore` for surgical refreshes. (#37)
 - **Per-file `[k]eep / [o]verwrite / [d]iff` prompt:** in a TTY, when a target already exists `task-init` prompts per file (default = keep). Old behavior was hard-fail with "Use --force." (#37)
@@ -23,6 +30,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Installer prompts: arrow keys (↑/↓/←/→) now provide readline navigation instead of echoing raw escape sequences (`^[[A`). Switched `read -rp` → `read -erp` in `install.sh`, `task-init`, and `*/bin/task-init`. (#23)
+- **task-init:** silenced ShellCheck SC2016 false-positive on the `_preserve_placeholders` regex backticks. `main` had been red on this check since #37. (#71)
+
+### Docs
+
+- README now documents the radio messaging channel and the normal PM/worker workflow. (#79)
+- README synced to the canonical handoff model: 5-row handoff table, 8-step walkthrough with `Status=In Review` beat and radio-driven cleanup. (#87)
+
+### Internal
+
+- **CI:** ShellCheck / Bats / Drift status checks are now required on `main` branch protection. (#73)
 
 ## [0.1.0] — 2026-05-19
 
@@ -58,5 +75,6 @@ First feature release since `v0.0.1`. Highlights: two new local-tracking loadout
 - Test temp-dir cleanups moved to bats `teardown()` so they fire even on assertion failure (#64)
 - Bats suite at **460 tests** across 7 loadouts × 2 OS
 
-[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/martin-conur/task-force/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/martin-conur/task-force/compare/v0.0.1...v0.1.0

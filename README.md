@@ -374,7 +374,9 @@ Intents are free-form labels — `review-requested`, `re-review-requested`, `cha
 
 ### How wake-up works
 
-`radio send` reads the recipient's session file. If `STATE=idle`, it focuses the recipient's zellij tab via `zellij action go-to-tab-name` and the recipient's `Stop` hook (`radio ready && radio check`) surfaces the new message on its next prompt. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
+`radio send` reads the recipient's session file. If `STATE=idle`, it focuses the recipient's zellij tab via `zellij action go-to-tab-name` and on the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
+
+Role names are addressable strings, not free-form: the PM is `pm`, and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`.
 
 ### The hooks that make it work
 
@@ -437,7 +439,7 @@ gh pr create --base main --head task/issue-42 --fill
 radio send --to pm --intent review-requested --pr 42
 ```
 
-PM's zellij tab gets focused; on its next prompt the `Stop` hook's `radio check` surfaces the ping.
+PM's zellij tab gets focused; on its next turn end the `Stop` hook's `radio check` surfaces the ping.
 
 **5. PM reviews the PR.** From the PM tab:
 
@@ -447,10 +449,10 @@ gh pr diff 42
 gh pr review 42 --comment --body "…"   # or: gh pr comment 42 --body "…"
 ```
 
-**6. Round-trip until merge.** PM requests changes:
+**6. Round-trip until merge.** PM requests changes (worker roles are `worker-<reponame>-<slug>`; see `ls ~/.task-force/radio/sessions/`):
 
 ```bash
-radio send --to issue-42 --intent changes-requested --pr 42
+radio send --to worker-task-force-issue-42 --intent changes-requested --pr 42
 ```
 
 The worker tab is focused, picks up the comments, pushes fixes, and pings back:

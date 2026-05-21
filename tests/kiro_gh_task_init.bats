@@ -289,3 +289,23 @@ teardown() {
   assert_output --partial "radio ready"
   assert_output --partial "radio check"
 }
+
+# ---------------------------------------------------------------------------
+# gh-CLI standardization regression guard
+# ---------------------------------------------------------------------------
+
+@test "installed kiro-gh agents do not declare GitHub MCP" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  for agent in pm planner worker; do
+    local f="$TARGET_DIR/.kiro/agents/$agent.json"
+    # jq must parse — guards against any malformed JSON from edits.
+    run jq . "$f"
+    assert_success
+    # No mcpServers block, no @github tool.
+    run jq -e '.mcpServers // empty' "$f"
+    assert_failure
+    run grep -F '@github' "$f"
+    assert_failure
+  done
+}

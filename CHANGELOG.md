@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **`claude-gh` / `kiro-gh` now standardize on the `gh` CLI** for issue and project reads (previously: GitHub MCP). `task-init claude-gh` seeds a read-only `gh` allow-list into `.claude/settings.json` (`gh issue view *`, `gh project view *`, `gh search issues *`, etc.) so the PM / planner / worker can read freely; mutations stay confirmation-gated. The GitHub MCP is documented as an **optional** add-on for users who frequently mutate Projects v2 fields. (#69)
+- **Read-only allow-list seeding across Claude loadouts.** `task-init claude-jira` and `task-init claude-notion` now seed `.claude/settings.json` with read-only `mcp__atlassian__*` / `mcp__notion__*` patterns so PM / planner / worker reads are auto-approved. `claude-local` continues to rely on Claude Code's built-in file tools. Mutations across all loadouts remain confirmation-gated. (#69)
 - **`task-init` no longer hard-fails when target files exist.** In a TTY it now prompts per file (`[k]eep / [o]verwrite / [d]iff`, default = keep). In a non-TTY context it silently skips existing files and exits 0. `--force` (unchanged behavior) remains for unconditional overwrite. (#37)
 
 ### Fixed

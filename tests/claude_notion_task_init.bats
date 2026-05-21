@@ -223,3 +223,33 @@ teardown() {
   assert_failure
   assert_output --partial "not in a git repo"
 }
+
+# ---------------------------------------------------------------------------
+# Notion read-only allow-list seeding into .claude/settings.json
+# ---------------------------------------------------------------------------
+
+@test "seeds mcp__notion__* read tools into permissions.allow" {
+  run "$CLAUDE_NOTION_TASK_INIT"
+  assert_success
+  run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "mcp__notion__notion-search"
+  assert_output --partial "mcp__notion__notion-fetch"
+  assert_output --partial "mcp__notion__notion-query-data-sources"
+  # Writes must NOT be auto-allowed.
+  refute_output --partial "notion-create-pages"
+  refute_output --partial "notion-update-page"
+  refute_output --partial "notion-move-pages"
+  refute_output --partial "notion-create-comment"
+}
+
+@test "idempotent: re-run does not duplicate Notion allow-list entries" {
+  run "$CLAUDE_NOTION_TASK_INIT"
+  assert_success
+  local before
+  before=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  run "$CLAUDE_NOTION_TASK_INIT" --force
+  assert_success
+  local after
+  after=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  assert_equal "$before" "$after"
+}

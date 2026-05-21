@@ -254,6 +254,9 @@ _radio_install_hooks() {
   [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
 
   local tmp="${settings_file}.tmp.$$"
+  # Seeded read-only `gh` patterns auto-approve PM/planner/worker tracker reads;
+  # mutations (gh issue edit, gh pr merge, gh project item-edit, …) are
+  # deliberately excluded so they remain confirmation-gated.
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$busy_cmd" \
@@ -267,9 +270,29 @@ _radio_install_hooks() {
     | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
     | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
+    | .permissions //= {}
+    | .permissions.allow //= []
+    | .permissions.allow = (
+        .permissions.allow + [
+          "Bash(gh issue view *)",
+          "Bash(gh issue list *)",
+          "Bash(gh issue comment *)",
+          "Bash(gh project view *)",
+          "Bash(gh project item-list *)",
+          "Bash(gh project field-list *)",
+          "Bash(gh project list *)",
+          "Bash(gh search issues *)",
+          "Bash(gh pr view *)",
+          "Bash(gh pr diff *)",
+          "Bash(gh pr list *)",
+          "Bash(gh label list *)",
+          "Bash(gh auth status)",
+          "Bash(gh repo view *)"
+        ] | unique
+      )
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
-  echo "✓ Merged radio hooks into $settings_file"
+  echo "✓ Merged radio hooks + gh read allow-list into $settings_file"
 }
 
 if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then

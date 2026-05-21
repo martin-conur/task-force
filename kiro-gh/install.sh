@@ -50,8 +50,9 @@ echo ""
 echo "Done. Next steps:"
 echo ""
 sleep 0.4
-echo "  1. Set GITHUB_PERSONAL_ACCESS_TOKEN in your environment"
-echo "     (needs repo + project scopes)"
+echo "  1. Verify the gh CLI is authenticated:"
+echo "       gh auth status"
+echo "     If not, run: gh auth login   (needs repo + project scopes)"
 sleep 0.4
 echo ""
 echo "  2. In your project root, run:"
@@ -61,4 +62,10 @@ sleep 0.4
 echo ""
 echo "  3. Start the PM agent:"
 echo "       kiro-cli chat --agent pm"
+sleep 0.4
+echo ""
+echo "  Optional: GitHub MCP add-on (for richer Projects v2 mutations)"
+echo "     Add to each agent's mcpServers block in .kiro/agents/*.json:"
+echo "       \"github\": { \"command\": \"npx\", \"args\": [\"-y\", \"@github/github-mcp-server\"] }"
+echo "     (requires GITHUB_PERSONAL_ACCESS_TOKEN in your environment)"
 echo ""

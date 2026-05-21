@@ -239,3 +239,33 @@ teardown() {
   assert_failure
   assert_output --partial "not in a git repo"
 }
+
+# ---------------------------------------------------------------------------
+# Atlassian read-only allow-list seeding into .claude/settings.json
+# ---------------------------------------------------------------------------
+
+@test "seeds mcp__atlassian__* read tools into permissions.allow" {
+  run "$JIRA_TASK_INIT"
+  assert_success
+  run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
+  assert_output --partial "mcp__atlassian__getJiraIssue"
+  assert_output --partial "mcp__atlassian__searchJiraIssuesUsingJql"
+  assert_output --partial "mcp__atlassian__getVisibleJiraProjects"
+  # Writes must NOT be auto-allowed.
+  refute_output --partial "createJiraIssue"
+  refute_output --partial "editJiraIssue"
+  refute_output --partial "transitionJiraIssue"
+  refute_output --partial "addCommentToJiraIssue"
+}
+
+@test "idempotent: re-run does not duplicate Atlassian allow-list entries" {
+  run "$JIRA_TASK_INIT"
+  assert_success
+  local before
+  before=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  run "$JIRA_TASK_INIT" --force
+  assert_success
+  local after
+  after=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
+  assert_equal "$before" "$after"
+}

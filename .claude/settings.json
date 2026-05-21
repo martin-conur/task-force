@@ -30,5 +30,23 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gh auth status)",
+      "Bash(gh issue comment *)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue view *)",
+      "Bash(gh label list *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr view *)",
+      "Bash(gh project field-list *)",
+      "Bash(gh project item-list *)",
+      "Bash(gh project list *)",
+      "Bash(gh project view *)",
+      "Bash(gh repo view *)",
+      "Bash(gh search issues *)"
+    ]
   }
 }

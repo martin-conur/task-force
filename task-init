@@ -14,13 +14,13 @@ Implementations:
                  Options: --site URL, --key PROJ, --board NAME, --force
   claude-notion  Claude Code + Notion MCP
                  Options: --force, --help-ids
-  claude-gh      Claude Code + GitHub Projects (GitHub MCP)
+  claude-gh      Claude Code + GitHub Projects (gh CLI)
                  Options: --force
   claude-local   Claude Code + local markdown task tracking (no external tracker)
                  Options: --force
   kiro-notion    Kiro CLI + Notion MCP
                  Options: --force, --help-ids
-  kiro-gh        Kiro CLI + GitHub Projects (GitHub MCP)
+  kiro-gh        Kiro CLI + GitHub Projects (gh CLI)
                  Options: --force
   kiro-local     Kiro CLI + local markdown task tracking (no external tracker)
                  Options: --force
@@ -120,7 +120,7 @@ if [[ -z "$IMPL" ]]; then
         echo "Which board/tracker?"
         echo "  1) Jira (Atlassian MCP)         → .claude/jira-workflow.md + CLAUDE.md"
         echo "  2) Notion (Notion MCP)          → .claude/notion-workflow.md + CLAUDE.md"
-        echo "  3) GitHub Projects (GitHub MCP) → .claude/gh-workflow.md + CLAUDE.md"
+        echo "  3) GitHub Projects (gh CLI)     → .claude/gh-workflow.md + CLAUDE.md"
         echo "  4) Local markdown               → .claude/local-workflow.md + CLAUDE.md + tasks/"
         read -erp "Choice [1-4]: " board_choice
         case "$board_choice" in
@@ -134,7 +134,7 @@ if [[ -z "$IMPL" ]]; then
         echo ""
         echo "Which board/tracker?"
         echo "  1) Notion (Notion MCP)          → .kiro/steering/notion-workflow.md"
-        echo "  2) GitHub Projects (GitHub MCP) → .kiro/steering/gh-workflow.md"
+        echo "  2) GitHub Projects (gh CLI)     → .kiro/steering/gh-workflow.md"
         echo "  3) Local markdown               → .kiro/steering/local-workflow.md + tasks/"
         read -erp "Choice [1-3]: " board_choice
         case "$board_choice" in

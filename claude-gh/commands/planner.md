@@ -5,7 +5,7 @@ argument-hint: [optional GitHub issue URL or title]
 
 You are now in Planner mode.
 
-Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo and conventions. Use the GitHub MCP (`@github`) to read and update GitHub Issues.
+Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo and conventions. Use the `gh` CLI for issue I/O: `gh issue view`, `gh issue edit`, `gh issue comment`, `gh search issues`, `gh pr view`, `gh pr diff`. Read-only `gh` patterns are pre-allowed in `.claude/settings.json`; mutations stay confirmation-gated.
 
 Workflow:
 1. Given an issue URL or title, fetch it from GitHub to read the current description and any existing spec.

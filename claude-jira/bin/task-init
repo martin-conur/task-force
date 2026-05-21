@@ -223,6 +223,12 @@ _radio_install_hooks() {
   [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
 
   local tmp="${settings_file}.tmp.$$"
+  # Seeded read-only Atlassian MCP tools auto-approve PM/planner/worker tracker
+  # reads; writes (createJiraIssue, editJiraIssue, transitionJiraIssue,
+  # addCommentToJiraIssue) are deliberately excluded so they remain
+  # confirmation-gated. Names verified against the live Atlassian Remote MCP
+  # tool list (PR #76 review); if Atlassian renames a tool, this list must be
+  # refreshed.
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$busy_cmd" \
@@ -236,9 +242,24 @@ _radio_install_hooks() {
     | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
     | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
+    | .permissions //= {}
+    | .permissions.allow //= []
+    | .permissions.allow = (
+        .permissions.allow + [
+          "mcp__atlassian__getJiraIssue",
+          "mcp__atlassian__searchJiraIssuesUsingJql",
+          "mcp__atlassian__getVisibleJiraProjects",
+          "mcp__atlassian__getJiraIssueRemoteIssueLinks",
+          "mcp__atlassian__getTransitionsForJiraIssue",
+          "mcp__atlassian__getJiraProjectIssueTypesMetadata",
+          "mcp__atlassian__getIssueLinkTypes",
+          "mcp__atlassian__lookupJiraAccountId",
+          "mcp__atlassian__atlassianUserInfo"
+        ] | unique
+      )
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
-  echo "✓ Merged radio hooks into $settings_file"
+  echo "✓ Merged radio hooks + Atlassian read allow-list into $settings_file"
 }
 
 if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then

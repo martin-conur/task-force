@@ -224,10 +224,11 @@ _radio_install_hooks() {
 
   local tmp="${settings_file}.tmp.$$"
   # Seeded read-only Atlassian MCP tools auto-approve PM/planner/worker tracker
-  # reads; writes (createJiraIssue, updateJiraIssue, transitionJiraIssue,
-  # addJiraIssueComment) are deliberately excluded so they remain
-  # confirmation-gated. Tool names may need adjustment per Atlassian MCP
-  # version — verify with `claude mcp` after install.
+  # reads; writes (createJiraIssue, editJiraIssue, transitionJiraIssue,
+  # addCommentToJiraIssue) are deliberately excluded so they remain
+  # confirmation-gated. Names verified against the live Atlassian Remote MCP
+  # tool list (PR #76 review); if Atlassian renames a tool, this list must be
+  # refreshed.
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$busy_cmd" \
@@ -246,15 +247,14 @@ _radio_install_hooks() {
     | .permissions.allow = (
         .permissions.allow + [
           "mcp__atlassian__getJiraIssue",
-          "mcp__atlassian__searchJiraIssues",
-          "mcp__atlassian__getJiraProject",
+          "mcp__atlassian__searchJiraIssuesUsingJql",
+          "mcp__atlassian__getVisibleJiraProjects",
           "mcp__atlassian__getJiraIssueRemoteIssueLinks",
-          "mcp__atlassian__getJiraIssueComments",
           "mcp__atlassian__getTransitionsForJiraIssue",
-          "mcp__atlassian__getJiraSprint",
-          "mcp__atlassian__getAllJiraSprints",
-          "mcp__atlassian__getJiraBoard",
-          "mcp__atlassian__listJiraBoards"
+          "mcp__atlassian__getJiraProjectIssueTypesMetadata",
+          "mcp__atlassian__getIssueLinkTypes",
+          "mcp__atlassian__lookupJiraAccountId",
+          "mcp__atlassian__atlassianUserInfo"
         ] | unique
       )
     ' "$settings_file" >"$tmp"

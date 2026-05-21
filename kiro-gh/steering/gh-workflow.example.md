@@ -23,7 +23,7 @@ If not, run `gh auth login` (needs `repo` + `project` scopes). The bundled PM / 
 }
 ```
 
-Set `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment before running Kiro, and add `@github` to each agent's `tools` (and `allowedTools` to skip the confirmation).
+Only when the MCP add-on is enabled: set `GITHUB_PERSONAL_ACCESS_TOKEN` in your environment before running Kiro, and add `@github` to each agent's `tools` (and `allowedTools` to skip the confirmation). Without the add-on, no PAT is needed — `gh auth` covers it.
 
 ### GitHub Repository
 

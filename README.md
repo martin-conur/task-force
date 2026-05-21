@@ -238,7 +238,15 @@ cd ~/my-project
 task-init claude-gh           # auto-detects owner/repo from your git remote
 ```
 
-`task-init claude-gh` seeds a read-only `gh` allow-list into `.claude/settings.json` (`gh issue view *`, `gh project view *`, `gh search issues *`, etc.) so the PM / planner / worker read freely; mutations (`gh issue edit`, `gh pr merge`) stay confirmation-gated.
+`task-init claude-gh` seeds a read-only `gh` allow-list into `.claude/settings.json` so the PM / planner / worker can read freely:
+
+- `gh issue view *` / `gh issue list *` / `gh issue comment *`
+- `gh project view *` / `gh project item-list *` / `gh project field-list *` / `gh project list *`
+- `gh search issues *`
+- `gh pr view *` / `gh pr diff *` / `gh pr list *`
+- `gh label list *` / `gh repo view *` / `gh auth status`
+
+Mutations (`gh issue edit`, `gh pr merge`, `gh project item-edit`, …) are deliberately excluded and stay confirmation-gated.
 
 Spawn workers with `task-work <github-issue-url>`. The issue number becomes the worktree slug (`issue-42`).
 

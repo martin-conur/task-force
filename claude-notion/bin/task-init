@@ -179,10 +179,12 @@ _radio_install_hooks() {
 
   local tmp="${settings_file}.tmp.$$"
   # Seeded read-only Notion MCP tools auto-approve PM/planner/worker tracker
-  # reads; writes (notion-create-page, notion-update-page, notion-append-block)
-  # are deliberately excluded so they remain confirmation-gated. Tool names may
-  # need adjustment per Notion MCP version — verify with `claude mcp` after
-  # install.
+  # reads; writes (notion-create-pages, notion-update-page, notion-move-pages,
+  # notion-duplicate-page, notion-create-database, notion-update-data-source,
+  # notion-create-view, notion-update-view, notion-create-comment) are
+  # deliberately excluded so they remain confirmation-gated. Names verified
+  # against developers.notion.com/guides/mcp/mcp-supported-tools (PR #76
+  # review); if Notion renames a tool, this list must be refreshed.
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$busy_cmd" \
@@ -202,11 +204,13 @@ _radio_install_hooks() {
         .permissions.allow + [
           "mcp__notion__notion-search",
           "mcp__notion__notion-fetch",
-          "mcp__notion__notion-get-database",
-          "mcp__notion__notion-query-database",
-          "mcp__notion__notion-get-page",
-          "mcp__notion__notion-get-block",
-          "mcp__notion__notion-get-block-children"
+          "mcp__notion__notion-query-data-sources",
+          "mcp__notion__notion-query-database-view",
+          "mcp__notion__notion-get-comments",
+          "mcp__notion__notion-get-teams",
+          "mcp__notion__notion-get-users",
+          "mcp__notion__notion-get-user",
+          "mcp__notion__notion-get-self"
         ] | unique
       )
     ' "$settings_file" >"$tmp"

@@ -234,10 +234,12 @@ teardown() {
   run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
   assert_output --partial "mcp__notion__notion-search"
   assert_output --partial "mcp__notion__notion-fetch"
+  assert_output --partial "mcp__notion__notion-query-data-sources"
   # Writes must NOT be auto-allowed.
-  refute_output --partial "notion-create-page"
+  refute_output --partial "notion-create-pages"
   refute_output --partial "notion-update-page"
-  refute_output --partial "notion-append-block"
+  refute_output --partial "notion-move-pages"
+  refute_output --partial "notion-create-comment"
 }
 
 @test "idempotent: re-run does not duplicate Notion allow-list entries" {

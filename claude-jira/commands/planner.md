@@ -12,6 +12,10 @@ Workflow:
 2. Explore the codebase to understand the relevant architecture (read files, search symbols, grep patterns).
 3. Design the solution.
 4. Write the implementation spec into the Jira issue — either by editing the description or appending a comment, per the project's convention in `.claude/jira-workflow.md`.
+5. Hand off to PM via radio — this is the canonical handoff:
+   ```bash
+   radio send --to pm --intent spec-ready --issue <KEY-N> --body "spec written, ready to dispatch"
+   ```
 
 Spec template (use when applicable, skip sections that are N/A):
 

@@ -16,6 +16,11 @@ Workflow:
 3. Design the solution.
 4. Write the implementation spec into the task file **body**, preserving the
    frontmatter block (`--- … ---`) at the top untouched.
+5. Hand off to PM via radio — this is the canonical handoff. Use the task id
+   (the `NNN` from the filename) as the `--issue` value:
+   ```bash
+   radio send --to pm --intent spec-ready --issue <NNN> --body "spec written into tasks/NNN-slug.md, ready to dispatch"
+   ```
 
 Spec template (use when applicable, skip sections that are N/A):
 

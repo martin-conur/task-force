@@ -19,9 +19,10 @@ To Do → In Progress → In Review → Done
 (Replace with your project's actual workflow statuses.)
 
 - **Status when starting work**: `In Progress`
+- **Status when in review**: `In Review` (leave blank if your workflow has no In Review transition — the worker will keep the issue at `In Progress` through review)
 - **Status when done**: `Done`
 
-The worker reads these two values and transitions the issue accordingly: to "starting work" before implementing, and to "done" after committing (before running `task-done`).
+The worker reads these three values and transitions the issue as it moves through the lifecycle: to "starting work" before implementing, to "in review" after opening the PR, and to "done" only after the PM signals `approved-and-merged` via radio.
 
 ### Issue Fields
 
@@ -76,17 +77,31 @@ claude mcp list
 You should see an `atlassian` entry. If not, see Atlassian's documentation for the Remote MCP server.
 ### PM ↔ worker messaging (radio)
 
-When you finish your task and have nothing pending, the `radio ready` step will
-run automatically via your `Stop` hook — you don't need to invoke it manually.
-If you ever want to nudge the PM (or a worker) outside the normal flow, run:
+Radio is the **canonical** coordination channel between the PM and workers — every
+role transition runs through it. The PM / planner / worker prompts shell out to
+`radio send` at every documented handoff point:
+
+| From    | When                            | Command                                                                |
+|---------|---------------------------------|------------------------------------------------------------------------|
+| Planner | spec written into the issue     | `radio send --to pm --intent spec-ready --issue <KEY-N>`               |
+| Worker  | PR opened                       | `radio send --to pm --intent review-requested --pr <N>`                |
+| Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
+| PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
+| PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
+
+When a worker finishes its task and has nothing pending, the `radio ready` step
+runs automatically via the `Stop` hook — you don't need to invoke it manually.
+
+Full command form:
 
 ```bash
-radio send --to <role> --intent <kind> [--pr N] [--issue N]
+radio send --to <role> --intent <kind> [--pr N] [--issue N] [--body TEXT]
 ```
 
-Intents are free-form labels (`review-requested`, `re-review-requested`,
-`approved`, etc.); the body comes from `--body` or stdin. PR review *content*
-still lives in `gh pr comment`s — `radio` only carries the routing ping.
+The body comes from `--body` or stdin. PR review *content* still lives in
+`gh pr comment`s — `radio` only carries the routing ping. Worker role names
+follow `worker-<reponame>-<slug>`; discover the live one via
+`ls ~/.task-force/radio/sessions/`.
 
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm`, registers via the `SessionStart` hook, and

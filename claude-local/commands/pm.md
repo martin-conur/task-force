@@ -63,5 +63,23 @@ When asked to "show backlog" or "list tasks":
 When creating tasks, default `status: todo` and `priority: P2` unless told otherwise.
 Keep titles concise and actionable.
 
+### Radio handoffs (canonical)
+
+The worker pings you via `radio` at every transition. Reciprocate so the worker knows when to push more commits, when to clean up, or when to keep waiting. Worker role names follow `worker-<reponame>-<slug>`; discover the live one via `ls ~/.task-force/radio/sessions/`.
+
+- **After merging a PR**: run `gh pr merge <N> --squash --delete-branch` (or `--merge` / `--rebase` per project convention), **then**:
+  ```bash
+  radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"
+  ```
+  The worker treats this as the signal to bump the task file's status to `done` and run `task-done --remove-worktree`. Without this beat, the worker sits idle and the worktree leaks.
+
+- **After requesting changes**: post the substantive review via `gh pr comment <N> -b "..."` or `gh pr review <N> --request-changes -b "..."`, **then**:
+  ```bash
+  radio send --to <worker-role> --intent changes-requested --pr <N> --body "see PR comments"
+  ```
+  `radio` only carries the routing ping — the review content stays in the PR.
+
+- **After approving without merging** (e.g., waiting on CI): `gh pr review <N> --approve` is enough; no radio beat needed until you actually merge.
+
 If arguments were provided after `/pm`, treat them as the first instruction:
 $ARGUMENTS

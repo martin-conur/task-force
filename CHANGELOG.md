@@ -6,18 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Fixed
-
-- **Radio zellij actions now scope to the role's own tab/pane, not the focused tab.** `_rename_tab` and `radio send` previously used `zellij action rename-tab` / `go-to-tab-name` + `write-chars`, which target whichever tab is focused at the moment. With a PM and one or more workers running side-by-side, that leaked: a worker's auto-unregister could clobber PM's tab name, and `radio send --to pm` from worker B (while worker A was focused) could deliver `radio check` to the wrong tab. `radio register` now resolves and persists the role's stable `tab_id` as `TAB_ID=` in the session file, and both `_rename_tab` (`rename-tab-by-id`) and `cmd_send` (`write-chars --pane-id`) drive their actions by that id — so renames, duplicate tab names, and stale `TAB=` mid-flip can't misroute a wake-up. A defense-in-depth `$ZELLIJ_TAB` mismatch check guards against future regressions. (#102)
-
 ## [0.2.1] — 2026-05-22
 
-Radio polish patch. Three lifecycle / UX fixes building on the `v0.2.0` radio rollout.
+Radio polish + reliability patch. Lifecycle / UX fixes building on the `v0.2.0` radio rollout, plus a tab-targeting fix that hardens cross-tab routing.
 
 ### Fixed
 
 - **Radio hooks no-op when `$TASK_FORCE_ROLE` is unset.** Plain `claude` in a task-force-equipped repo was getting blocked at every prompt because the `UserPromptSubmit` hook (and friends) erred out when no role was set. Hook-invoked subcommands (`busy`, `ready`, `check`, `unregister`, `register --role ""`) now silently exit 0 when role is missing; user-invoked subcommands (`read`, `ack`) still fail loudly. (#93, #96)
 - **Auto-unregister radio sessions on session/worker end.** Worker session files were orphaning in `~/.task-force/radio/sessions/` after a worker finished. Two new lifecycle beats: a Claude `SessionEnd` hook calls `radio unregister`; `task-done` calls `radio unregister` before tearing down the worktree. (#94, #97)
+- **Radio tab/pane actions no longer target the focused tab.** Both `_rename_tab` (idle/busy emoji prefix) and `radio send` (wake-up via `radio check`) used `zellij action` calls without explicit tab targeting, so they clobbered whichever tab the user happened to be focused on — e.g. PM's tab name got rewritten when a worker auto-unregistered, and `radio send --to pm` from worker B mis-delivered the wake-up to worker A. Now both paths drive zellij via stable tab/pane ids captured at `radio register` time (`TAB_ID=` in the session file), with `rename-tab-by-id` and `write-chars --pane-id`. Routing is name-collision-proof and survives user-driven `rename-tab`. (#102, #103)
 
 ### Added
 

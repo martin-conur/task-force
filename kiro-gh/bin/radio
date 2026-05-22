@@ -53,6 +53,15 @@ _require_role() {
   _validate_role "$TASK_FORCE_ROLE" || exit 2
 }
 
+# Silent no-op for hook-invoked commands when $TASK_FORCE_ROLE is unset (#93):
+# plain `claude` in a task-force-equipped repo fires SessionStart/UserPromptSubmit/Stop
+# hooks with no role, and the hooks have nothing to mutate. Exiting non-zero
+# here would block UserPromptSubmit; exit 0 silently instead.
+_silent_exit_if_no_role() {
+  [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0
+  return 0
+}
+
 # Atomic write: stage into <file>.tmp.<rand> then rename. mv on POSIX is atomic
 # within the same directory, so readers never see a half-written session file.
 _atomic_write() {
@@ -129,7 +138,10 @@ cmd_register() {
       *) echo "register: unknown flag $1" >&2; exit 2 ;;
     esac
   done
-  [[ -n "$role"  ]] || { echo "register: --role required"  >&2; exit 2; }
+  # SessionStart hook substitutes $TASK_FORCE_ROLE into --role; when the role is
+  # unset (plain `claude` session) the flag arrives empty. Silent no-op rather
+  # than erroring out — there's nothing to register (#93).
+  [[ -z "$role" ]] && exit 0
   [[ -n "$agent" ]] || { echo "register: --agent required" >&2; exit 2; }
   _validate_role "$role" || exit 2
 
@@ -144,6 +156,7 @@ cmd_register() {
 }
 
 cmd_unregister() {
+  _silent_exit_if_no_role
   _require_role
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
@@ -151,8 +164,8 @@ cmd_unregister() {
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 
-cmd_ready() { _update_state idle; }
-cmd_busy()  { _update_state busy; }
+cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
+cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
 
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
@@ -236,6 +249,7 @@ cmd_send() {
 }
 
 cmd_check() {
+  _silent_exit_if_no_role
   _require_role
   local inbox
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")

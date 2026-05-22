@@ -33,10 +33,7 @@ teardown() {
   assert_output --partial "LAST_HEARTBEAT="
 }
 
-@test "register --role and --agent are required" {
-  run "$RADIO" register --tab pm
-  assert_failure
-  assert_output --partial "--role required"
+@test "register --agent is required when --role is present" {
   run "$RADIO" register --role pm --tab pm
   assert_failure
   assert_output --partial "--agent required"
@@ -58,8 +55,54 @@ teardown() {
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm.info" ]
 }
 
-@test "ready without TASK_FORCE_ROLE fails with a clear error" {
-  run "$RADIO" ready
+# ----- silent no-op when $TASK_FORCE_ROLE is unset (#93) --------------------
+# Hook-invoked commands (radio busy/ready/check/unregister and `register --role ""`
+# from the SessionStart hook) must NOT block a plain `claude` session in a
+# task-force-equipped repo. They have nothing to mutate when no role is set, so
+# they exit 0 silently. Conversely, user-invoked commands (read/ack) keep
+# erroring loudly because missing role there is a genuine usage bug.
+
+@test "busy is a silent no-op when TASK_FORCE_ROLE is unset" {
+  run env -u TASK_FORCE_ROLE "$RADIO" busy
+  assert_success
+  [ -z "$output" ]
+}
+
+@test "ready is a silent no-op when TASK_FORCE_ROLE is unset" {
+  run env -u TASK_FORCE_ROLE "$RADIO" ready
+  assert_success
+  [ -z "$output" ]
+}
+
+@test "check is a silent no-op when TASK_FORCE_ROLE is unset" {
+  run env -u TASK_FORCE_ROLE "$RADIO" check
+  assert_success
+  [ -z "$output" ]
+}
+
+@test "unregister is a silent no-op when TASK_FORCE_ROLE is unset" {
+  run env -u TASK_FORCE_ROLE "$RADIO" unregister
+  assert_success
+  [ -z "$output" ]
+}
+
+@test "register --role '' is a silent no-op (SessionStart hook with empty TASK_FORCE_ROLE)" {
+  run env -u TASK_FORCE_ROLE "$RADIO" register --role "" --tab "" --agent claude --loadout claude-gh
+  assert_success
+  [ -z "$output" ]
+  # No session file should have been written.
+  run bash -c "ls '$TASK_FORCE_HOME/radio/sessions/' 2>/dev/null | wc -l | tr -d ' '"
+  assert_output "0"
+}
+
+@test "read without TASK_FORCE_ROLE still errors loudly (user-invoked, not hook-invoked)" {
+  run env -u TASK_FORCE_ROLE "$RADIO" read some-id
+  assert_failure
+  assert_output --partial "TASK_FORCE_ROLE"
+}
+
+@test "ack without TASK_FORCE_ROLE still errors loudly (user-invoked, not hook-invoked)" {
+  run env -u TASK_FORCE_ROLE "$RADIO" ack some-id
   assert_failure
   assert_output --partial "TASK_FORCE_ROLE"
 }

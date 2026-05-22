@@ -53,6 +53,15 @@ _require_role() {
   _validate_role "$TASK_FORCE_ROLE" || exit 2
 }
 
+# Silent no-op for hook-invoked commands when $TASK_FORCE_ROLE is unset (#93):
+# plain `claude` in a task-force-equipped repo fires SessionStart/UserPromptSubmit/Stop
+# hooks with no role, and the hooks have nothing to mutate. Exiting non-zero
+# here would block UserPromptSubmit; exit 0 silently instead.
+_silent_exit_if_no_role() {
+  [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0
+  return 0
+}
+
 # Atomic write: stage into <file>.tmp.<rand> then rename. mv on POSIX is atomic
 # within the same directory, so readers never see a half-written session file.
 _atomic_write() {
@@ -144,6 +153,7 @@ cmd_register() {
 }
 
 cmd_unregister() {
+  _silent_exit_if_no_role
   _require_role
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
@@ -151,8 +161,8 @@ cmd_unregister() {
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 
-cmd_ready() { _update_state idle; }
-cmd_busy()  { _update_state busy; }
+cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
+cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
 
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
@@ -236,6 +246,7 @@ cmd_send() {
 }
 
 cmd_check() {
+  _silent_exit_if_no_role
   _require_role
   local inbox
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
@@ -320,7 +331,14 @@ case "$sub" in
   check)       cmd_check ;;
   read)        cmd_read "$@" ;;
   ack)         cmd_ack "$@" ;;
-  register)    cmd_register "$@" ;;
+  # Dispatcher gate (#93): the SessionStart hook fires `register --role $TASK_FORCE_ROLE`,
+  # which substitutes to `--role ""` when the env var is unset (plain `claude`
+  # session in a task-force-equipped repo). Silently no-op in that case rather
+  # than erroring out. A user invoking `radio register` directly will normally
+  # have $TASK_FORCE_ROLE set (from task-work / task-pm), so they still hit the
+  # loud `register: --role required` / `--agent required` errors in cmd_register
+  # if they forget a flag — typo protection preserved.
+  register)    [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0; cmd_register "$@" ;;
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
   unregister)  cmd_unregister ;;

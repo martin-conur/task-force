@@ -14,6 +14,10 @@ setup() {
   # Bypass the no-role dispatcher gate on `register` (#93); tests still set
   # TASK_FORCE_ROLE per-invocation where the value matters.
   export TASK_FORCE_ROLE=test-runner
+  # Don't let the dev shell's $ZELLIJ_TAB fire the _rename_tab safeguard
+  # during the register calls below.
+  unset ZELLIJ_TAB
+  seed_zellij_tabs pm worker-task-force-issue-60 worker-repo-a-feat-x worker-repo-b-feat-y
 }
 
 teardown() {

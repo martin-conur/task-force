@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Radio zellij actions now scope to the role's own tab/pane, not the focused tab.** `_rename_tab` and `radio send` previously used `zellij action rename-tab` / `go-to-tab-name` + `write-chars`, which target whichever tab is focused at the moment. With a PM and one or more workers running side-by-side, that leaked: a worker's auto-unregister could clobber PM's tab name, and `radio send --to pm` from worker B (while worker A was focused) could deliver `radio check` to the wrong tab. `radio register` now resolves and persists the role's stable `tab_id` as `TAB_ID=` in the session file, and both `_rename_tab` (`rename-tab-by-id`) and `cmd_send` (`write-chars --pane-id`) drive their actions by that id — so renames, duplicate tab names, and stale `TAB=` mid-flip can't misroute a wake-up. A defense-in-depth `$ZELLIJ_TAB` mismatch check guards against future regressions. (#102)
+
 ## [0.2.1] — 2026-05-22
 
 Radio polish patch. Three lifecycle / UX fixes building on the `v0.2.0` radio rollout.

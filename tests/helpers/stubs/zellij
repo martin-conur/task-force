@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
-# Stub for zellij — records all invocations, silently succeeds.
+# Stub for zellij — records every invocation and emits canned JSON for the
+# read-only `list-tabs --json` / `list-panes --json --tab` lookups that
+# `_zellij_tab_id_by_name` / `_zellij_pane_in_tab` make. Tests opt into a
+# specific fixture via $STUB_ZELLIJ_TABS_JSON / $STUB_ZELLIJ_PANES_JSON;
+# unset env vars produce empty stdout, which the radio helpers correctly
+# treat as "lookup failed — skip" (mirrors the real behaviour when zellij
+# isn't running). Mutating actions stay no-ops; we just record the call.
 echo "zellij $*" >> "${STUB_CALLS_DIR}/zellij.calls"
+case "$*" in
+  "action list-tabs --json")
+    [[ -n "${STUB_ZELLIJ_TABS_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_TABS_JSON"
+    ;;
+  "action list-panes --json --tab")
+    [[ -n "${STUB_ZELLIJ_PANES_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_PANES_JSON"
+    ;;
+esac
 exit 0

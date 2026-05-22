@@ -390,7 +390,7 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 
 ### How wake-up works
 
-`radio send` reads the recipient's session file. If `STATE=idle`, it focuses the recipient's zellij tab via `zellij action go-to-tab-name` and on the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
+`radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. On the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
 
 ### The hooks that make it work
 

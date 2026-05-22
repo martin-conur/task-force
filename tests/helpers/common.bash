@@ -104,6 +104,31 @@ teardown_all() {
   [[ -z "${TASK_FORCE_HOME:-}" ]] || rm -rf "$TASK_FORCE_HOME"
 }
 
+# Seed the zellij stub with a JSON snapshot of tabs / panes for the radio
+# helpers (`_zellij_tab_id_by_name`, `_zellij_pane_in_tab`) to consume.
+# Usage: seed_zellij_tabs role1 [role2 ...]
+# Each role gets tab_id 7,8,9,… and pane_id = tab_id*100, with three name
+# entries per role (bare slug + ⏸️ / ▶️ prefixed) so any lookup against
+# whatever's currently persisted in TAB= resolves to the same tab id.
+seed_zellij_tabs() {
+  local entries='' panes='' id=7
+  for role in "$@"; do
+    [[ -z "$entries" ]] || entries+=','
+    entries+="
+    {\"name\": \"$role\", \"tab_id\": $id},
+    {\"name\": \"⏸️ $role\", \"tab_id\": $id},
+    {\"name\": \"▶️ $role\", \"tab_id\": $id}"
+    [[ -z "$panes" ]] || panes+=','
+    panes+="
+    {\"id\": $(( id * 100 )), \"is_plugin\": false, \"is_focused\": true, \"tab_id\": $id}"
+    id=$(( id + 1 ))
+  done
+  export STUB_ZELLIJ_TABS_JSON="[${entries}
+  ]"
+  export STUB_ZELLIJ_PANES_JSON="[${panes}
+  ]"
+}
+
 # Read the recorded calls for a stub command.
 # Usage: stub_calls zellij
 stub_calls() {

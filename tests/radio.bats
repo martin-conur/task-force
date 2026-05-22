@@ -63,6 +63,17 @@ teardown() {
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm.info" ]
 }
 
+@test "lifecycle: register → unregister leaves the sessions dir empty (#94)" {
+  # Guards against orphan accumulation. The SessionEnd hook + task-done both
+  # call `radio unregister`; this test pins the contract that a clean cycle
+  # leaves no session file behind.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info" ]
+  TASK_FORCE_ROLE=worker-foo "$RADIO" unregister
+  run bash -c "ls '$TASK_FORCE_HOME/radio/sessions/' 2>/dev/null | wc -l | tr -d ' '"
+  assert_output "0"
+}
+
 # ----- silent no-op when $TASK_FORCE_ROLE is unset (#93) --------------------
 # Hook-invoked commands (radio busy/ready/check/unregister and `register --role ""`
 # from the SessionStart hook) must NOT block a plain `claude` session in a

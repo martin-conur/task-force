@@ -234,6 +234,10 @@ EOF
     "radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${loadout}"
   _write_hook "radio-busy"     "userPromptSubmit" "radio busy"
   _write_hook "radio-ready"    "agentStop"        "radio ready && radio check"
+  # Note: kiro has no session-end trigger (agentStop fires per-turn, not on
+  # session close), so the Claude SessionEnd → `radio unregister` beat has
+  # no direct kiro analog. The worker happy path is still covered: task-done
+  # invokes `radio unregister` before removing the worktree (issue #94).
 }
 
 if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then

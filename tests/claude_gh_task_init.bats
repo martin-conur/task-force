@@ -353,14 +353,21 @@ teardown() {
 # radio hooks: settings.json merge
 # ---------------------------------------------------------------------------
 
-@test "writes 3 radio hook entries into .claude/settings.json" {
+@test "writes 4 radio hook entries into .claude/settings.json" {
   run "$CLAUDE_GH_TASK_INIT"
   assert_success
   assert [ -f "$TARGET_DIR/.claude/settings.json" ]
-  for event in SessionStart UserPromptSubmit Stop; do
+  for event in SessionStart UserPromptSubmit Stop SessionEnd; do
     run jq -r ".hooks.$event[0].hooks[0].command" "$TARGET_DIR/.claude/settings.json"
     assert_output --partial "radio"
   done
+}
+
+@test "SessionEnd hook calls 'radio unregister' (#94)" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.SessionEnd[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio unregister"
 }
 
 @test "SessionStart hook command embeds the loadout name" {
@@ -397,7 +404,7 @@ EOF
   assert_success
   run "$CLAUDE_GH_TASK_INIT" --force
   assert_success
-  for event in SessionStart UserPromptSubmit Stop; do
+  for event in SessionStart UserPromptSubmit Stop SessionEnd; do
     run jq -r ".hooks.$event | length" "$TARGET_DIR/.claude/settings.json"
     assert_output "1"
   done

@@ -411,3 +411,69 @@ add_submodule_to_worktree() {
   refute_output --partial "removal failed"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
+
+# ---------------------------------------------------------------------------
+# Radio session unregister on cleanup (issue #94)
+# task-done must call `radio unregister` so worker session files don't
+# accumulate as orphans in ~/.task-force/radio/sessions/.
+# ---------------------------------------------------------------------------
+
+# Pre-register a radio session for the current "worker" role, then assert
+# task-done removes it. Uses the real radio binary on PATH and an isolated
+# $TASK_FORCE_HOME tempdir so the host's session dir is untouched.
+assert_task_done_unregisters() {
+  local script="$1"
+  local role="worker-task-force-$SLUG"
+
+  setup_task_force_home
+  cp "$RADIO" "$STUB_BIN/radio"
+  chmod +x "$STUB_BIN/radio"
+  export TASK_FORCE_ROLE="$role"
+
+  "$RADIO" register --role "$role" --tab "$role" --agent claude --loadout claude-gh
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/$role.info" ]
+
+  run bash -c "echo y | $script --force"
+  assert_success
+  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/$role.info" ]
+}
+
+@test "kiro: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$KIRO_TASK_DONE"
+}
+
+@test "jira: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$JIRA_TASK_DONE"
+}
+
+@test "claude-notion: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$CLAUDE_NOTION_TASK_DONE"
+}
+
+@test "claude-gh: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$CLAUDE_GH_TASK_DONE"
+}
+
+@test "kiro-gh: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$KIRO_GH_TASK_DONE"
+}
+
+@test "claude-local: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$CLAUDE_LOCAL_TASK_DONE"
+}
+
+@test "kiro-local: task-done unregisters the radio session" {
+  assert_task_done_unregisters "$KIRO_LOCAL_TASK_DONE"
+}
+
+@test "task-done cleanup tolerates radio binary missing from PATH (#94)" {
+  # The `|| true` safety net: if radio isn't installed (or PATH doesn't
+  # include it), cleanup must still succeed.
+  setup_task_force_home
+  export TASK_FORCE_ROLE="worker-task-force-$SLUG"
+  # Note: deliberately do NOT install radio into $STUB_BIN here.
+
+  run bash -c "echo y | $CLAUDE_GH_TASK_DONE --force"
+  assert_success
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}

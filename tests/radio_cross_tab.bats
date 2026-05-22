@@ -98,6 +98,74 @@ teardown() {
   refute_output --partial "go-to-tab-name"
 }
 
+# ----- TAB_ID= invariants (#102 review feedback) ----------------------------
+
+@test "send wakes recipient via TAB_ID= even when its TAB= name has drifted" {
+  # Scenario: pm registered, TAB_ID=7 captured. Then something rewrites pm's
+  # TAB= (e.g., a partial state flip wrote the new name but the next-step
+  # rename hasn't happened yet, or a debugger edited the file). The visible
+  # name in zellij is unchanged. Wake-up must still find pm's pane via the
+  # stable id, not by trying to look up the now-mismatched name.
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  # Rewrite TAB= to a name that has no match in zellij's list-tabs output.
+  awk '/^TAB=/ { print "TAB=stale-not-in-zellij"; next } { print }' \
+    "$TASK_FORCE_HOME/radio/sessions/pm.info" > "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp"
+  mv "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-a "$RADIO" send --to pm --intent ping --body "still here?"
+
+  # Despite the stale TAB= name, the write lands on pm's pane (700) via TAB_ID=7.
+  assert_stub_called zellij "action write-chars --pane-id 700 radio check"
+}
+
+@test "send hits the correct pane when two zellij tabs share a name (#102 review)" {
+  # The exact corrupted state the PM's live repro produced: two tabs both
+  # named "⏸️ pm". By-name lookup would pick the first match — which is
+  # exactly the focused-tab bug we're closing out. TAB_ID= pins the address.
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude   # captures TAB_ID=7
+  # Override the fixture: two tabs with the same name, the collision id is
+  # listed first so a naive `.[0]` name lookup would resolve to it.
+  export STUB_ZELLIJ_TABS_JSON='[
+    {"name": "pm", "tab_id": 99},
+    {"name": "⏸️ pm", "tab_id": 99},
+    {"name": "▶️ pm", "tab_id": 99},
+    {"name": "pm", "tab_id": 7},
+    {"name": "⏸️ pm", "tab_id": 7},
+    {"name": "▶️ pm", "tab_id": 7}
+  ]'
+  export STUB_ZELLIJ_PANES_JSON='[
+    {"id": 9900, "is_plugin": false, "is_focused": true, "tab_id": 99},
+    {"id": 700, "is_plugin": false, "is_focused": true, "tab_id": 7}
+  ]'
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-a "$RADIO" send --to pm --intent ping --body "hi"
+
+  run stub_calls zellij
+  # Hits pm's real pane via TAB_ID=7, never the collision's pane.
+  assert_output --partial "action write-chars --pane-id 700 radio check"
+  refute_output --partial "--pane-id 9900"
+}
+
+@test "register persists TAB_ID= alongside TAB= (#102 review)" {
+  # The contract that lets the two tests above work — TAB_ID is captured
+  # once at register and never re-resolved by name during normal operation.
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  run grep "^TAB_ID=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB_ID=7"
+}
+
+@test "register leaves TAB_ID= empty when zellij is unavailable (#102 review)" {
+  # Non-zellij CI / first-register-before-zellij paths must still register
+  # cleanly — TAB_ID= just stays empty so the next consumer can either
+  # fall back to a name lookup (_rename_tab) or queue the message (cmd_send).
+  unset ZELLIJ
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  run grep "^TAB_ID=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB_ID="
+}
+
 @test "send still no-ops to a busy recipient even with multiple workers focused (#102 bug 2)" {
   TASK_FORCE_ROLE=pm        "$RADIO" register --role pm        --tab pm        --agent claude
   TASK_FORCE_ROLE=pm        "$RADIO" busy

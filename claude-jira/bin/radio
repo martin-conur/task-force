@@ -206,21 +206,23 @@ _rename_tab() {
   esac
   new_name="${prefix}${bare}"
 
-  # Resolve the role's tab via its currently-recorded visible name and rename
-  # by stable id. This makes the rename insensitive to which tab the user has
-  # focused at the moment the hook fires — pre-#102 we used
-  # `zellij action rename-tab`, which targets whatever tab is focused and so
-  # clobbered the PM tab when a worker auto-unregistered while the user was
-  # parked there.
+  # Drive the rename by the stable tab_id captured at register time. Falling
+  # back to a name lookup only when TAB_ID= is empty (e.g. zellij was not
+  # running at register) keeps non-zellij CI paths working without making the
+  # name the canonical handle — which would re-open the stale-TAB= /
+  # duplicate-name failure modes (#102 review).
   local tab_id
-  tab_id=$(_zellij_tab_id_by_name "$current")
-  [[ -n "$tab_id" ]] || { _log "_rename_tab: tab '$current' not found — skipping"; return 0; }
+  tab_id=$(_session_field "$f" TAB_ID || true)
+  if [[ -z "$tab_id" ]]; then
+    tab_id=$(_zellij_tab_id_by_name "$current")
+  fi
+  [[ -n "$tab_id" ]] || { _log "_rename_tab: no tab_id for role $TASK_FORCE_ROLE — skipping"; return 0; }
 
   zellij action rename-tab-by-id "$tab_id" "$new_name" >/dev/null 2>&1 || return 0
 
-  # Persist the new visible name back to the session file so future lookups
-  # (`_zellij_tab_id_by_name` here, and again in `cmd_send`) find the tab by
-  # its current name.
+  # Repaint TAB= so a human inspecting the session file can see what name is
+  # currently displayed. Purely cosmetic — TAB_ID= is what cmd_send and the
+  # next _rename_tab use to address the tab (#102 review).
   awk -v t="$new_name" '
     /^TAB=/ { print "TAB=" t; seen=1; next }
     { print }
@@ -246,14 +248,29 @@ cmd_register() {
   [[ -n "$agent" ]] || { echo "register: --agent required" >&2; exit 2; }
   _validate_role "$role" || exit 2
 
+  # Resolve the zellij stable tab_id once, here at register time, and persist
+  # it as TAB_ID= alongside TAB=. From this point on, _rename_tab / cmd_send
+  # drive their zellij actions by id, not by name — so subsequent renames
+  # (idle ↔ busy emoji flips) and even user-initiated renames don't break
+  # lookups, and a name collision between two tabs can't misroute a wake-up
+  # to the wrong tab (#102 review feedback). On lookup failure (zellij not
+  # running, jq absent, --tab name not found) we leave TAB_ID= empty and log
+  # it — non-zellij / CI paths keep working, and _rename_tab can still fall
+  # back to a name lookup the next time it runs.
+  local tab_id=""
+  if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
+    tab_id=$(_zellij_tab_id_by_name "$tab" || true)
+    [[ -z "$tab_id" ]] && _log "register: could not resolve tab_id for tab=$tab (zellij list-tabs returned no match)"
+  fi
+
   local f
   f=$(_session_file "$role")
-  printf 'ROLE=%s\nTAB=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-    "$role" "$tab" "$repo" "$(_now)" "$agent" "$loadout" \
+  printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+    "$role" "$tab" "$tab_id" "$repo" "$(_now)" "$agent" "$loadout" \
     | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
-  _log "register role=$role tab=$tab agent=$agent loadout=$loadout"
+  _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout"
 
   # First paint of the idle prefix without waiting for a Stop hook cycle (#95).
   # _rename_tab reads $TASK_FORCE_ROLE, which the SessionStart hook sets to the
@@ -342,21 +359,21 @@ cmd_send() {
     _log "send: $to has no TAB — queued (id=$id)"
     return 0
   fi
-  # Wake-up via per-pane targeting (#102): resolve the recipient's tab_id and a
-  # writable pane id on it, then `write-chars --pane-id` straight into that
-  # pane. Pre-#102 we did `go-to-tab-name` + `write-chars`, which yanked the
-  # user's focus globally and — because `write-chars` runs in the sender's
-  # pane context — could deliver "radio check" to the wrong tab when the
-  # sender wasn't already on the recipient's tab.
+  # Wake-up via per-pane targeting (#102): read the recipient's stable TAB_ID=
+  # straight from its session file and write to a pane on that tab. We do NOT
+  # fall back to a name lookup here — name-based resolution is exactly what
+  # this fix is closing out (stale TAB= mid-flip, duplicate names, user-driven
+  # rename). If TAB_ID= is empty the recipient registered in a non-zellij
+  # context; no zellij to wake, so we queue the message and move on.
   local rtab_id rpane_id
-  rtab_id=$(_zellij_tab_id_by_name "$rtab")
+  rtab_id=$(_session_field "$rs" TAB_ID || true)
   if [[ -z "$rtab_id" ]]; then
-    _log "send: tab '$rtab' not found in zellij — queued (id=$id)"
+    _log "send: $to has no TAB_ID (not zellij-registered?) — queued (id=$id)"
     return 0
   fi
   rpane_id=$(_zellij_pane_in_tab "$rtab_id")
   if [[ -z "$rpane_id" ]]; then
-    _log "send: no writable pane on tab '$rtab' (tab_id=$rtab_id) — queued (id=$id)"
+    _log "send: no writable pane on tab_id=$rtab_id for $to — queued (id=$id)"
     return 0
   fi
   # Only ever write the literal string "radio check\n" — never the message body
@@ -366,7 +383,7 @@ cmd_send() {
   # recipient reads the actual message via `radio check` / `radio read`.
   zellij action write-chars --pane-id "$rpane_id" "radio check"$'\n' >/dev/null 2>&1 || {
     _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"; return 0; }
-  _log "send: woke $to via tab=$rtab pane=$rpane_id (id=$id)"
+  _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (id=$id)"
 }
 
 cmd_check() {

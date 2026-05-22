@@ -72,13 +72,13 @@ teardown() {
 
 # ----- recipient's tab no longer exists in zellij --------------------------
 
-@test "send queues silently when recipient's tab cannot be resolved (#102)" {
-  # Register pm, then wipe the tab fixture so list-tabs returns []. The
-  # session file still claims TAB=⏸️ pm, but zellij no longer reports a
-  # matching tab — this is the corrupted-state scenario the PM's repro
-  # describes. Wake-up must skip rather than spray the focused tab.
+@test "send queues silently when recipient's tab has no writable panes (#102)" {
+  # Register pm so TAB_ID=7 is captured, then wipe the panes fixture so the
+  # `list-panes --json --tab` lookup returns []. The session file's TAB_ID=
+  # is still resolvable on paper, but there's no pane to write to — this is
+  # the "zellij tab was closed out from under us" case. Wake-up must queue
+  # rather than fall through to a focused-tab write.
   "$RADIO" register --role pm --tab pm --agent claude
-  export STUB_ZELLIJ_TABS_JSON='[]'
   export STUB_ZELLIJ_PANES_JSON='[]'
 
   TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent review-requested --body "PR up"
@@ -87,5 +87,5 @@ teardown() {
   refute_output --partial "write-chars"
   refute_output --partial "go-to-tab-name"
   run cat "$TASK_FORCE_HOME/radio/log"
-  assert_output --partial "not found in zellij"
+  assert_output --partial "no writable pane on tab_id=7"
 }

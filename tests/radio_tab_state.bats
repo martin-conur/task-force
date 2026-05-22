@@ -69,15 +69,18 @@ teardown() {
   refute_output --partial "rename-tab"
 }
 
-@test "busy/ready: skip rename when zellij has no matching tab id (#102)" {
-  # Session file claims TAB=pm but the zellij fixture is empty — the role's
-  # tab no longer exists. Skip rather than `rename-tab` the focused tab.
+@test "busy/ready: rename still works when list-tabs would now be empty (TAB_ID= drives it)" {
+  # With TAB_ID= captured at register, subsequent flips no longer need to
+  # query list-tabs at all — they use the persisted id directly. This is
+  # the key invariant from the #102 review: stale or missing list-tabs
+  # output must not break wake-ups on a tab that still exists.
   TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
   export STUB_ZELLIJ_TABS_JSON='[]'
   TASK_FORCE_ROLE=pm "$RADIO" busy
-  # No rename-tab-by-id after the fixture wipe.
-  run bash -c "grep -c 'rename-tab-by-id' '$STUB_CALLS_DIR/zellij.calls' || true"
-  assert_output "1"   # the first-paint at register, nothing after
+  # Two rename-tab-by-id calls landed on the same persisted tab_id=7
+  # (one at register first-paint, one for the busy flip).
+  run bash -c "grep -c 'action rename-tab-by-id 7' '$STUB_CALLS_DIR/zellij.calls'"
+  assert_output "2"
 }
 
 # ----- first paint at register ---------------------------------------------

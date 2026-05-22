@@ -122,6 +122,49 @@ _update_state() {
       if (!seen_hb)    print "LAST_HEARTBEAT=" hb
     }
   ' "$f" | _atomic_write "$f"
+
+  _rename_tab "$new_state"
+}
+
+# Prefix the current zellij tab with an emoji reflecting STATE. No-op silently
+# if zellij isn't running, $ZELLIJ is unset, or we have no TAB= in the session
+# file. On success, also rewrite TAB= in the session file so `go-to-tab-name`
+# lookups in `radio send` continue to match the visible tab name (#95).
+_rename_tab() {
+  local new_state="$1"
+  [[ -n "${ZELLIJ:-}" ]] || return 0
+  command -v zellij >/dev/null 2>&1 || return 0
+  [[ -n "${TASK_FORCE_ROLE:-}" ]] || return 0
+
+  local f base prefix new_name
+  f=$(_session_file "$TASK_FORCE_ROLE")
+  [[ -f "$f" ]] || return 0
+
+  base=$(_session_field "$f" TAB || true)
+  [[ -n "$base" ]] || return 0
+
+  # Strip any existing emoji prefix so repeated calls don't stack them (e.g.
+  # the previous run persisted `⏸️ pm` into TAB=; without stripping we'd
+  # rename to `⏸️ ⏸️ pm`).
+  base="${base#⏸️ }"
+  base="${base#▶️ }"
+
+  case "$new_state" in
+    idle) prefix="⏸️ " ;;
+    busy) prefix="▶️ " ;;
+    *)    return 0 ;;
+  esac
+  new_name="${prefix}${base}"
+
+  zellij action rename-tab "$new_name" >/dev/null 2>&1 || return 0
+
+  # Persist the new visible name back to the session file so wake-up
+  # (`go-to-tab-name` in cmd_send) finds the tab by its current name.
+  awk -v t="$new_name" '
+    /^TAB=/ { print "TAB=" t; seen=1; next }
+    { print }
+    END { if (!seen) print "TAB=" t }
+  ' "$f" | _atomic_write "$f"
 }
 
 # ----- subcommands ----------------------------------------------------------
@@ -150,6 +193,11 @@ cmd_register() {
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
   _log "register role=$role tab=$tab agent=$agent loadout=$loadout"
+
+  # First paint of the idle prefix without waiting for a Stop hook cycle (#95).
+  # _rename_tab reads $TASK_FORCE_ROLE, which the SessionStart hook sets to the
+  # same value as --role here (`radio register --role $TASK_FORCE_ROLE …`).
+  _rename_tab idle
 }
 
 cmd_unregister() {

@@ -174,9 +174,14 @@ teardown() {
   assert [ ! -f "$WORKTREE_BASE/.$SLUG.info" ]
 }
 
-@test "kiro: closes zellij tab" {
+@test "kiro: skips zellij close-tab when no radio session (no \$ZELLIJ env)" {
+  # Without ZELLIJ + a session file with TAB_ID=, task-done now skips the
+  # close-tab call entirely rather than falling back to the focused-tab
+  # `close-tab` (#107). See task_done_close_tab.bats for the close path.
   run_task_done "$KIRO_TASK_DONE" --force
-  assert_stub_called zellij "close-tab"
+  assert_output --partial "Skipping zellij close-tab"
+  run stub_calls zellij
+  refute_output --partial "close-tab"
 }
 
 @test "kiro: no prompt when --force is set" {
@@ -272,9 +277,11 @@ teardown() {
   assert [ ! -f "$WORKTREE_BASE/.$SLUG.info" ]
 }
 
-@test "claude-notion: closes zellij tab" {
+@test "claude-notion: skips zellij close-tab when no radio session (no \$ZELLIJ env)" {
   run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_stub_called zellij "close-tab"
+  assert_output --partial "Skipping zellij close-tab"
+  run stub_calls zellij
+  refute_output --partial "close-tab"
 }
 
 @test "claude-notion: no prompt when --force is set" {

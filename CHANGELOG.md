@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-22
+
+Radio polish patch. Three lifecycle / UX fixes building on the `v0.2.0` radio rollout.
+
+### Fixed
+
+- **Radio hooks no-op when `$TASK_FORCE_ROLE` is unset.** Plain `claude` in a task-force-equipped repo was getting blocked at every prompt because the `UserPromptSubmit` hook (and friends) erred out when no role was set. Hook-invoked subcommands (`busy`, `ready`, `check`, `unregister`, `register --role ""`) now silently exit 0 when role is missing; user-invoked subcommands (`read`, `ack`) still fail loudly. (#93, #96)
+- **Auto-unregister radio sessions on session/worker end.** Worker session files were orphaning in `~/.task-force/radio/sessions/` after a worker finished. Two new lifecycle beats: a Claude `SessionEnd` hook calls `radio unregister`; `task-done` calls `radio unregister` before tearing down the worktree. (#94, #97)
+
+### Added
+
+- **Idle/busy emoji in zellij tab names.** `radio` now prefixes the current tab with `⏸️` (idle) or `▶️` (busy) so you can see at a glance which workers are mid-turn vs. waiting on input — useful when running several workers in parallel. `TAB=` in the session file is kept in sync so `radio send`'s `go-to-tab-name` wake-up still finds the renamed tab. (#95, #99)
+
 ## [0.2.0] — 2026-05-21
 
 Headline: **PM ↔ worker radio messaging.** A persistent mailbox CLI plus a canonical 5-row handoff protocol baked into every role's prompt. Workers now defer `Status=Done` and worktree cleanup until the PM signals `approved-and-merged`, so the whole spec → review → merge loop runs through `radio send`.
@@ -75,6 +88,7 @@ First feature release since `v0.0.1`. Highlights: two new local-tracking loadout
 - Test temp-dir cleanups moved to bats `teardown()` so they fire even on assertion failure (#64)
 - Bats suite at **460 tests** across 7 loadouts × 2 OS
 
-[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/martin-conur/task-force/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/martin-conur/task-force/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/martin-conur/task-force/compare/v0.0.1...v0.1.0

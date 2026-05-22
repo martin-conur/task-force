@@ -10,6 +10,11 @@ load helpers/common
 setup() {
   setup_task_force_home
   unset ZELLIJ                       # no wakeup attempts in unit tests
+  # Default to a non-empty role so `register` calls flow through the
+  # dispatcher's no-role gate (#93). Tests that need the gate to fire (the
+  # plain-`claude` hook scenario) override with `env -u TASK_FORCE_ROLE`;
+  # tests that check `_require_role` rejection override with a specific value.
+  export TASK_FORCE_ROLE=test-runner
 }
 
 teardown() {
@@ -33,7 +38,10 @@ teardown() {
   assert_output --partial "LAST_HEARTBEAT="
 }
 
-@test "register --agent is required when --role is present" {
+@test "register --role and --agent are required" {
+  run "$RADIO" register --tab pm
+  assert_failure
+  assert_output --partial "--role required"
   run "$RADIO" register --role pm --tab pm
   assert_failure
   assert_output --partial "--agent required"
@@ -93,6 +101,15 @@ teardown() {
   # No session file should have been written.
   run bash -c "ls '$TASK_FORCE_HOME/radio/sessions/' 2>/dev/null | wc -l | tr -d ' '"
   assert_output "0"
+}
+
+@test "register still errors loudly when TASK_FORCE_ROLE is set but --role is empty (user typo, not hook)" {
+  # Option 1 dispatcher gate fires only on missing env var, NOT on empty --role.
+  # If a user runs `radio register --role ""` in a task-work / task-pm session
+  # (where $TASK_FORCE_ROLE is set), that's a real typo and should fail loudly.
+  TASK_FORCE_ROLE=pm run "$RADIO" register --role "" --tab pm --agent claude
+  assert_failure
+  assert_output --partial "--role required"
 }
 
 @test "read without TASK_FORCE_ROLE still errors loudly (user-invoked, not hook-invoked)" {

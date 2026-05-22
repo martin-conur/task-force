@@ -13,6 +13,9 @@ setup() {
   setup_task_force_home
   setup_stubs
   export ZELLIJ=fake-session-name
+  # Bypass the no-role dispatcher gate on `register` (#93); tests still set
+  # TASK_FORCE_ROLE per-invocation where the value matters.
+  export TASK_FORCE_ROLE=test-runner
 }
 
 teardown() {

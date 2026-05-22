@@ -138,10 +138,7 @@ cmd_register() {
       *) echo "register: unknown flag $1" >&2; exit 2 ;;
     esac
   done
-  # SessionStart hook substitutes $TASK_FORCE_ROLE into --role; when the role is
-  # unset (plain `claude` session) the flag arrives empty. Silent no-op rather
-  # than erroring out — there's nothing to register (#93).
-  [[ -z "$role" ]] && exit 0
+  [[ -n "$role"  ]] || { echo "register: --role required"  >&2; exit 2; }
   [[ -n "$agent" ]] || { echo "register: --agent required" >&2; exit 2; }
   _validate_role "$role" || exit 2
 
@@ -334,7 +331,14 @@ case "$sub" in
   check)       cmd_check ;;
   read)        cmd_read "$@" ;;
   ack)         cmd_ack "$@" ;;
-  register)    cmd_register "$@" ;;
+  # Dispatcher gate (#93): the SessionStart hook fires `register --role $TASK_FORCE_ROLE`,
+  # which substitutes to `--role ""` when the env var is unset (plain `claude`
+  # session in a task-force-equipped repo). Silently no-op in that case rather
+  # than erroring out. A user invoking `radio register` directly will normally
+  # have $TASK_FORCE_ROLE set (from task-work / task-pm), so they still hit the
+  # loud `register: --role required` / `--agent required` errors in cmd_register
+  # if they forget a flag — typo protection preserved.
+  register)    [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0; cmd_register "$@" ;;
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
   unregister)  cmd_unregister ;;

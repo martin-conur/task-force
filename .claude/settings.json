@@ -20,6 +20,16 @@
         ]
       }
     ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "radio awaiting"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

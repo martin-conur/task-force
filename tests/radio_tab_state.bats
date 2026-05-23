@@ -18,6 +18,7 @@ load helpers/common
 # and we don't repeat the literal UTF-8 sequences across cases.
 PAUSE='⏸️ '
 PLAY='▶️ '
+WAIT='❓︎ '
 
 setup() {
   setup_task_force_home
@@ -172,4 +173,60 @@ teardown() {
   TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
   ZELLIJ_TAB=pm TASK_FORCE_ROLE=pm "$RADIO" busy
   assert_stub_called zellij "action rename-tab-by-id 7 ${PLAY}pm"
+}
+
+# ----- awaiting state (#106) ------------------------------------------------
+
+@test "awaiting writes STATE=awaiting and paints the question-mark prefix" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "STATE=awaiting"
+  assert_stub_called zellij "action rename-tab-by-id 7 ${WAIT}pm"
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${WAIT}pm"
+}
+
+@test "busy → awaiting → busy round-trip strips and repaints cleanly" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+
+  # Final TAB= should be exactly "<play> pm", not "<play><question> pm" etc.
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${PLAY}pm"
+
+  # And the most recent rename-tab-by-id call should target the same name.
+  run bash -c "grep 'rename-tab-by-id' '$STUB_CALLS_DIR/zellij.calls' | tail -1"
+  assert_output "zellij action rename-tab-by-id 7 ${PLAY}pm"
+}
+
+@test "awaiting → idle via cmd_ready paints the pause prefix" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=pm "$RADIO" ready
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${PAUSE}pm"
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "STATE=idle"
+}
+
+@test "awaiting → busy via cmd_busy paints the play prefix" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${PLAY}pm"
+}
+
+@test "_rename_tab skips awaiting paint when \$ZELLIJ_TAB names a different tab" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  ZELLIJ_TAB=worker-foo TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  run stub_calls zellij
+  refute_output --partial "rename-tab-by-id"
+  # State update still went through.
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "STATE=awaiting"
 }

@@ -19,6 +19,7 @@ Usage:
   radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
   radio ready                            mark this role idle (and process pending)
   radio busy                             mark this role busy
+  radio awaiting                         mark this role awaiting user input
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
 
@@ -103,6 +104,7 @@ _strip_tab_prefix() {
   local s="$1"
   s="${s#⏸️ }"
   s="${s#▶️ }"
+  s="${s#❓︎ }"
   printf '%s' "$s"
 }
 
@@ -233,9 +235,10 @@ _rename_tab() {
   fi
 
   case "$new_state" in
-    idle) prefix="⏸️ " ;;
-    busy) prefix="▶️ " ;;
-    *)    return 0 ;;
+    idle)     prefix="⏸️ " ;;
+    busy)     prefix="▶️ " ;;
+    awaiting) prefix="❓︎ " ;;
+    *)        return 0 ;;
   esac
   new_name="${prefix}${bare}"
 
@@ -348,8 +351,9 @@ cmd_unregister() {
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 
-cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
-cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
+cmd_ready()    { _silent_exit_if_no_role; _update_state idle; }
+cmd_busy()     { _silent_exit_if_no_role; _update_state busy; }
+cmd_awaiting() { _silent_exit_if_no_role; _update_state awaiting; }
 
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
@@ -413,7 +417,9 @@ cmd_send() {
   rstate=$(_session_field "$rs" STATE || true)
   rtab=$(_session_field "$rs" TAB || true)
   if [[ "$rstate" != "idle" ]]; then
-    _log "send: $to is busy (state=$rstate) — queued (id=$id)"
+    local reason="busy"
+    [[ "$rstate" == "awaiting" ]] && reason="awaiting input"
+    _log "send: $to is $reason (state=$rstate) — queued (id=$id)"
     return 0
   fi
   if [[ -z "$rtab" ]]; then
@@ -543,6 +549,7 @@ case "$sub" in
   register)    [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0; cmd_register "$@" ;;
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
+  awaiting)    cmd_awaiting ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
   -h|--help)   usage 0 ;;

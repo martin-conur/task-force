@@ -385,24 +385,38 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 | `radio read <id>`                   | Print one message |
 | `radio ack <id>`                    | Mark it acknowledged so it stops showing up in `check` |
 | `radio register` / `radio unregister` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`) |
-| `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
+| `radio ready` / `radio busy` / `radio awaiting` | Toggle this session's `STATE` field — drives the tab glyph (⏸️ / ▶️ / ❓︎) and the wake-up vs. queue decision on the sender side |
 | `radio orphans`                     | List session files whose heartbeat is >1h stale |
+
+### Tab states
+
+Each registered session paints a monochrome glyph on its zellij tab so you can tell at a glance what's happening:
+
+| Glyph | State      | Meaning                                                                              |
+|-------|------------|--------------------------------------------------------------------------------------|
+| ⏸️    | `idle`     | Turn ended, agent waiting for input or a queued message                              |
+| ▶️    | `busy`     | Agent is actively working — generating, running tools, thinking                       |
+| ❓︎    | `awaiting` | Agent is blocked on a user response (permission prompt, `AskUserQuestion`, plan mode) |
+
+The `awaiting` glyph is driven by Claude Code's `Notification` hook, which fires whenever Claude prompts the user. Kiro sessions have no equivalent event today and stay two-state.
 
 ### How wake-up works
 
-`radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. On the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
+`radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. On the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy` or `STATE=awaiting`, the message is queued silently — no failed wake attempt, no risk of stray keystrokes answering a permission prompt, no interrupting the recipient mid-turn. The queued message is picked up on the recipient's next manual `radio check` or next flip back to `idle`.
 
 ### The hooks that make it work
 
 `task-init claude-*` writes these into your project's `.claude/settings.json` automatically:
 
-| Hook              | Command                       | Why                                            |
-|-------------------|-------------------------------|------------------------------------------------|
-| `SessionStart`    | `radio register`              | Claims the role's session file for this tab    |
-| `UserPromptSubmit`| `radio busy`                  | Marks the session busy while a turn is running |
-| `Stop`            | `radio ready && radio check`  | Marks idle and surfaces any queued messages    |
+| Hook              | Command                       | Why                                                          |
+|-------------------|-------------------------------|--------------------------------------------------------------|
+| `SessionStart`    | `radio register`              | Claims the role's session file for this tab                  |
+| `UserPromptSubmit`| `radio busy`                  | Marks the session busy while a turn is running               |
+| `Notification`    | `radio awaiting`              | Marks the session awaiting input on a permission/Ask prompt  |
+| `Stop`            | `radio ready && radio check`  | Marks idle and surfaces any queued messages                  |
+| `SessionEnd`      | `radio unregister`            | Cleans up the session file on real exit (intra-session events filtered) |
 
-For the kiro loadouts the same logic lives in `.kiro/hooks/` and runs off Kiro's equivalent triggers.
+For the kiro loadouts the same logic lives in `.kiro/hooks/` and runs off Kiro's equivalent triggers. Kiro has no `Notification` analogue today, so kiro sessions don't paint the `❓︎` glyph.
 
 ### Idle workers don't auto-act
 

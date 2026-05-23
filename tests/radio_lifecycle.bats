@@ -134,6 +134,18 @@ teardown() {
   assert_output --partial "STATE=idle"
 }
 
+@test "awaiting re-seeds the session file from env vars if it was wiped (#106)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  rm -f "$sess"
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=w-foo run "$RADIO" awaiting
+  assert_success
+  assert [ -f "$sess" ]
+  run cat "$sess"
+  assert_output --partial "STATE=awaiting"
+}
+
 @test "re-seed is a no-op when \$ZELLIJ_TAB is unset (no identity to rebuild from)" {
   # Plain `claude` session with $TASK_FORCE_ROLE set but no $ZELLIJ_TAB
   # (e.g. user typed TASK_FORCE_ROLE=foo in a shell). Nothing to rebuild

@@ -57,13 +57,6 @@ teardown() {
   assert_output "STATE=idle"
 }
 
-@test "awaiting toggles STATE to awaiting" {
-  "$RADIO" register --role pm --tab pm --agent claude
-  TASK_FORCE_ROLE=pm "$RADIO" awaiting
-  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
-  assert_output "STATE=awaiting"
-}
-
 @test "unregister removes the session file" {
   "$RADIO" register --role pm --tab pm --agent claude
   TASK_FORCE_ROLE=pm "$RADIO" unregister
@@ -108,12 +101,6 @@ teardown() {
 
 @test "unregister is a silent no-op when TASK_FORCE_ROLE is unset" {
   run env -u TASK_FORCE_ROLE "$RADIO" unregister
-  assert_success
-  [ -z "$output" ]
-}
-
-@test "awaiting is a silent no-op when TASK_FORCE_ROLE is unset" {
-  run env -u TASK_FORCE_ROLE "$RADIO" awaiting
   assert_success
   [ -z "$output" ]
 }

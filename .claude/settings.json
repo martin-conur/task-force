@@ -20,26 +20,6 @@
         ]
       }
     ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "radio busy"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "radio awaiting"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [

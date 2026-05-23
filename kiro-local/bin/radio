@@ -351,9 +351,35 @@ cmd_unregister() {
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 
-cmd_ready()    { _silent_exit_if_no_role; _update_state idle; }
-cmd_busy()     { _silent_exit_if_no_role; _update_state busy; }
-cmd_awaiting() { _silent_exit_if_no_role; _update_state awaiting; }
+cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
+cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
+
+# `radio awaiting` is wired to Claude Code's Notification hook, which fires for
+# both blocking prompts (permission gates, AskUserQuestion, ExitPlanMode) AND
+# idle-wait pings ("Claude is waiting for your input"). An unfiltered hook
+# would clobber STATE=idle with STATE=awaiting on every turn end, making the
+# ⏸️ glyph effectively unreachable in practice (#106 review). Read the JSON
+# payload piped on stdin and skip the state flip when the `message` field
+# indicates idle-wait, mirroring the cmd_unregister pattern (#107). Manual
+# CLI invocations (no piped payload) proceed unconditionally so the
+# subcommand remains usable from a shell.
+cmd_awaiting() {
+  _silent_exit_if_no_role
+  if [[ ! -t 0 ]]; then
+    local payload msg
+    payload=$(cat 2>/dev/null || true)
+    if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
+      msg=$(printf '%s' "$payload" | jq -r '.message // empty' 2>/dev/null || true)
+      case "$msg" in
+        *waiting*your*input*|*waiting*for*input*|*idle*)
+          _log "awaiting: skipping (message=$msg — idle-wait, not blocking) role=$TASK_FORCE_ROLE"
+          return 0
+          ;;
+      esac
+    fi
+  fi
+  _update_state awaiting
+}
 
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""

@@ -273,6 +273,7 @@ _radio_install_hooks() {
     .hooks //= {}
     | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
+    | .hooks.PreToolUse       = add_radio(.hooks.PreToolUse;       $ups)
     | .hooks.Notification     = add_radio(.hooks.Notification;     $notif)
     | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
     | .hooks.SessionEnd       = add_radio(.hooks.SessionEnd;       $endcmd)

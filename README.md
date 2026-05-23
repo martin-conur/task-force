@@ -412,7 +412,8 @@ The `awaiting` glyph is driven by Claude Code's `Notification` hook, which fires
 |-------------------|-------------------------------|--------------------------------------------------------------|
 | `SessionStart`    | `radio register`              | Claims the role's session file for this tab                  |
 | `UserPromptSubmit`| `radio busy`                  | Marks the session busy while a turn is running               |
-| `Notification`    | `radio awaiting`              | Marks the session awaiting input on a permission/Ask prompt  |
+| `PreToolUse`      | `radio busy`                  | Flips back to busy when Claude resumes work after a permission "Allow" (no `UserPromptSubmit` fires in that case) |
+| `Notification`    | `radio awaiting`              | Marks the session awaiting input on a permission/Ask prompt (stdin payload filter skips idle-wait pings) |
 | `Stop`            | `radio ready && radio check`  | Marks idle and surfaces any queued messages                  |
 | `SessionEnd`      | `radio unregister`            | Cleans up the session file on real exit (intra-session events filtered) |
 

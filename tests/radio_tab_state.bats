@@ -220,6 +220,42 @@ teardown() {
   assert_output "TAB=${PLAY}pm"
 }
 
+# ----- PreToolUse hook idempotency (#106 PR review) -------------------------
+# A `PreToolUse` hook is wired to `radio busy` so Claude resuming after a
+# permission "Allow" (no `UserPromptSubmit` fires there) repaints the tab
+# from ❓︎ back to ▶️ on the next tool call. Since PreToolUse fires before
+# every tool invocation, `radio busy` must be a no-op for tab paint when
+# state is already busy.
+
+@test "busy → busy is a no-op for STATE and paints the same play prefix" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  # Second busy — already busy, should be safe to call.
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "STATE=busy"
+  # TAB= stays "<play> pm" — no stacking of glyphs.
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${PLAY}pm"
+  # The (single) rename-tab-by-id call targets the same name.
+  run bash -c "grep 'rename-tab-by-id' '$STUB_CALLS_DIR/zellij.calls' | tail -1"
+  assert_output "zellij action rename-tab-by-id 7 ${PLAY}pm"
+}
+
+@test "awaiting → busy via PreToolUse-style call flips STATE and paints ▶️" {
+  # Simulates the post-"Allow" resume: Notification fired (state=awaiting),
+  # then PreToolUse fires `radio busy` before the next tool call (#106
+  # review). Either tool-driven resume path is covered by this transition.
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "STATE=busy"
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${PLAY}pm"
+}
+
 @test "_rename_tab skips awaiting paint when \$ZELLIJ_TAB names a different tab" {
   TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
   : > "$STUB_CALLS_DIR/zellij.calls"

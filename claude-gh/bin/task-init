@@ -248,6 +248,7 @@ _radio_install_hooks() {
 
   local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout $loadout"
   local busy_cmd="radio busy"
+  local awaiting_cmd="radio awaiting"
   local stop_cmd="radio ready && radio check"
   local end_cmd="radio unregister"
 
@@ -261,6 +262,7 @@ _radio_install_hooks() {
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$busy_cmd" \
+    --arg notif "$awaiting_cmd" \
     --arg stop "$stop_cmd" \
     --arg endcmd  "$end_cmd" \
     '
@@ -271,6 +273,8 @@ _radio_install_hooks() {
     .hooks //= {}
     | .hooks.SessionStart     = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit = add_radio(.hooks.UserPromptSubmit; $ups)
+    | .hooks.PreToolUse       = add_radio(.hooks.PreToolUse;       $ups)
+    | .hooks.Notification     = add_radio(.hooks.Notification;     $notif)
     | .hooks.Stop             = add_radio(.hooks.Stop;             $stop)
     | .hooks.SessionEnd       = add_radio(.hooks.SessionEnd;       $endcmd)
     | .permissions //= {}

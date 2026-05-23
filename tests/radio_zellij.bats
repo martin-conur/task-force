@@ -72,6 +72,27 @@ teardown() {
 
 # ----- recipient's tab no longer exists in zellij --------------------------
 
+@test "send to awaiting recipient does not call zellij wake actions and logs awaiting input" {
+  # The awaiting state must be no-wake for the same reason busy is — writing
+  # `radio check\n` into a pane that's sitting at a permission prompt would
+  # answer the prompt with stray keystrokes (#106).
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ping --body "queue me"
+
+  run stub_calls zellij
+  refute_output --partial "write-chars"
+  refute_output --partial "go-to-tab-name"
+
+  # The message is still queued.
+  run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox/'*.md | wc -l"
+  assert_output --partial "1"
+
+  # And the log line distinguishes the awaiting case from the busy case.
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "awaiting input"
+}
+
 @test "send queues silently when recipient's tab has no writable panes (#102)" {
   # Register pm so TAB_ID=7 is captured, then wipe the panes fixture so the
   # `list-panes --json --tab` lookup returns []. The session file's TAB_ID=

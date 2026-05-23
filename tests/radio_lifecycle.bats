@@ -134,6 +134,96 @@ teardown() {
   assert_output --partial "STATE=idle"
 }
 
+@test "awaiting re-seeds the session file from env vars if it was wiped (#106)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  rm -f "$sess"
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=w-foo run "$RADIO" awaiting
+  assert_success
+  assert [ -f "$sess" ]
+  run cat "$sess"
+  assert_output --partial "STATE=awaiting"
+}
+
+# ----- Notification payload filter (#106 PR review) -------------------------
+# `radio awaiting` is wired to Claude Code's Notification hook, which fires
+# for both blocking prompts (permission gates, AskUserQuestion, ExitPlanMode)
+# AND idle-wait pings ("Claude is waiting for your input"). Without filtering,
+# every turn end would clobber STATE=idle → STATE=awaiting and the ⏸️ glyph
+# would never appear in practice. The filter reads the stdin payload and
+# skips the flip on idle-wait messages.
+
+@test "awaiting skips when stdin payload has message='Claude is waiting for your input' (idle-wait)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  # Initial STATE=idle from register.
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"message\":\"Claude is waiting for your input\"}' | '$RADIO' awaiting"
+  assert_success
+  # STATE must NOT have flipped to awaiting.
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=idle"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "awaiting: skipping"
+  assert_output --partial "idle-wait"
+}
+
+@test "awaiting skips when stdin payload has message='Claude is waiting for user input'" {
+  # Variant phrasing — also idle-wait, also skipped by the *waiting*for*input* arm.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"message\":\"Claude is waiting for user input\"}' | '$RADIO' awaiting"
+  assert_success
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=idle"
+}
+
+@test "awaiting proceeds when stdin payload has a blocking-prompt message (permission gate)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"message\":\"Allow this Bash command?\"}' | '$RADIO' awaiting"
+  assert_success
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=awaiting"
+}
+
+@test "awaiting proceeds when stdin payload has a blocking-prompt message (AskUserQuestion)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"message\":\"Claude needs your input\"}' | '$RADIO' awaiting"
+  assert_success
+  # "needs your input" doesn't match the *waiting* filter patterns — proceeds.
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=awaiting"
+}
+
+@test "awaiting proceeds when stdin is empty (manual CLI invocation)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' awaiting < /dev/null"
+  assert_success
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=awaiting"
+}
+
+@test "awaiting proceeds when stdin payload is not valid JSON" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo 'not json' | '$RADIO' awaiting"
+  assert_success
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=awaiting"
+}
+
+@test "awaiting proceeds when payload JSON has no message field" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"other_field\":\"value\"}' | '$RADIO' awaiting"
+  assert_success
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=awaiting"
+}
+
 @test "re-seed is a no-op when \$ZELLIJ_TAB is unset (no identity to rebuild from)" {
   # Plain `claude` session with $TASK_FORCE_ROLE set but no $ZELLIJ_TAB
   # (e.g. user typed TASK_FORCE_ROLE=foo in a shell). Nothing to rebuild

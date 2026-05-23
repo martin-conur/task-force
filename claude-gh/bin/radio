@@ -140,13 +140,46 @@ _session_file() {
 _inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
 _processed_dir(){ printf '%s/%s/processed' "$MAILBOX_DIR" "$1"; }
 
+# Self-healing: write a session file for $TASK_FORCE_ROLE if one is missing,
+# using the identity env vars task-work / task-pm injected at tab launch
+# (#107 follow-up). The session file is treated as a soft cache, not a lock —
+# Claude Code's SessionEnd hook fires on intra-session events (`/clear`,
+# `/compact`, resume) as well as real exit, so a spurious unregister mid-life
+# would otherwise brick all subsequent busy/ready/send operations for the
+# role. Returns 1 (without writing anything) if there's no identity env to
+# rebuild from, so non-task-force `claude` sessions stay no-ops.
+_ensure_session_file() {
+  _require_role
+  local f
+  f=$(_session_file "$TASK_FORCE_ROLE")
+  [[ -f "$f" ]] && return 0
+
+  [[ -n "${ZELLIJ_TAB:-}" ]] || { _log "ensure_session: \$ZELLIJ_TAB unset; cannot re-seed $TASK_FORCE_ROLE"; return 1; }
+
+  local tab_id=""
+  if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
+    tab_id=$(_zellij_tab_id_by_name "$ZELLIJ_TAB" || true)
+  fi
+
+  local repo
+  repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+
+  printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+    "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$repo" "$(_now)" \
+    "${TASK_FORCE_AGENT:-claude}" "${TASK_FORCE_LOADOUT:-unknown}" \
+    | _atomic_write "$f"
+
+  mkdir -p "$(_inbox_dir "$TASK_FORCE_ROLE")" "$(_processed_dir "$TASK_FORCE_ROLE")"
+  _log "ensure_session: re-seeded $TASK_FORCE_ROLE (file was missing) tab_id=$tab_id"
+}
+
 # Update STATE=… and LAST_HEARTBEAT=… on the current session file.
 _update_state() {
   local new_state="$1"
   _require_role
+  _ensure_session_file || { _log "update_state: no identity env for $TASK_FORCE_ROLE"; return 0; }
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
-  [[ -f "$f" ]] || { _log "update_state: no session file for $TASK_FORCE_ROLE"; return 0; }
 
   # Re-emit the file with STATE/LAST_HEARTBEAT replaced; preserve everything else.
   awk -v st="$new_state" -v hb="$(_now)" '
@@ -281,6 +314,34 @@ cmd_register() {
 cmd_unregister() {
   _silent_exit_if_no_role
   _require_role
+
+  # When invoked from Claude Code's SessionEnd hook, a JSON payload is piped
+  # on stdin with a `reason` field. The hook fires on intra-session events
+  # (reason=clear from `/clear`, reason=resume from `/compact` and session
+  # resume) as well as on real exit (reason=logout|prompt_input_exit|other).
+  # Without filtering we wipe the session file mid-life — empirically observed
+  # as bursts of 40+ unregister calls within ~25s, with busy/ready calls
+  # immediately afterwards logging "no session file" against the now-missing
+  # file (#107 review).
+  #
+  # Manual invocations (e.g. from task-done, or a user typing `radio
+  # unregister` in a shell) don't pipe a JSON payload — proceed unconditionally
+  # in that case. We only filter when both (a) stdin is not a terminal and
+  # (b) a parseable `reason` is present.
+  if [[ ! -t 0 ]]; then
+    local payload reason
+    payload=$(cat 2>/dev/null || true)
+    if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
+      reason=$(printf '%s' "$payload" | jq -r '.reason // empty' 2>/dev/null || true)
+      case "$reason" in
+        clear|resume)
+          _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
+          return 0
+          ;;
+      esac
+    fi
+  fi
+
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
   rm -f "$f"

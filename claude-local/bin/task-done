@@ -99,6 +99,21 @@ if [[ "$FORCE" != true && "$REMOVE_ONLY" != true ]]; then
   [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
 fi
 
+# Capture this worker's stable zellij tab_id BEFORE `radio unregister`
+# removes the session file. We use it at the end of cleanup to close
+# *this* worker's tab specifically (`close-tab-by-id`), not the focused
+# one. The unscoped `zellij action close-tab` targets whichever tab is
+# focused at call time — same focused-tab bug class as #102/#103 in a
+# different binary; if the user switches focus mid-cleanup, the wrong tab
+# (e.g., PM's) gets closed and an active session can be destroyed (#107).
+_WORKER_TAB_ID=""
+if [[ -n "${ZELLIJ:-}" && -n "${TASK_FORCE_ROLE:-}" ]]; then
+  _SESSION_FILE="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions/${TASK_FORCE_ROLE}.info"
+  if [[ -f "$_SESSION_FILE" ]]; then
+    _WORKER_TAB_ID=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$_SESSION_FILE")
+  fi
+fi
+
 # Unregister radio session before tearing down the worktree (#94). The
 # `|| true` is a safety net: $TASK_FORCE_ROLE should be set inside a worker
 # tab, but if it isn't (e.g., task-done invoked from an unexpected shell)
@@ -148,7 +163,15 @@ else
   echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
 fi
 
-# Close current zellij tab
-echo "Closing zellij tab..."
-zellij action close-tab
+# Close this worker's zellij tab by its stable tab_id, captured before
+# `radio unregister` wiped the session file. If we didn't capture an id
+# (zellij not running, no role, no session file, or empty TAB_ID=), skip —
+# falling back to the unscoped `close-tab` would re-open the bug fixed
+# above (#107). The user can close the tab manually in that case.
+if [[ -n "$_WORKER_TAB_ID" ]]; then
+  echo "Closing zellij tab (id=$_WORKER_TAB_ID)..."
+  zellij action close-tab-by-id "$_WORKER_TAB_ID" >/dev/null 2>&1 || true
+else
+  echo "Skipping zellij close-tab (no tab id captured; close this tab manually if needed)."
+fi
 # endregion:confirm-and-cleanup

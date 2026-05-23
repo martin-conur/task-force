@@ -410,6 +410,20 @@ EOF
   done
 }
 
+# Pins the contract reverted in #114: Notification hook is intentionally NOT
+# wired up. Claude Code's Notification hook only fires on idle-wait, not on
+# permission / AskUserQuestion / ExitPlanMode prompts, so an awaiting tab state
+# driven by it was non-functional. Re-introducing this hook needs a real trigger
+# mechanism first — see follow-up to #106.
+@test "Notification hook is NOT installed by task-init (#114)" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.Notification // "absent"' "$TARGET_DIR/.claude/settings.json"
+  assert_output "absent"
+  run jq -r '.hooks.PreToolUse // "absent"' "$TARGET_DIR/.claude/settings.json"
+  assert_output "absent"
+}
+
 # ---------------------------------------------------------------------------
 # gh read-only allow-list seeding into .claude/settings.json
 # ---------------------------------------------------------------------------

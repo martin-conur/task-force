@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-05-23
+
+Patch release. Extends the cross-tab targeting fix from `v0.2.1` (radio) to `task-done`, and hardens the radio session lifecycle so intra-session Claude events (`/clear`, `/compact`, resume) don't brick subsequent radio operations.
+
+### Fixed
+
+- **`task-done` close-tab no longer targets the focused tab.** The final `zellij action close-tab` in `*/bin/task-done` had no explicit tab id, so if the user switched focus to another tab (e.g., PM) while a worker was auto-cleaning up, the wrong tab got closed — destroying the user's active session. Same root cause as #102, in a different binary. `task-done` now captures the worker's stable `TAB_ID=` from its radio session file *before* `radio unregister` runs, and closes the tab via `zellij action close-tab-by-id`. If no tab id can be captured (zellij not running, no role, missing session file), close-tab is skipped — never falls back to the unscoped call. (#107, #108)
+- **Radio session file survives intra-session Claude events.** Claude Code's `SessionEnd` hook fires on `/clear`, `/compact`, and session resume in addition to real exit. The old `radio unregister` hook proceeded unconditionally, wiping the session file mid-life — observed in production as bursts of 40+ unregister calls within ~25s, with subsequent `busy`/`ready`/`send` operations logging "no session file" for the now-missing role. `cmd_unregister` now reads the JSON payload piped by the hook and skips when `reason` is `clear` or `resume`; manual `radio unregister` (no stdin payload) still works. Companion `_ensure_session_file` in `_update_state` self-heals if a stale unregister did get through. (#108)
+
+### Internal
+
+- New bats coverage: `tests/radio_lifecycle.bats` and `tests/task_done_close_tab.bats` pin the contract for both fixes.
+
 ## [0.2.1] — 2026-05-22
 
 Radio polish + reliability patch. Lifecycle / UX fixes building on the `v0.2.0` radio rollout, plus a tab-targeting fix that hardens cross-tab routing.
@@ -89,7 +102,8 @@ First feature release since `v0.0.1`. Highlights: two new local-tracking loadout
 - Test temp-dir cleanups moved to bats `teardown()` so they fire even on assertion failure (#64)
 - Bats suite at **460 tests** across 7 loadouts × 2 OS
 
-[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/martin-conur/task-force/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/martin-conur/task-force/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/martin-conur/task-force/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/martin-conur/task-force/compare/v0.0.1...v0.1.0

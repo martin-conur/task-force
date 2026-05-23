@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.2.2] — 2026-05-23
 
-Patch release. Closes out the cross-tab regression class fixed in `v0.2.1` for the radio surface, but caught in `task-done`. Also hardens the radio session lifecycle so intra-session Claude events don't brick subsequent radio operations.
+Patch release. Extends the cross-tab targeting fix from `v0.2.1` (radio) to `task-done`, and hardens the radio session lifecycle so intra-session Claude events (`/clear`, `/compact`, resume) don't brick subsequent radio operations.
 
 ### Fixed
 

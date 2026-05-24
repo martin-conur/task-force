@@ -404,23 +404,42 @@ EOF
   assert_success
   run "$CLAUDE_GH_TASK_INIT" --force
   assert_success
-  for event in SessionStart UserPromptSubmit Stop SessionEnd; do
+  for event in SessionStart UserPromptSubmit Stop SessionEnd PermissionRequest PostToolUse; do
     run jq -r ".hooks.$event | length" "$TARGET_DIR/.claude/settings.json"
     assert_output "1"
   done
+  # PreToolUse has TWO matcher entries (AskUserQuestion + ExitPlanMode) and
+  # `add_radio_matcher` is per-matcher idempotent — re-run must keep both
+  # without doubling them up (#119).
+  run jq -r '.hooks.PreToolUse | length' "$TARGET_DIR/.claude/settings.json"
+  assert_output "2"
 }
 
-# Pins the contract reverted in #114: Notification hook is intentionally NOT
-# wired up. Claude Code's Notification hook only fires on idle-wait, not on
-# permission / AskUserQuestion / ExitPlanMode prompts, so an awaiting tab state
-# driven by it was non-functional. Re-introducing this hook needs a real trigger
-# mechanism first — see follow-up to #106.
-@test "Notification hook is NOT installed by task-init (#114)" {
+# Positive coverage for the awaiting-state triggers introduced in #119. The
+# previous pin (negative coverage from #114) asserted PreToolUse / Notification
+# absence; #119 wires PermissionRequest + PreToolUse(AskUserQuestion,ExitPlanMode)
+# → `radio awaiting` and PostToolUse → `radio busy` (reverse edge). Notification
+# stays asserted-absent so the broken #112 trigger can't sneak back in.
+@test "radio awaiting hooks installed: PermissionRequest, PreToolUse, PostToolUse (#119)" {
   run "$CLAUDE_GH_TASK_INIT"
   assert_success
+
+  # PermissionRequest → radio awaiting
+  run jq -r '.hooks.PermissionRequest[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio awaiting"
+
+  # PreToolUse matchers AskUserQuestion + ExitPlanMode → radio awaiting
+  run jq -r '[.hooks.PreToolUse[] | select(.matcher == "AskUserQuestion") | .hooks[0].command] | .[0]' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio awaiting"
+  run jq -r '[.hooks.PreToolUse[] | select(.matcher == "ExitPlanMode") | .hooks[0].command] | .[0]' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio awaiting"
+
+  # PostToolUse reverse-edge → radio busy
+  run jq -r '.hooks.PostToolUse[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio busy"
+
+  # Notification still absent (the broken #114 trigger must not return).
   run jq -r '.hooks.Notification // "absent"' "$TARGET_DIR/.claude/settings.json"
-  assert_output "absent"
-  run jq -r '.hooks.PreToolUse // "absent"' "$TARGET_DIR/.claude/settings.json"
   assert_output "absent"
 }
 

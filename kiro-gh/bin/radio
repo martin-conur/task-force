@@ -19,7 +19,6 @@ Usage:
   radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
   radio ready                            mark this role idle (and process pending)
   radio busy                             mark this role busy
-  radio awaiting                         mark this role awaiting user input
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
 
@@ -104,7 +103,6 @@ _strip_tab_prefix() {
   local s="$1"
   s="${s#⏸️ }"
   s="${s#▶️ }"
-  s="${s#❓︎ }"
   printf '%s' "$s"
 }
 
@@ -235,10 +233,9 @@ _rename_tab() {
   fi
 
   case "$new_state" in
-    idle)     prefix="⏸️ " ;;
-    busy)     prefix="▶️ " ;;
-    awaiting) prefix="❓︎ " ;;
-    *)        return 0 ;;
+    idle) prefix="⏸️ " ;;
+    busy) prefix="▶️ " ;;
+    *)    return 0 ;;
   esac
   new_name="${prefix}${bare}"
 
@@ -354,33 +351,6 @@ cmd_unregister() {
 cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
 cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
 
-# `radio awaiting` is wired to Claude Code's Notification hook, which fires for
-# both blocking prompts (permission gates, AskUserQuestion, ExitPlanMode) AND
-# idle-wait pings ("Claude is waiting for your input"). An unfiltered hook
-# would clobber STATE=idle with STATE=awaiting on every turn end, making the
-# ⏸️ glyph effectively unreachable in practice (#106 review). Read the JSON
-# payload piped on stdin and skip the state flip when the `message` field
-# indicates idle-wait, mirroring the cmd_unregister pattern (#107). Manual
-# CLI invocations (no piped payload) proceed unconditionally so the
-# subcommand remains usable from a shell.
-cmd_awaiting() {
-  _silent_exit_if_no_role
-  if [[ ! -t 0 ]]; then
-    local payload msg
-    payload=$(cat 2>/dev/null || true)
-    if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
-      msg=$(printf '%s' "$payload" | jq -r '.message // empty' 2>/dev/null || true)
-      case "$msg" in
-        *waiting*your*input*|*waiting*for*input*|*idle*)
-          _log "awaiting: skipping (message=$msg — idle-wait, not blocking) role=$TASK_FORCE_ROLE"
-          return 0
-          ;;
-      esac
-    fi
-  fi
-  _update_state awaiting
-}
-
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
   local body_set=0
@@ -443,9 +413,7 @@ cmd_send() {
   rstate=$(_session_field "$rs" STATE || true)
   rtab=$(_session_field "$rs" TAB || true)
   if [[ "$rstate" != "idle" ]]; then
-    local reason="busy"
-    [[ "$rstate" == "awaiting" ]] && reason="awaiting input"
-    _log "send: $to is $reason (state=$rstate) — queued (id=$id)"
+    _log "send: $to is busy (state=$rstate) — queued (id=$id)"
     return 0
   fi
   if [[ -z "$rtab" ]]; then
@@ -575,7 +543,6 @@ case "$sub" in
   register)    [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0; cmd_register "$@" ;;
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
-  awaiting)    cmd_awaiting ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
   -h|--help)   usage 0 ;;

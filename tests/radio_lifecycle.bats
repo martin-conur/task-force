@@ -203,3 +203,77 @@ teardown() {
   # Same tab id as the original register call — re-seed re-resolved by name.
   assert_output --partial "TAB_ID=7"
 }
+
+# ----- re-register preserves TAB_ID on zellij lookup miss (#117) ------------
+#
+# The #117 failure mode: a worker's $ZELLIJ_TAB env var sticks to the bare
+# slug captured at pane creation, but the visible tab name has since been
+# painted to "⏸️ <slug>" / "▶️ <slug>" by _rename_tab. When SessionStart
+# fires a second time (because of /compact, /clear, /resume, or a fresh
+# `claude` in the same tab), the hook re-runs `radio register --tab $ZELLIJ_TAB`
+# with the bare slug and the literal-name lookup in zellij misses. Pre-fix,
+# we'd blindly rewrite TAB_ID= to empty — killing _rename_tab and cmd_send
+# for the rest of the worker's life, and finally leaking the tab when
+# task-done read the now-empty TAB_ID.
+
+@test "register: re-register preserves existing TAB_ID when zellij list-tabs misses (#117)" {
+  setup_stubs
+  seed_zellij_tabs worker-foo
+  export ZELLIJ=fake
+
+  # First register: finds tab_id=7 by name and persists it.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  run grep "^TAB_ID=" "$sess"
+  assert_output --partial "TAB_ID=7"
+
+  # Now simulate the second SessionStart: the visible tab has been painted
+  # to "▶️ worker-foo", so the bare-name lookup misses. Re-seed the stub
+  # fixture so only the prefixed entry is advertised.
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"▶️ worker-foo","tab_id":7}]'
+  export STUB_ZELLIJ_PANES_JSON='[{"id":700,"is_plugin":false,"is_focused":true,"tab_id":7}]'
+
+  "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  # TAB_ID must still be 7 — preserved, not clobbered to empty.
+  run grep "^TAB_ID=" "$sess"
+  assert_output "TAB_ID=7"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "preserving existing TAB_ID=7"
+  refute_output --partial "could not resolve tab_id for tab=worker-foo"
+}
+
+@test "register: first-time lookup miss with no existing file still logs the resolve-failure (#117)" {
+  # Layer 1 must not change first-time behavior: a brand-new register for a
+  # role with no prior session file, when zellij can't resolve the tab,
+  # should still write TAB_ID= empty and log the "could not resolve" line.
+  setup_stubs
+  export ZELLIJ=fake
+  # No stub fixture → list-tabs returns empty.
+
+  "$RADIO" register --role worker-new --tab worker-new --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-new.info"
+  run grep "^TAB_ID=" "$sess"
+  assert_output "TAB_ID="
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "could not resolve tab_id for tab=worker-new"
+  refute_output --partial "preserving existing TAB_ID"
+}
+
+@test "register: re-register with empty existing TAB_ID falls through to the resolve-failure path" {
+  # Edge case: prior session file exists but TAB_ID= is empty (e.g. zellij
+  # wasn't running at the original register). A subsequent re-register that
+  # also misses should NOT log "preserving" (nothing useful to preserve) —
+  # it should log the original "could not resolve" line, same as a first
+  # register would.
+  setup_stubs
+  export ZELLIJ=fake
+  # First register: no fixture → TAB_ID= empty in file.
+  "$RADIO" register --role worker-empty --tab worker-empty --agent claude
+
+  # Second register: still no fixture.
+  "$RADIO" register --role worker-empty --tab worker-empty --agent claude
+
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "could not resolve tab_id for tab=worker-empty"
+  refute_output --partial "preserving existing TAB_ID"
+}

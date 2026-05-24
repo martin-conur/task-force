@@ -20,6 +20,23 @@
 # zellij-native path for "new tab running this command" and preserves the
 # session UI.
 
+# Resolve a freshly-created tab's stable zellij tab_id by its name. Used by
+# task-work right after aw_launch_tab to persist TAB_ID into $INFO_FILE so
+# task-done has an authoritative source independent of the radio session
+# file's mid-life state (#117). Empty stdout means "could not resolve" —
+# zellij not running, jq absent, or the tab isn't visible yet — caller
+# must treat that as a soft skip (task-done falls back to the radio
+# session file in that case).
+aw_zellij_tab_id_by_name() {
+  local target="$1"
+  [[ -n "$target" ]] || return 0
+  command -v zellij >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  zellij action list-tabs --json 2>/dev/null \
+    | jq -r --arg n "$target" \
+        '[.[] | select(.name == $n) | .tab_id] | .[0] // empty' 2>/dev/null
+}
+
 # Launch a new zellij tab. See file header for semantics.
 aw_launch_tab() {
   local slug="$1"

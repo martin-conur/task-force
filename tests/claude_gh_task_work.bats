@@ -402,6 +402,28 @@ _setup_stale_local_base() {
   assert_equal "${GH_URL:-}" ""
 }
 
+@test ".info records TAB_ID resolved from zellij list-tabs (#117)" {
+  # The zellij stub returns whatever STUB_ZELLIJ_TABS_JSON advertises for
+  # `action list-tabs --json`. task-work, post-launch, looks up the tab by
+  # name and appends TAB_ID= to $INFO_FILE so task-done has an authoritative
+  # source independent of the radio session file's mid-life state.
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"my-feature","tab_id":12}]'
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "${TAB_ID:-}" "12"
+}
+
+@test ".info has no TAB_ID line when zellij list-tabs misses (graceful no-op)" {
+  # No STUB_ZELLIJ_TABS_JSON → stub returns empty → aw_zellij_tab_id_by_name
+  # returns empty → no TAB_ID= line is appended. task-done's fallback (radio
+  # session file) covers this case.
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  run grep "^TAB_ID=" "$WORKTREE_BASE/.my-feature.info"
+  assert_failure
+}
+
 # ---------------------------------------------------------------------------
 # Zellij interactions
 # ---------------------------------------------------------------------------

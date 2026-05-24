@@ -106,8 +106,18 @@ fi
 # focused at call time — same focused-tab bug class as #102/#103 in a
 # different binary; if the user switches focus mid-cleanup, the wrong tab
 # (e.g., PM's) gets closed and an active session can be destroyed (#107).
+#
+# Preferred source: $INFO_FILE, which task-work writes at tab creation and
+# nobody else touches. Independent of the radio session file's mid-life
+# state, so an in-session SessionStart re-register that clobbered the
+# session file's TAB_ID= (#117) can't break cleanup. Fall back to the
+# radio session file for workers whose task-work pre-dates the $INFO_FILE
+# TAB_ID write.
 _WORKER_TAB_ID=""
-if [[ -n "${ZELLIJ:-}" && -n "${TASK_FORCE_ROLE:-}" ]]; then
+if [[ -n "${ZELLIJ:-}" && -f "$INFO_FILE" ]]; then
+  _WORKER_TAB_ID=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$INFO_FILE")
+fi
+if [[ -z "$_WORKER_TAB_ID" && -n "${ZELLIJ:-}" && -n "${TASK_FORCE_ROLE:-}" ]]; then
   _SESSION_FILE="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions/${TASK_FORCE_ROLE}.info"
   if [[ -f "$_SESSION_FILE" ]]; then
     _WORKER_TAB_ID=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$_SESSION_FILE")

@@ -293,11 +293,33 @@ cmd_register() {
   local tab_id=""
   if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
     tab_id=$(_zellij_tab_id_by_name "$tab" || true)
-    [[ -z "$tab_id" ]] && _log "register: could not resolve tab_id for tab=$tab (zellij list-tabs returned no match)"
   fi
 
   local f
   f=$(_session_file "$role")
+
+  # Re-register protection (#117): `SessionStart` fires again on `/compact`,
+  # `/clear`, `/resume`, or a fresh `claude` in the same tab — each time
+  # passing the original $ZELLIJ_TAB (the bare slug captured at pane creation).
+  # By then `_rename_tab` has painted the visible name to "⏸️ <slug>" or
+  # "▶️ <slug>", so a literal-name lookup misses and `tab_id` is empty. If we
+  # blindly rewrote the session file we'd clobber a valid TAB_ID with "",
+  # killing all subsequent _rename_tab repaints and cmd_send wake-ups for the
+  # rest of the worker's life — and finally leaking the tab when task-done
+  # reads the now-empty TAB_ID (#117). Preserve the existing TAB_ID instead.
+  if [[ -z "$tab_id" ]]; then
+    local existing_tab_id=""
+    if [[ -f "$f" ]]; then
+      existing_tab_id=$(_session_field "$f" TAB_ID || true)
+    fi
+    if [[ -n "$existing_tab_id" ]]; then
+      tab_id="$existing_tab_id"
+      _log "register: zellij list-tabs miss for tab=$tab — preserving existing TAB_ID=$tab_id role=$role"
+    else
+      _log "register: could not resolve tab_id for tab=$tab (zellij list-tabs returned no match)"
+    fi
+  fi
+
   printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
     "$role" "$tab" "$tab_id" "$repo" "$(_now)" "$agent" "$loadout" \
     | _atomic_write "$f"

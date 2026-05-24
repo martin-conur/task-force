@@ -424,6 +424,27 @@ _setup_stale_local_base() {
   assert_failure
 }
 
+@test ".info records TAB_ID even when the tab is already paint-prefixed at lookup time (#117 review)" {
+  # Race scenario: between aw_launch_tab returning and task-work's tab_id
+  # lookup, the worker's SessionStart → first prompt → `radio busy` chain
+  # repaints the tab name to "▶️ my-feature". A literal-name jq match would
+  # miss; aw_zellij_tab_id_by_name's prefix-stripping filter must still hit.
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"▶️ my-feature","tab_id":12}]'
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "${TAB_ID:-}" "12"
+}
+
+@test ".info records TAB_ID when the tab is idle-painted (⏸️ <slug>) at lookup time (#117 review)" {
+  # Symmetric to the busy-paint case — idle paint must also be stripped.
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"⏸️ my-feature","tab_id":12}]'
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "${TAB_ID:-}" "12"
+}
+
 # ---------------------------------------------------------------------------
 # Zellij interactions
 # ---------------------------------------------------------------------------

@@ -238,6 +238,11 @@ fi
 # owned by task-work / task-done and is never written by radio, so it stays
 # authoritative regardless of any SessionStart/SessionEnd re-register churn
 # inside the worker.
+#
+# Race-safe: aw_zellij_tab_id_by_name strips ⏸/▶/❓ paint prefixes off the
+# zellij-side .name before matching against $SLUG, so a `radio busy` paint
+# that fires between aw_launch_tab returning and this lookup (worker's
+# SessionStart → first prompt) can't make the match miss (#117 review).
 INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
 if [[ -n "$INFO_TAB_ID" ]]; then
   printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"

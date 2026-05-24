@@ -27,6 +27,14 @@
 # zellij not running, jq absent, or the tab isn't visible yet — caller
 # must treat that as a soft skip (task-done falls back to the radio
 # session file in that case).
+#
+# Race-safe against in-flight `radio busy` / `radio ready` paints (#117
+# review): the worker's SessionStart → first-prompt → radio busy chain can
+# repaint the tab name to "▶️ <slug>" between aw_launch_tab returning and
+# this lookup running. The jq filter strips known paint prefixes from
+# .name before comparing against $n (which is always the bare slug, since
+# task-work passes $SLUG), so the match still hits regardless of paint
+# state. Keep this prefix list in sync with `_rename_tab` in `radio`.
 aw_zellij_tab_id_by_name() {
   local target="$1"
   [[ -n "$target" ]] || return 0
@@ -34,7 +42,13 @@ aw_zellij_tab_id_by_name() {
   command -v jq >/dev/null 2>&1 || return 0
   zellij action list-tabs --json 2>/dev/null \
     | jq -r --arg n "$target" \
-        '[.[] | select(.name == $n) | .tab_id] | .[0] // empty' 2>/dev/null
+        '[.[]
+          | select((.name
+                    | sub("^⏸️ "; "")
+                    | sub("^▶️ "; "")
+                    | sub("^❓ "; "")) == $n)
+          | .tab_id]
+         | .[0] // empty' 2>/dev/null
 }
 
 # Launch a new zellij tab. See file header for semantics.

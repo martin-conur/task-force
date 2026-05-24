@@ -57,6 +57,13 @@ teardown() {
   assert_output "STATE=idle"
 }
 
+@test "awaiting toggles STATE to awaiting (#119)" {
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "STATE=awaiting"
+}
+
 @test "unregister removes the session file" {
   "$RADIO" register --role pm --tab pm --agent claude
   TASK_FORCE_ROLE=pm "$RADIO" unregister
@@ -89,6 +96,12 @@ teardown() {
 
 @test "ready is a silent no-op when TASK_FORCE_ROLE is unset" {
   run env -u TASK_FORCE_ROLE "$RADIO" ready
+  assert_success
+  [ -z "$output" ]
+}
+
+@test "awaiting is a silent no-op when TASK_FORCE_ROLE is unset (#119)" {
+  run env -u TASK_FORCE_ROLE "$RADIO" awaiting
   assert_success
   [ -z "$output" ]
 }
@@ -169,6 +182,20 @@ teardown() {
   assert_output --partial "1"
   run cat "$TASK_FORCE_HOME/radio/log"
   assert_output --partial "no session for pm"
+}
+
+@test "send queues silently when recipient is awaiting (send-gate covers non-idle) (#119)" {
+  # Pins the spec's send-gate contract: STATE != idle blocks wake-ups. `awaiting`
+  # is not `idle`, so it composes for free with the existing gate — no logic
+  # changes at radio:437 needed.
+  export ZELLIJ=fake-session
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent review-requested --body "PR up"
+  run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox/'*.md 2>/dev/null | wc -l | tr -d ' '"
+  assert_output "1"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "is busy (state=awaiting)"
 }
 
 @test "check lists unread messages and prints (no unread messages) when empty" {

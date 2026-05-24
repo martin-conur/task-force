@@ -18,6 +18,7 @@ load helpers/common
 # and we don't repeat the literal UTF-8 sequences across cases.
 PAUSE='⏸️ '
 PLAY='▶️ '
+AWAIT='❓︎ '
 
 setup() {
   setup_task_force_home
@@ -115,6 +116,14 @@ teardown() {
   assert_output "TAB=${PAUSE}pm"
 }
 
+@test "awaiting flips tab to the awaiting prefix and updates TAB= (#119)" {
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  assert_stub_called zellij "action rename-tab-by-id 7 ${AWAIT}pm"
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${AWAIT}pm"
+}
+
 # ----- no prefix stacking ---------------------------------------------------
 
 @test "consecutive idle→busy→idle flips do not stack emoji prefixes" {
@@ -131,6 +140,19 @@ teardown() {
   # And the most recent rename-tab-by-id call should target the same name.
   run bash -c "grep 'rename-tab-by-id' '$STUB_CALLS_DIR/zellij.calls' | tail -1"
   assert_output "zellij action rename-tab-by-id 7 ${PAUSE}pm"
+}
+
+@test "busy → awaiting → busy flips do not stack emoji prefixes (#119)" {
+  # Exercises _strip_tab_prefix's new ❓︎ strip — without it, the second `busy`
+  # flip would rename to "▶️ ❓︎ pm".
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  run grep "^TAB=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB=${PLAY}pm"
+  run bash -c "grep 'rename-tab-by-id' '$STUB_CALLS_DIR/zellij.calls' | tail -1"
+  assert_output "zellij action rename-tab-by-id 7 ${PLAY}pm"
 }
 
 # ----- TAB= sync keeps wake-up working --------------------------------------

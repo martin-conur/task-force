@@ -52,6 +52,16 @@ write_session_file() {
     > "$TASK_FORCE_HOME/radio/sessions/$ROLE.info"
 }
 
+# Append TAB_ID= to the worktree's $INFO_FILE. setup_worktree pre-seeds the
+# file with BASE_BRANCH/SLUG/NOTION_URL; the Layer 2 task-work change appends
+# TAB_ID= after the tab is opened, so the file ends up with TAB_ID as the
+# last line (which is what task-done's awk parser picks up by exit-on-first-
+# match).
+write_info_tab_id() {
+  local tab_id="$1"
+  printf 'TAB_ID=%s\n' "$tab_id" >> "$WORKTREE_BASE/.$SLUG.info"
+}
+
 # Returns the set of close-tab-flavored calls made against the zellij stub,
 # one per line.
 zellij_close_calls() {
@@ -158,4 +168,55 @@ zellij_close_calls() {
   assert_output --partial "Skipping zellij close-tab"
   run zellij_close_calls
   assert_output ""
+}
+
+# ---------------------------------------------------------------------------
+# Layer 2: $INFO_FILE is the authoritative TAB_ID source (#117)
+#
+# task-work now writes TAB_ID= into $INFO_FILE at tab-creation time, where
+# the radio binary never touches it. task-done reads from $INFO_FILE first
+# and only falls back to the radio session file. This protects close-tab
+# from any mid-session SessionStart re-register that clobbered the radio
+# session file's TAB_ID — the #117 regression scenario.
+# ---------------------------------------------------------------------------
+
+@test "close-tab prefers \$INFO_FILE TAB_ID over the radio session file (#117)" {
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  # Simulate the #117 mid-life clobber: radio session file's TAB_ID was
+  # wiped to empty by a re-register, but $INFO_FILE still has the right id.
+  write_info_tab_id 12
+  write_session_file ""
+
+  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_stub_called zellij "action close-tab-by-id 12"
+  run zellij_close_calls
+  refute_output --partial "action close-tab"$'\n'
+}
+
+@test "close-tab falls back to radio session file when \$INFO_FILE has no TAB_ID (pre-fix worker)" {
+  # Worker started before the Layer 2 task-work change → $INFO_FILE doesn't
+  # carry TAB_ID. task-done should still recover the id via the radio
+  # session file (Layer 2 fallback).
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  # Do NOT call write_info_tab_id — $INFO_FILE has BASE_BRANCH/SLUG only.
+  write_session_file 7
+
+  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_stub_called zellij "action close-tab-by-id 7"
+}
+
+@test "close-tab uses \$INFO_FILE TAB_ID even when the radio session file is missing entirely (#117)" {
+  # Defense in depth: \$INFO_FILE alone is enough to close the right tab.
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 12
+  # No write_session_file call → no radio session file on disk.
+
+  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_stub_called zellij "action close-tab-by-id 12"
 }

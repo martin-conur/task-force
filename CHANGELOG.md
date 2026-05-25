@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in auto-submit on radio wake-up for `--auto` workers.** `radio send`'s zellij `write-chars` wake-up has always written `radio check\n` (LF) into the recipient's pane, leaving it sitting in the input box until the user pressed Enter. For workers launched via `task-work --auto` — already an explicit autonomy opt-in, and idle most of their life waiting on PM — that human gate is friction with no upside. `task-work --auto` now exports `TASK_FORCE_AUTO_SUBMIT=1`; `radio register` / `_ensure_session_file` persist that as `AUTO_SUBMIT=1` in the session file; `cmd_send` reads it and switches the wake-up byte to CR (`\r`), which Claude Code's raw-mode input binds to Enter. PM and default (non-`--auto`) workers leave the flag unset and keep the LF wake-up, so a `radio check` ping can never corrupt a partially-typed prompt. (#128)
+
 ## [0.2.2] — 2026-05-23
 
 Patch release. Extends the cross-tab targeting fix from `v0.2.1` (radio) to `task-done`, and hardens the radio session lifecycle so intra-session Claude events (`/clear`, `/compact`, resume) don't brick subsequent radio operations.

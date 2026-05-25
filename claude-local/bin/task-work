@@ -231,6 +231,11 @@ fi
 # command exports those vars to that command's environment only.
 TASK_FORCE_ROLE_VALUE="worker-${REPO_NAME}-${SLUG}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_TAB=$(printf %q "$SLUG") "
+# Opt --auto workers into radio's CR (auto-submit) wake-up so PM pings process
+# without a manual Enter (#128). PM and non-auto workers leave this unset, so
+# radio keeps using LF — preserves the human gate that protects a partially-
+# typed prompt from being corrupted by an incoming `radio check`.
+[[ -n "${AUTO_MODE:-}" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
 # endregion:radio-env-injection
 
 # region:worktree-creation-post-info

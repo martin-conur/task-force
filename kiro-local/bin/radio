@@ -166,10 +166,19 @@ _ensure_session_file() {
   local repo
   repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
-  printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-    "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$repo" "$(_now)" \
-    "${TASK_FORCE_AGENT:-claude}" "${TASK_FORCE_LOADOUT:-unknown}" \
-    | _atomic_write "$f"
+  {
+    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+      "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$repo" "$(_now)" \
+      "${TASK_FORCE_AGENT:-claude}" "${TASK_FORCE_LOADOUT:-unknown}"
+    # Preserve the --auto opt-in across self-heal so cmd_send keeps using CR
+    # for wake-up after an intra-session re-seed (#128). Use `if` rather than
+    # `&&` so the brace group exits 0 when the flag is absent — otherwise
+    # pipefail would surface a stray exit-1 through `| _atomic_write` and
+    # `set -e` would abort the re-seed.
+    if [[ "${TASK_FORCE_AUTO_SUBMIT:-}" == "1" ]]; then
+      printf 'AUTO_SUBMIT=1\n'
+    fi
+  } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$TASK_FORCE_ROLE")" "$(_processed_dir "$TASK_FORCE_ROLE")"
   _log "ensure_session: re-seeded $TASK_FORCE_ROLE (file was missing) tab_id=$tab_id"
@@ -323,9 +332,20 @@ cmd_register() {
     fi
   fi
 
-  printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-    "$role" "$tab" "$tab_id" "$repo" "$(_now)" "$agent" "$loadout" \
-    | _atomic_write "$f"
+  {
+    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+      "$role" "$tab" "$tab_id" "$repo" "$(_now)" "$agent" "$loadout"
+    # Persist the --auto opt-in (#128). task-work --auto exports
+    # TASK_FORCE_AUTO_SUBMIT=1 into the tab's env; cmd_send reads AUTO_SUBMIT
+    # off the recipient's session file and flips wake-up from LF (manual) to
+    # CR (auto-submit). task-pm and default workers never export this, so
+    # they keep the human-gated default. `if` rather than `&&` so the brace
+    # group exits 0 even when the flag is absent — pipefail + set -e would
+    # otherwise abort register on every non-auto worker.
+    if [[ "${TASK_FORCE_AUTO_SUBMIT:-}" == "1" ]]; then
+      printf 'AUTO_SUBMIT=1\n'
+    fi
+  } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
   _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout"
@@ -463,12 +483,24 @@ cmd_send() {
     _log "send: no writable pane on tab_id=$rtab_id for $to — queued (id=$id)"
     return 0
   fi
-  # Only ever write the literal string "radio check\n" — never the message body
-  # or any caller-supplied data. `zellij write-chars` injects directly into the
-  # recipient's TUI input buffer; writing anything else risks corrupting the
-  # agent's unsaved prompt or smuggling content into a TUI command. The
-  # recipient reads the actual message via `radio check` / `radio read`.
-  zellij action write-chars --pane-id "$rpane_id" "radio check"$'\n' >/dev/null 2>&1 || {
+  # Only ever write the literal string "radio check<term>" — never the message
+  # body or any caller-supplied data. `zellij write-chars` injects directly
+  # into the recipient's TUI input buffer; writing anything else risks
+  # corrupting the agent's unsaved prompt or smuggling content into a TUI
+  # command. The recipient reads the actual message via `radio check` /
+  # `radio read`.
+  #
+  # Recipients launched via `task-work --auto` opt in to CR (auto-submit) so
+  # PM pings process without a manual Enter (#128). Everyone else — PM,
+  # default workers, pre-#128 workers with no AUTO_SUBMIT field — gets LF,
+  # which lands "radio check" in the input box and waits for the user to
+  # press Enter. The human gate is what protects partially-typed prompts
+  # from being corrupted by an incoming wake-up.
+  local wake_term=$'\n'
+  if [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" == "1" ]]; then
+    wake_term=$'\r'
+  fi
+  zellij action write-chars --pane-id "$rpane_id" "radio check${wake_term}" >/dev/null 2>&1 || {
     _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"; return 0; }
   _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (id=$id)"
 }

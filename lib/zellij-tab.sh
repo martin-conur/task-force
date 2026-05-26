@@ -52,10 +52,33 @@ aw_zellij_tab_id_by_name() {
 }
 
 # Launch a new zellij tab. See file header for semantics.
+#
+# Optional 4th arg `stay_on_caller_tab`: when "1", capture the caller's tab
+# position before `new-tab` and snap focus back via `go-to-tab` afterwards
+# (#130). Used by `task-work --auto` so PM can dispatch workers without
+# losing focus. Any other value (including empty/missing) preserves the
+# legacy focus-shift behavior.
+#
+# Failure modes (no $ZELLIJ, no jq, empty position lookup, non-zero
+# go-to-tab) fall through to the legacy behavior — the worker spawn must
+# never abort because the snap-back path errored. Same defensive style as
+# aw_zellij_tab_id_by_name above.
+#
+# Note on the ~100-300ms flicker window between new-tab and go-to-tab:
+# keystrokes typed during that window can land in the new tab. Acceptable
+# for --auto (explicit autonomy opt-in; PM is typically idle on radio).
 aw_launch_tab() {
   local slug="$1"
   local cwd="$2"
   local cmd="${3:-}"
+  local stay_on_caller_tab="${4:-}"
+
+  local caller_pos=""
+  if [[ "$stay_on_caller_tab" == "1" && -n "${ZELLIJ:-}" ]] \
+     && command -v jq >/dev/null 2>&1; then
+    caller_pos=$(zellij action list-tabs --json 2>/dev/null \
+      | jq -r '.[] | select(.active) | .position' 2>/dev/null) || caller_pos=""
+  fi
 
   if [[ -z "$cmd" ]]; then
     # Interactive shell cd'd into the worktree. --cwd handles the cd; zellij
@@ -66,5 +89,10 @@ aw_launch_tab() {
     # `bash -ic` gives us interactive shell semantics (reads bashrc etc.) so
     # the agent command runs in the same environment the user would get.
     zellij action new-tab --name "$slug" --cwd "$cwd" -- bash -ic "$cmd"
+  fi
+
+  # .position is 0-indexed; go-to-tab is 1-indexed (verified zellij 0.44.3).
+  if [[ -n "$caller_pos" ]]; then
+    zellij action go-to-tab "$((caller_pos + 1))" 2>/dev/null || true
   fi
 }

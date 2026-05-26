@@ -14,5 +14,10 @@ case "$*" in
   "action list-panes --json --tab")
     [[ -n "${STUB_ZELLIJ_PANES_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_PANES_JSON"
     ;;
+  "action go-to-tab "*)
+    # Lets tests pin the contract that aw_launch_tab's `|| true` swallows
+    # a non-zero go-to-tab without aborting the worker spawn.
+    [[ -n "${STUB_ZELLIJ_GOTO_TAB_FAIL:-}" ]] && exit 1
+    ;;
 esac
 exit 0

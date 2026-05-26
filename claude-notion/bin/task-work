@@ -221,9 +221,9 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # region:worktree-creation-post-info
 echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" ""
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
 fi
 
 if [[ -n "$NO_LAUNCH" ]]; then

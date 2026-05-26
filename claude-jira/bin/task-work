@@ -168,7 +168,7 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # endregion:radio-env-injection
 
 echo "Opening zellij tab '$SLUG'..."
-aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)"
+aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
 
 echo "Worker started in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **`radio read <id>` now auto-acks (moves `inbox/` → `processed/`).** The previous `read` + `ack` split was a workflow footgun: workers would `read` a message, act on it, forget to `ack`, and every subsequent `radio check` would re-list the stale entry identically — making PM's silence indistinguishable from PM never having pinged. `read` now collapses both beats by default. An explicit `radio read --peek <id>` (alias: `--no-ack`) is the escape hatch for "I just want to see what's in there without consuming it." `radio ack <id>` is now idempotent: if the message was already moved by a prior `read`, it exits 0 with a friendly "already processed" line so existing `read && ack` scripts and muscle memory keep working. This is a deliberate UX change, not a bug fix — the old behavior was the intended (broken) design. (#131)
+
 ### Added
 
 - **Opt-in auto-submit on radio wake-up for `--auto` workers.** `radio send`'s zellij `write-chars` wake-up has always written `radio check\n` (LF) into the recipient's pane, leaving it sitting in the input box until the user pressed Enter. For workers launched via `task-work --auto` — already an explicit autonomy opt-in, and idle most of their life waiting on PM — that human gate is friction with no upside. `task-work --auto` now exports `TASK_FORCE_AUTO_SUBMIT=1`; `radio register` / `_ensure_session_file` persist that as `AUTO_SUBMIT=1` in the session file; `cmd_send` reads it and switches the wake-up byte to CR (`\r`), which Claude Code's raw-mode input binds to Enter. PM and default (non-`--auto`) workers leave the flag unset and keep the LF wake-up, so a `radio check` ping can never corrupt a partially-typed prompt. (#128)

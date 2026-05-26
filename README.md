@@ -382,8 +382,9 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 |---------|--------------|
 | `radio send --to <role> --intent <kind> [--pr N] [--issue N] [--body TEXT]` | Send a message (e.g. `--to pm --intent review-requested --pr 42`); body can come from stdin |
 | `radio check`                       | List unread messages addressed to this role |
-| `radio read <id>`                   | Print one message |
-| `radio ack <id>`                    | Mark it acknowledged so it stops showing up in `check` |
+| `radio read <id>`                   | Print one message AND mark it acknowledged (moves `inbox/` → `processed/`) |
+| `radio read --peek <id>`            | Print without acknowledging — for inspection / debugging |
+| `radio ack <id>`                    | Mark it acknowledged (idempotent — no-op if already processed by a prior `read`) |
 | `radio register` / `radio unregister` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`) |
 | `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
 | `radio orphans`                     | List session files whose heartbeat is >1h stale |

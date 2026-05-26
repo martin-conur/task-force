@@ -122,6 +122,44 @@ teardown() {
   assert_failure
 }
 
+@test "stay_on_caller_tab=1 + jq missing: gate falls through, no list-tabs / no go-to-tab" {
+  # Override `command` as a shell function so `command -v jq` returns non-zero
+  # without disturbing PATH (which the zellij stub's `#!/usr/bin/env bash`
+  # shebang relies on). aw_launch_tab is sourced into this shell, so the
+  # function override is visible when its `command -v jq >/dev/null 2>&1`
+  # gate runs. All other lookups delegate to the real builtin.
+  command() {
+    if [[ "$1" == "-v" && "$2" == "jq" ]]; then return 1; fi
+    builtin command "$@"
+  }
+
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
+    aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+
+  unset -f command
+
+  local calls
+  calls=$(stub_calls zellij)
+  assert_stub_called zellij "new-tab --name new-worker"
+  run grep -F 'list-tabs --json' <<<"$calls"
+  assert_failure
+  run grep -F 'go-to-tab' <<<"$calls"
+  assert_failure
+}
+
+@test "stay_on_caller_tab=1 + go-to-tab exits non-zero: spawn still succeeds" {
+  # If `zellij action go-to-tab` errors (e.g. stale position, race with a
+  # close-tab elsewhere), the `|| true` swallow must keep aw_launch_tab from
+  # propagating the failure. Worker spawn must still succeed.
+  STUB_ZELLIJ_GOTO_TAB_FAIL=1 ZELLIJ=1 \
+    STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  # new-tab still recorded, go-to-tab was attempted (and failed silently).
+  assert_stub_called zellij "new-tab --name new-worker"
+  assert_stub_called zellij "go-to-tab 1"
+}
+
 @test "stay_on_caller_tab=1 + empty cmd (no-launch path): still snaps back" {
   # The --no-launch branch from task-work passes an empty cmd. Snap-back must
   # still fire so --auto --no-launch (if ever combined) keeps PM focus.

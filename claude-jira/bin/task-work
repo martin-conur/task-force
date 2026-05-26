@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$AUTO_MODE" && -n "$PLAN_MODE" ]]; then
+if [[ -n "${AUTO_MODE:-}" && -n "$PLAN_MODE" ]]; then
   echo "Error: --auto and --plan are mutually exclusive" >&2
   exit 1
 fi
@@ -109,7 +109,7 @@ build_claude_cmd() {
     return
   fi
   local mode_prefix=""
-  [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
+  [[ -n "${AUTO_MODE:-}" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$JIRA_REF" ]]; then
     echo "claude ${mode_prefix}\"/worker Implement Jira issue: $JIRA_REF\""
   else
@@ -168,7 +168,7 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # endregion:radio-env-injection
 
 echo "Opening zellij tab '$SLUG'..."
-aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)"
+aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
 
 echo "Worker started in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
 

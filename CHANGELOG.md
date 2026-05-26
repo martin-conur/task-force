@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **`radio read <id>` now auto-acks (moves `inbox/` → `processed/`).** The previous `read` + `ack` split was a workflow footgun: workers would `read` a message, act on it, forget to `ack`, and every subsequent `radio check` would re-list the stale entry identically — making PM's silence indistinguishable from PM never having pinged. `read` now collapses both beats by default. An explicit `radio read --peek <id>` (alias: `--no-ack`) is the escape hatch for "I just want to see what's in there without consuming it." `radio ack <id>` is now idempotent: if the message was already moved by a prior `read`, it exits 0 with a friendly "already processed" line so existing `read && ack` scripts and muscle memory keep working. This is a deliberate UX change, not a bug fix — the old behavior was the intended (broken) design. (#131)
+
 ### Added
 
 - **`task-work --auto` spawns the worker tab without stealing focus from the caller.** Zellij's `new-tab` has no `--no-focus` flag, so dispatching a worker from PM always snapped focus into the new tab — friction when running 3–4 parallel `--auto` workers back-to-back. `aw_launch_tab` now takes an optional `stay_on_caller_tab` arg; `--auto` task-work threads `$AUTO_MODE` through so the launcher captures the caller's tab position via `zellij action list-tabs --json` before `new-tab`, then snaps focus back with `go-to-tab <pos+1>` after. Default `task-work` and `task-work --plan` are unchanged — both still land in the new tab (planner is interactive; you want to be there). Defensive: all gates (`$ZELLIJ` unset, `jq` missing, empty position, non-zero `go-to-tab`) fall through to the legacy focus-shift path; the worker spawn never aborts because the snap-back failed. (#130)

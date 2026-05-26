@@ -210,7 +210,7 @@ teardown() {
   assert_output --partial "PR ready"
 }
 
-@test "read prints the full message body; ack moves it to processed/" {
+@test "read prints the full message body and auto-acks (moves to processed/) (#131)" {
   "$RADIO" register --role pm --tab pm --agent claude
   TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent review-requested --body "Body content"
   local id
@@ -221,9 +221,14 @@ teardown() {
   assert_output --partial "from: worker-foo"
   assert_output --partial "Body content"
 
-  TASK_FORCE_ROLE=pm "$RADIO" ack "$id"
+  # Default `read` now auto-acks — see issue #131.
   assert [ ! -f "$TASK_FORCE_HOME/radio/mailbox/pm/inbox/${id}.md" ]
   assert [ -f "$TASK_FORCE_HOME/radio/mailbox/pm/processed/${id}.md" ]
+
+  # Legacy paired `ack` is idempotent on an already-processed id.
+  TASK_FORCE_ROLE=pm run "$RADIO" ack "$id"
+  assert_success
+  assert_output --partial "already processed"
 }
 
 @test "ack of an unknown message returns non-zero" {

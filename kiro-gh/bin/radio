@@ -14,8 +14,8 @@ usage() {
 Usage:
   radio send --to ROLE --intent KIND [--pr N] [--issue N] [--repo PATH] [--body TEXT | < body]
   radio check                            list unread messages for this role
-  radio read   <id>                      print message body
-  radio ack    <id>                      move message to processed/
+  radio read   [--peek|--no-ack] <id>    print body; by default also move inbox/<id>.md -> processed/
+  radio ack    <id>                      move message to processed/ (idempotent: no-op if already processed)
   radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
   radio ready                            mark this role idle (and process pending)
   radio busy                             mark this role busy
@@ -529,15 +529,38 @@ cmd_check() {
 
 cmd_read() {
   _require_role
-  local id="${1:-}"
+  # Default beat is read+ack: print body, then move inbox -> processed. The
+  # split between `read` and `ack` was a footgun — workers would `read`, act,
+  # and forget to `ack`, leaving stale messages that re-listed on every
+  # `radio check` (see #131). `--peek` / `--no-ack` is the escape hatch for
+  # inspection without consuming.
+  local peek=0
+  local id=""
+  while (($#)); do
+    case "$1" in
+      --peek|--no-ack) peek=1; shift ;;
+      --) shift; break ;;
+      -*) echo "read: unknown flag $1" >&2; exit 2 ;;
+      *) id="$1"; shift ;;
+    esac
+  done
   [[ -n "$id" ]] || { echo "read: <id> required" >&2; exit 2; }
-  local f
-  f="$(_inbox_dir "$TASK_FORCE_ROLE")/${id}.md"
-  if [[ ! -f "$f" ]]; then
-    f="$(_processed_dir "$TASK_FORCE_ROLE")/${id}.md"
+  local inbox processed
+  inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
+  processed=$(_processed_dir "$TASK_FORCE_ROLE")
+  local src="$inbox/${id}.md"
+  local in_inbox=1
+  if [[ ! -f "$src" ]]; then
+    src="$processed/${id}.md"
+    in_inbox=0
   fi
-  [[ -f "$f" ]] || { echo "read: message $id not found" >&2; exit 1; }
-  cat "$f"
+  [[ -f "$src" ]] || { echo "read: message $id not found" >&2; exit 1; }
+  cat "$src"
+  if (( peek == 0 )) && (( in_inbox == 1 )); then
+    mkdir -p "$processed"
+    mv -f "$src" "$processed/"
+    _log "read+ack id=$id role=$TASK_FORCE_ROLE"
+  fi
 }
 
 cmd_ack() {
@@ -548,7 +571,16 @@ cmd_ack() {
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
   processed=$(_processed_dir "$TASK_FORCE_ROLE")
   local src="$inbox/${id}.md"
-  [[ -f "$src" ]] || { echo "ack: message $id not in inbox" >&2; exit 1; }
+  # Idempotent: if `read` already auto-acked (post-#131), exit 0 quietly so
+  # existing `read && ack` scripts and muscle memory don't break.
+  if [[ ! -f "$src" ]]; then
+    if [[ -f "$processed/${id}.md" ]]; then
+      echo "ack: message $id already processed"
+      return 0
+    fi
+    echo "ack: message $id not in inbox" >&2
+    exit 1
+  fi
   mkdir -p "$processed"
   mv -f "$src" "$processed/"
   _log "ack id=$id role=$TASK_FORCE_ROLE"

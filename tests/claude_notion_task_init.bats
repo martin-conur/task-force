@@ -254,3 +254,13 @@ teardown() {
   after=$(jq -r '.permissions.allow | length' "$TARGET_DIR/.claude/settings.json")
   assert_equal "$before" "$after"
 }
+
+@test "SessionStart hook command embeds the loadout name (env-overridable)" {
+  run "$CLAUDE_NOTION_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.SessionStart[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  # The hook uses ${TASK_FORCE_LOADOUT:-claude-notion} so per-role launchers like
+  # task-reviewer can override LOADOUT= without re-running task-init.
+  assert_output --partial "--loadout \${TASK_FORCE_LOADOUT:-claude-notion}"
+  assert_output --partial "--agent claude"
+}

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# region:body
+# task-reviewer — in-place reviewer-tab takeover for claude loadouts.
+# Renames the current zellij tab to "reviewer" and exec's `claude /reviewer`
+# so the SessionStart hook in <repo>/.claude/settings.json registers the
+# reviewer mailbox. Runs on Sonnet (cheaper model) since the orchestrator
+# only coordinates the code-review skill's sub-agents; sub-agents have their
+# own model overrides and aren't affected by $ANTHROPIC_MODEL here.
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "Error: not in a git repo." >&2
+  echo "       task-reviewer requires a task-force-initialized repo so the" >&2
+  echo "       SessionStart hook can load .claude/settings.json." >&2
+  exit 1
+fi
+cd "$(git rev-parse --show-toplevel)"
+
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+
+if [[ -n "${ZELLIJ:-}" ]]; then
+  zellij action rename-tab "reviewer" >/dev/null 2>&1 || true
+fi
+
+export TASK_FORCE_ROLE="reviewer-${REPO_NAME}"
+export ZELLIJ_TAB=reviewer
+export TASK_FORCE_LOADOUT=reviewer
+# Cheap-model default for the orchestrator. Pre-set values win so a caller can
+# pin a different model (e.g. for a one-off Opus review) without editing this.
+export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
+exec claude "/reviewer"
+# endregion:body

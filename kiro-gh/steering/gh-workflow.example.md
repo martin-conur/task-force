@@ -108,6 +108,15 @@ To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm`, registers via the `agentSpawn` hook, and
 starts the PM agent in-place.
 
+To launch an opt-in reviewer worker (in-place reviewer-tab takeover), run
+`task-reviewer` from any spare tab — it renames the tab to `reviewer`,
+registers as `reviewer-<reponame>`, and runs the `reviewer` agent. PM forwards
+`review-requested` pings to it via
+`radio send --to reviewer-<reponame> --intent review-requested --pr <N>`; the
+reviewer posts PR findings via `gh pr comment` and radios PM back with
+`review-complete-clean` or `review-complete-with-findings`. PM still owns the
+merge decision — the reviewer never approves, merges, or mutates status.
+
 If a worker tab dies unexpectedly (or kiro resumes a session without
 re-firing the `agentSpawn` hook), the session file's `LAST_HEARTBEAT` will go
 stale. Run `radio orphans` to list any session whose heartbeat is older than

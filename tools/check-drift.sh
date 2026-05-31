@@ -28,6 +28,7 @@ GROUPS_DEFAULT=(
   "radio|body|claude-gh/bin/radio claude-jira/bin/radio claude-local/bin/radio claude-notion/bin/radio kiro-gh/bin/radio kiro-local/bin/radio kiro-notion/bin/radio"
   "task-pm-claude|body|claude-gh/bin/task-pm claude-jira/bin/task-pm claude-local/bin/task-pm claude-notion/bin/task-pm"
   "task-pm-kiro|body|kiro-gh/bin/task-pm kiro-local/bin/task-pm kiro-notion/bin/task-pm"
+  "task-reviewer-claude|body|claude-gh/bin/task-reviewer claude-jira/bin/task-reviewer claude-local/bin/task-reviewer claude-notion/bin/task-reviewer"
 )
 # endregion:default-manifest
 

@@ -24,12 +24,13 @@ IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
 
 TARGET="$AW_ROOT/$IMPL/bin/task-reviewer"
 if [[ ! -x "$TARGET" ]]; then
-  # The reviewer role currently ships only for claude-gh and kiro-gh. Surface
-  # that explicitly rather than the generic "not found / is the repo complete"
+  # The reviewer role ships for all claude loadouts and kiro-gh. Surface that
+  # explicitly rather than the generic "not found / is the repo complete"
   # message — the impl is configured, the *reviewer* just isn't part of it.
   echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
-  echo "       Reviewer support currently ships for claude-gh and kiro-gh only." >&2
-  echo "       See https://github.com/martin-conur/task-force/issues/134 for tracking." >&2
+  echo "       Reviewer support currently ships for claude-gh, claude-jira," >&2
+  echo "       claude-notion, claude-local, and kiro-gh." >&2
+  echo "       See https://github.com/martin-conur/task-force/issues/136 for tracking." >&2
   exit 1
 fi
 

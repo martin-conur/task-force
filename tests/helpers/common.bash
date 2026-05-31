@@ -42,6 +42,7 @@ TASK_PM_CLAUDE="$REPO_ROOT_REAL/claude-gh/bin/task-pm"
 TASK_PM_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-pm"
 TASK_PM_DISPATCHER="$REPO_ROOT_REAL/bin/task-pm"
 TASK_REVIEWER_CLAUDE="$REPO_ROOT_REAL/claude-gh/bin/task-reviewer"
+TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"
 TASK_REVIEWER_DISPATCHER="$REPO_ROOT_REAL/bin/task-reviewer"
 
 # Creates a temp directory with a git repo, sets up $MAIN_REPO,

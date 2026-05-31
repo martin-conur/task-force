@@ -8,8 +8,9 @@ set -euo pipefail
 # only coordinates the code-review skill's sub-agents; sub-agents have their
 # own model overrides and aren't affected by $ANTHROPIC_MODEL here.
 if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
-  echo "Error: not in a git repo (task-reviewer requires a task-force-initialized repo" >&2
-  echo "       so the SessionStart hook can load .claude/settings.json)" >&2
+  echo "Error: not in a git repo." >&2
+  echo "       task-reviewer requires a task-force-initialized repo so the" >&2
+  echo "       SessionStart hook can load .claude/settings.json." >&2
   exit 1
 fi
 cd "$(git rev-parse --show-toplevel)"

@@ -93,6 +93,26 @@ EOF
   refute_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
+# ----- kiro variant ---------------------------------------------------------
+
+@test "kiro task-reviewer renames the current tab to reviewer and exec's kiro-cli reviewer agent" {
+  run "$TASK_REVIEWER_KIRO"
+  assert_success
+  assert_stub_called zellij "action rename-tab reviewer"
+  run stub_calls kiro-cli
+  assert_output --partial "chat --agent reviewer"
+}
+
+@test "kiro task-reviewer errors out cleanly outside a git repo" {
+  local outside
+  outside=$(mktemp -d)
+  cd "$outside"
+  run "$TASK_REVIEWER_KIRO"
+  assert_failure
+  assert_output --partial "not in a git repo"
+  rm -rf "$outside"
+}
+
 # ----- dispatcher -----------------------------------------------------------
 
 @test "top-level task-reviewer dispatches to the claude-gh variant based on workflow doc" {
@@ -105,8 +125,30 @@ EOF
   assert_output --partial "/reviewer"
 }
 
+@test "top-level task-reviewer dispatches to the kiro-gh variant based on workflow doc" {
+  mkdir -p "$MAIN_REPO/.kiro/steering"
+  touch "$MAIN_REPO/.kiro/steering/gh-workflow.md"
+
+  run "$TASK_REVIEWER_DISPATCHER"
+  assert_success
+  run stub_calls kiro-cli
+  assert_output --partial "chat --agent reviewer"
+}
+
 @test "top-level task-reviewer errors cleanly when no workflow doc is present" {
   run "$TASK_REVIEWER_DISPATCHER"
   assert_failure
   assert_output --partial "no agentic-workflow impl configured"
+}
+
+@test "top-level task-reviewer errors cleanly for impls without a reviewer variant" {
+  # claude-local has no task-reviewer (only claude-gh + kiro-gh do). The
+  # dispatcher should surface a clear error, not the generic "Is the
+  # repository complete?" one.
+  mkdir -p "$MAIN_REPO/.claude"
+  touch "$MAIN_REPO/.claude/local-workflow.md"
+
+  run "$TASK_REVIEWER_DISPATCHER"
+  assert_failure
+  assert_output --partial "task-reviewer is not available for impl"
 }

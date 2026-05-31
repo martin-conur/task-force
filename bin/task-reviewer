@@ -17,16 +17,20 @@ BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
 AW_ROOT=$(dirname "$BIN_DIR")
 
 # shellcheck source=lib/detect-impl.sh
-# shellcheck source=lib/detect-impl.sh
 source "$AW_ROOT/lib/detect-impl.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
 
 TARGET="$AW_ROOT/$IMPL/bin/task-reviewer"
-[[ -x "$TARGET" ]] || {
-  echo "Error: $TARGET not found or not executable. Is the repository complete?" >&2
+if [[ ! -x "$TARGET" ]]; then
+  # The reviewer role currently ships only for claude-gh and kiro-gh. Surface
+  # that explicitly rather than the generic "not found / is the repo complete"
+  # message — the impl is configured, the *reviewer* just isn't part of it.
+  echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
+  echo "       Reviewer support currently ships for claude-gh and kiro-gh only." >&2
+  echo "       See https://github.com/martin-conur/task-force/issues/134 for tracking." >&2
   exit 1
-}
+fi
 
 exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}

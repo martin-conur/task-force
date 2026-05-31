@@ -21,7 +21,7 @@ Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo convention
      radio send --to pm --intent review-complete-clean --pr <N> --body "no findings"
      radio send --to pm --intent review-complete-with-findings --pr <N> --body "<short summary>"
      ```
-3. If `radio check` shows nothing, idle.
+3. If `radio check` shows nothing, idle. The `Stop` hook (`radio ready && radio check`) is what re-fires the loop on the next turn — when PM (or anyone) sends another `review-requested`, your tab gets woken via `zellij write-chars` and you'll see the new message on your next prompt.
 
 ### Authority boundaries
 

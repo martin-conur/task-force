@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# region:body
+# task-reviewer — in-place reviewer-tab takeover for kiro loadouts.
+# Renames the current zellij tab to "reviewer" and exec's kiro-cli's reviewer
+# agent so the session-start hook in <repo>/.kiro/ registers the reviewer
+# mailbox. Kiro doesn't have an equivalent to Claude Code's /code-review
+# orchestration skill, so the kiro reviewer reads `gh pr diff` directly and
+# posts comments via `gh pr comment` — single-agent prompt-driven review.
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "Error: not in a git repo." >&2
+  echo "       task-reviewer requires a task-force-initialized repo so the" >&2
+  echo "       session-start hook can load the project's hooks config." >&2
+  exit 1
+fi
+cd "$(git rev-parse --show-toplevel)"
+
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+
+if [[ -n "${ZELLIJ:-}" ]]; then
+  zellij action rename-tab "reviewer" >/dev/null 2>&1 || true
+fi
+
+export TASK_FORCE_ROLE="reviewer-${REPO_NAME}"
+export ZELLIJ_TAB=reviewer
+export TASK_FORCE_LOADOUT=reviewer
+# Sonnet default; pre-set $TASK_WORK_MODEL to override (e.g. for an Opus pass).
+exec kiro-cli chat --agent reviewer --model "${TASK_WORK_MODEL:-claude-sonnet-4.6}"
+# endregion:body

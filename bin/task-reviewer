@@ -30,7 +30,7 @@ if [[ ! -x "$TARGET" ]]; then
   echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
   echo "       Reviewer support currently ships for claude-gh, claude-jira," >&2
   echo "       claude-notion, claude-local, and kiro-gh." >&2
-  echo "       See https://github.com/martin-conur/task-force/issues/134 for tracking." >&2
+  echo "       See https://github.com/martin-conur/task-force/issues/136 for tracking." >&2
   exit 1
 fi
 

@@ -215,7 +215,11 @@ _radio_install_hooks() {
     exit 1
   fi
 
-  local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout $loadout"
+  # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
+  # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
+  # session file without rewiring task-init. Plain `claude`/task-pm/task-work
+  # sessions don't set the env var, so they keep the loadout default ($loadout).
+  local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout \${TASK_FORCE_LOADOUT:-$loadout}"
   local busy_cmd="radio busy"
   local stop_cmd="radio ready && radio check"
   local end_cmd="radio unregister"

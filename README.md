@@ -499,6 +499,22 @@ radio send --to worker-task-force-issue-42 --intent approved-and-merged --pr 42
 
 On its next turn the worker sees the ping, sets the project Status field to `Done`, and runs `task-done --remove-worktree` itself — removing the worktree and closing its own zellij tab. Done.
 
+### Optional: dedicated reviewer worker
+
+To shift PR review off the PM's (Opus) tab and onto a cheaper Sonnet model, spin up a reviewer worker in any spare zellij tab:
+
+```bash
+task-reviewer
+```
+
+Renames the current tab to `reviewer`, registers via the `SessionStart` hook as `reviewer-<reponame>`, and starts the `/reviewer` agent in-place on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6`). When a worker pings PM with `review-requested`, PM can forward the ping rather than reviewing inline:
+
+```bash
+radio send --to reviewer-<reponame> --intent review-requested --pr 42
+```
+
+The reviewer runs the `code-review` skill on the PR diff, posts substantive findings as PR comments via `gh pr comment`, and radios PM back with either `review-complete-clean` or `review-complete-with-findings`. PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates status. Opt-in: with no reviewer tab running, PM keeps doing inline reviews as in step 7.
+
 ---
 
 ## `task-work` flags

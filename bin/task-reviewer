@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Project-aware dispatcher for task-reviewer.
+#
+# Detects which <impl>/bin/task-reviewer to run by inspecting the current git
+# repo's workflow docs (see lib/detect-impl.sh). Override with --impl <name> or
+# AW_IMPL=<name>.
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+# shellcheck source=lib/detect-impl.sh
+source "$AW_ROOT/lib/detect-impl.sh"
+
+aw_parse_impl_flag "$@" || exit 1
+IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+
+TARGET="$AW_ROOT/$IMPL/bin/task-reviewer"
+[[ -x "$TARGET" ]] || {
+  echo "Error: $TARGET not found or not executable. Is the repository complete?" >&2
+  exit 1
+}
+
+exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}

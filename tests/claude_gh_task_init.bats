@@ -370,11 +370,13 @@ teardown() {
   assert_output "radio unregister"
 }
 
-@test "SessionStart hook command embeds the loadout name" {
+@test "SessionStart hook command embeds the loadout name (env-overridable)" {
   run "$CLAUDE_GH_TASK_INIT"
   assert_success
   run jq -r '.hooks.SessionStart[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
-  assert_output --partial "--loadout claude-gh"
+  # The hook uses ${TASK_FORCE_LOADOUT:-claude-gh} so per-role launchers like
+  # task-reviewer can override LOADOUT= without re-running task-init.
+  assert_output --partial "--loadout \${TASK_FORCE_LOADOUT:-claude-gh}"
   assert_output --partial "--agent claude"
 }
 

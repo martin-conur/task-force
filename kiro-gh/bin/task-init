@@ -229,8 +229,12 @@ EOF
     rm -f "$tmp"
   }
 
+  # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
+  # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
+  # session file without rewiring task-init. Plain task-pm / task-work sessions
+  # don't set the env var, so they keep the loadout default ($loadout).
   _write_hook "radio-register" "agentSpawn" \
-    "radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${loadout}"
+    "radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout \${TASK_FORCE_LOADOUT:-${loadout}}"
   _write_hook "radio-busy"     "userPromptSubmit" "radio busy"
   _write_hook "radio-ready"    "agentStop"        "radio ready && radio check"
   # Note: kiro has no session-end trigger (agentStop fires per-turn, not on

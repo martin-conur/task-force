@@ -272,12 +272,14 @@ teardown() {
   done
 }
 
-@test "radio-register hook embeds the loadout name and uses agentSpawn" {
+@test "radio-register hook embeds the loadout name (env-overridable) and uses agentSpawn" {
   run "$KIRO_GH_TASK_INIT"
   assert_success
   run cat "$TARGET_DIR/.kiro/hooks/radio-register.json"
   assert_output --partial "agentSpawn"
-  assert_output --partial "--loadout kiro-gh"
+  # The hook uses ${TASK_FORCE_LOADOUT:-kiro-gh} so per-role launchers like
+  # task-reviewer can override LOADOUT= without re-running task-init.
+  assert_output --partial "--loadout \${TASK_FORCE_LOADOUT:-kiro-gh}"
   assert_output --partial "--agent kiro"
 }
 

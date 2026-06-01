@@ -458,6 +458,14 @@ EOF
   assert_output --partial "Bash(gh search issues *)"
   assert_output --partial "Bash(gh pr view *)"
   assert_output --partial "Bash(radio *)"
+  # Shared read-only tool/shell allow-list (#141).
+  assert_output --partial "Read"
+  assert_output --partial "Grep"
+  assert_output --partial "Glob"
+  assert_output --partial "Bash(find *)"
+  assert_output --partial "Bash(ls *)"
+  assert_output --partial "Bash(cat *)"
+  assert_output --partial "Bash(rg *)"
   # Mutations must NOT be auto-allowed.
   refute_output --partial "gh issue edit"
   refute_output --partial "gh pr merge"

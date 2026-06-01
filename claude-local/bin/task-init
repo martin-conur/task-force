@@ -282,7 +282,16 @@ _radio_install_hooks() {
     | .permissions.allow //= []
     | .permissions.allow = (
         .permissions.allow + [
-          "Bash(radio *)"
+          "Bash(radio *)",
+# region:read-only-allow
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash(find *)",
+          "Bash(ls *)",
+          "Bash(cat *)",
+          "Bash(rg *)"
+# endregion:read-only-allow
         ] | unique
       )
     ' "$settings_file" >"$tmp"

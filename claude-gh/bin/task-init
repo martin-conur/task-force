@@ -305,7 +305,16 @@ _radio_install_hooks() {
           "Bash(gh label list *)",
           "Bash(gh auth status)",
           "Bash(gh repo view *)",
-          "Bash(radio *)"
+          "Bash(radio *)",
+# region:read-only-allow
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash(find *)",
+          "Bash(ls *)",
+          "Bash(cat *)",
+          "Bash(rg *)"
+# endregion:read-only-allow
         ] | unique
       )
     ' "$settings_file" >"$tmp"

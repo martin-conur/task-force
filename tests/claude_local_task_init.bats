@@ -243,6 +243,14 @@ teardown() {
   assert_success
   run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
   assert_output --partial "Bash(radio *)"
+  # Shared read-only tool/shell allow-list (#141).
+  assert_output --partial "Read"
+  assert_output --partial "Grep"
+  assert_output --partial "Glob"
+  assert_output --partial "Bash(find *)"
+  assert_output --partial "Bash(ls *)"
+  assert_output --partial "Bash(cat *)"
+  assert_output --partial "Bash(rg *)"
 }
 
 @test "idempotent: re-run does not duplicate the radio allow-list entry" {

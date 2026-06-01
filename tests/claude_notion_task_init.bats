@@ -236,6 +236,14 @@ teardown() {
   assert_output --partial "mcp__notion__notion-fetch"
   assert_output --partial "mcp__notion__notion-query-data-sources"
   assert_output --partial "Bash(radio *)"
+  # Shared read-only tool/shell allow-list (#141).
+  assert_output --partial "Read"
+  assert_output --partial "Grep"
+  assert_output --partial "Glob"
+  assert_output --partial "Bash(find *)"
+  assert_output --partial "Bash(ls *)"
+  assert_output --partial "Bash(cat *)"
+  assert_output --partial "Bash(rg *)"
   # Writes must NOT be auto-allowed.
   refute_output --partial "notion-create-pages"
   refute_output --partial "notion-update-page"

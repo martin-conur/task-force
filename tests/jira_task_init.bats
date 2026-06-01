@@ -252,6 +252,14 @@ teardown() {
   assert_output --partial "mcp__atlassian__searchJiraIssuesUsingJql"
   assert_output --partial "mcp__atlassian__getVisibleJiraProjects"
   assert_output --partial "Bash(radio *)"
+  # Shared read-only tool/shell allow-list (#141).
+  assert_output --partial "Read"
+  assert_output --partial "Grep"
+  assert_output --partial "Glob"
+  assert_output --partial "Bash(find *)"
+  assert_output --partial "Bash(ls *)"
+  assert_output --partial "Bash(cat *)"
+  assert_output --partial "Bash(rg *)"
   # Writes must NOT be auto-allowed.
   refute_output --partial "createJiraIssue"
   refute_output --partial "editJiraIssue"

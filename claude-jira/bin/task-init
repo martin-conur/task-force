@@ -272,7 +272,16 @@ _radio_install_hooks() {
           "mcp__atlassian__getIssueLinkTypes",
           "mcp__atlassian__lookupJiraAccountId",
           "mcp__atlassian__atlassianUserInfo",
-          "Bash(radio *)"
+          "Bash(radio *)",
+# region:read-only-allow
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash(find *)",
+          "Bash(ls *)",
+          "Bash(cat *)",
+          "Bash(rg *)"
+# endregion:read-only-allow
         ] | unique
       )
     ' "$settings_file" >"$tmp"

@@ -29,6 +29,9 @@ GROUPS_DEFAULT=(
   "task-pm-claude|body|claude-gh/bin/task-pm claude-jira/bin/task-pm claude-local/bin/task-pm claude-notion/bin/task-pm"
   "task-pm-kiro|body|kiro-gh/bin/task-pm kiro-local/bin/task-pm kiro-notion/bin/task-pm"
   "task-reviewer-claude|body|claude-gh/bin/task-reviewer claude-jira/bin/task-reviewer claude-local/bin/task-reviewer claude-notion/bin/task-reviewer"
+  "read-only-allow|read-only-allow|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
+  "require-jq-source|require-jq-source|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
+  "require-jq-call|require-jq-call|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
 )
 # endregion:default-manifest
 

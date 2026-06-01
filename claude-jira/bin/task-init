@@ -89,6 +89,10 @@ LIB_DIR="$SCRIPT_DIR/../../lib"
 . "$LIB_DIR/install-file.sh"
 # shellcheck source=lib/preserve-placeholders.sh
 . "$LIB_DIR/preserve-placeholders.sh"
+# region:require-jq-source
+# shellcheck source=lib/require-jq.sh
+. "$LIB_DIR/require-jq.sh"
+# endregion:require-jq-source
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -209,11 +213,9 @@ _radio_install_hooks() {
   local settings_file="$REPO_ROOT/.claude/settings.json"
   local loadout="claude-jira"
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "Error: jq is required to merge radio hooks into $settings_file" >&2
-    echo "       Install jq (https://jqlang.github.io/jq/) and re-run task-init." >&2
-    exit 1
-  fi
+# region:require-jq-call
+  require_jq_1_6 || exit 1
+# endregion:require-jq-call
 
   # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
   # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
@@ -272,7 +274,16 @@ _radio_install_hooks() {
           "mcp__atlassian__getIssueLinkTypes",
           "mcp__atlassian__lookupJiraAccountId",
           "mcp__atlassian__atlassianUserInfo",
-          "Bash(radio *)"
+          "Bash(radio *)",
+# region:read-only-allow
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash(find *)",
+          "Bash(ls *)",
+          "Bash(cat *)",
+          "Bash(rg *)"
+# endregion:read-only-allow
         ] | unique
       )
     ' "$settings_file" >"$tmp"

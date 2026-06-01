@@ -73,6 +73,10 @@ TEMPLATE="$SCRIPT_DIR/../steering/local-workflow.example.md"
 LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/install-file.sh
 . "$LIB_DIR/install-file.sh"
+# region:require-jq-source
+# shellcheck source=lib/require-jq.sh
+. "$LIB_DIR/require-jq.sh"
+# endregion:require-jq-source
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -234,11 +238,9 @@ _radio_install_hooks() {
   local settings_file="$REPO_ROOT/.claude/settings.json"
   local loadout="claude-local"
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "Error: jq is required to merge radio hooks into $settings_file" >&2
-    echo "       Install jq (https://jqlang.github.io/jq/) and re-run task-init." >&2
-    exit 1
-  fi
+# region:require-jq-call
+  require_jq_1_6 || exit 1
+# endregion:require-jq-call
 
   # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
   # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
@@ -282,7 +284,16 @@ _radio_install_hooks() {
     | .permissions.allow //= []
     | .permissions.allow = (
         .permissions.allow + [
-          "Bash(radio *)"
+          "Bash(radio *)",
+# region:read-only-allow
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash(find *)",
+          "Bash(ls *)",
+          "Bash(cat *)",
+          "Bash(rg *)"
+# endregion:read-only-allow
         ] | unique
       )
     ' "$settings_file" >"$tmp"

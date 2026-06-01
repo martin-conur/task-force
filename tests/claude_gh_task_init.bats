@@ -458,6 +458,14 @@ EOF
   assert_output --partial "Bash(gh search issues *)"
   assert_output --partial "Bash(gh pr view *)"
   assert_output --partial "Bash(radio *)"
+  # Shared read-only tool/shell allow-list (#141).
+  assert_output --partial "Read"
+  assert_output --partial "Grep"
+  assert_output --partial "Glob"
+  assert_output --partial "Bash(find *)"
+  assert_output --partial "Bash(ls *)"
+  assert_output --partial "Bash(cat *)"
+  assert_output --partial "Bash(rg *)"
   # Mutations must NOT be auto-allowed.
   refute_output --partial "gh issue edit"
   refute_output --partial "gh pr merge"
@@ -490,4 +498,28 @@ EOF
   run jq -r '.permissions.allow[]' "$TARGET_DIR/.claude/settings.json"
   assert_output --partial "Bash(custom *)"
   assert_output --partial "Bash(gh issue view *)"
+}
+
+# ---------------------------------------------------------------------------
+# jq >= 1.6 guard (#141 follow-up)
+# ---------------------------------------------------------------------------
+
+@test "fails with clear error when jq < 1.6 is on PATH" {
+  # Shadow the real jq with a fake one that reports version 1.5 so the guard
+  # is the only thing that can decide the outcome.
+  local stub_bin
+  stub_bin=$(mktemp -d)
+  cat > "$stub_bin/jq" <<'EOF'
+#!/usr/bin/env bash
+case "${1-}" in
+  --version) echo "jq-1.5" ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$stub_bin/jq"
+  PATH="$stub_bin:$PATH" run "$CLAUDE_GH_TASK_INIT"
+  rm -rf "$stub_bin"
+  assert_failure
+  assert_output --partial "jq >= 1.6 required"
+  assert_output --partial "1.5"
 }

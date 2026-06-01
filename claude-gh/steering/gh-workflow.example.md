@@ -85,13 +85,15 @@ Radio is the **canonical** coordination channel between the PM and workers — e
 role transition runs through it. The PM / planner / worker prompts shell out to
 `radio send` at every documented handoff point:
 
-| From    | When                            | Command                                                                |
-|---------|---------------------------------|------------------------------------------------------------------------|
-| Planner | spec written into the issue     | `radio send --to pm --intent spec-ready --issue <N>`                   |
-| Worker  | PR opened                       | `radio send --to pm --intent review-requested --pr <N>`                |
-| Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
-| PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
-| PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
+| From     | When                              | Command                                                                          |
+|----------|-----------------------------------|----------------------------------------------------------------------------------|
+| Planner  | spec written into the issue       | `radio send --to pm --intent spec-ready --issue <N>`                             |
+| Worker   | PR opened                         | `radio send --to pm --intent review-requested --pr <N>`                          |
+| Worker   | new commits pushed after review   | `radio send --to pm --intent re-review-requested --pr <N>`                       |
+| PM       | review requested changes          | `radio send --to <worker-role> --intent changes-requested --pr <N>`              |
+| PM       | PR merged                         | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`            |
+| Reviewer | review done, no findings          | `radio send --to pm --intent review-complete-clean --pr <N>`                     |
+| Reviewer | review done, blockers/nits posted | `radio send --to pm --intent review-complete-with-findings --pr <N>`             |
 
 When a worker finishes its task and has nothing pending, the `radio ready` step
 runs automatically via the `Stop` hook — you don't need to invoke it manually.
@@ -111,14 +113,17 @@ To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm`, registers via the `SessionStart` hook, and
 starts the PM agent in-place.
 
-To launch an opt-in reviewer worker (in-place reviewer-tab takeover), run
-`task-reviewer` from any spare tab — it renames the tab to `reviewer`,
-registers as `reviewer-<reponame>`, and runs the `/reviewer` agent on Sonnet
-(cheaper than the PM's Opus default). PM forwards `review-requested` pings to
-it via `radio send --to reviewer-<reponame> --intent review-requested --pr <N>`;
-the reviewer posts PR findings via `gh pr comment` and radios PM back with
-`review-complete-clean` or `review-complete-with-findings`. PM still owns the
-merge decision — the reviewer never approves, merges, or mutates status.
+To dispatch a one-shot reviewer worker for a PR, run
+`task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab.
+It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
+`/reviewer` agent on Sonnet (cheaper than the PM's Opus default), cross-checks
+the PR against the spec issue (passed as the second arg, or auto-detected from
+the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line, case-insensitive), runs the `code-review` skill on
+the diff, posts a single thorough PR comment via `gh pr comment`, and radios
+PM back with `review-complete-clean` or `review-complete-with-findings`. PM
+still owns the merge decision — the reviewer never approves, merges, or
+mutates status. The reviewer tab stays open showing the analysis; clean up
+with `task-done --remove-worktree` when done.
 
 If a worker tab dies unexpectedly (or Claude resumes a session without
 re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.

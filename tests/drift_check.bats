@@ -124,3 +124,17 @@ EOF
   assert_success
   assert_output --partial "group(s) checked"
 }
+
+@test "claude reviewer.md files are byte-identical across loadouts (#138)" {
+  # The 4 claude `/reviewer` slash commands ship identical prompts. The
+  # check-drift sentinel-region mechanism doesn't fit markdown cleanly, so
+  # we just diff the files directly.
+  local ref="$REPO_ROOT_REAL/claude-gh/commands/reviewer.md"
+  for f in \
+      "$REPO_ROOT_REAL/claude-jira/commands/reviewer.md" \
+      "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md" \
+      "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"; do
+    run diff -u "$ref" "$f"
+    assert_success
+  done
+}

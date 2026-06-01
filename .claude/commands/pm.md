@@ -36,5 +36,32 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
 
 - **After approving without merging** (e.g., waiting on CI): `gh pr review <N> --approve` is enough; no radio beat needed until you actually merge.
 
+- **Delegating review to a reviewer worker** (optional, cost-saving). Why this exists: reviewer runs on Sonnet (cheap), you run on Opus (expensive) — for non-trivial PRs, offloading the read shifts cost without losing quality. Skip it and review inline if the PR is small enough that the dispatch overhead isn't worth it.
+
+  On `review-requested` from a worker, run:
+  ```bash
+  task-reviewer <pr-url-or-number> [<issue-url-or-number>]
+  ```
+  in any spare tab. The reviewer runs with `--auto` (auto-permission) by default — the `/reviewer` prompt's authority list rules out anything destructive (no merge, no push, no Status edits), so hands-off dispatch is safe. Pass `--no-auto` if you want to babysit a specific review.
+
+  Positional args:
+  - **PR** (required): URL or bare number.
+  - **Issue** (optional): URL or bare number for the spec issue. **If omitted, auto-detected** from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive). Pass it explicitly only when the PR body doesn't link a spec, or when you want to override the auto-detected target.
+
+  The reviewer spawns a fresh tab + worktree on the PR's head ref, cross-checks the diff against the spec, runs the `code-review` skill, posts a single thorough PR comment, and radios you back with one of:
+
+  - **`review-complete-clean`** → no findings. Proceed to merge:
+    ```bash
+    gh pr merge <N> --squash --delete-branch
+    radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"
+    ```
+  - **`review-complete-with-findings`** → reviewer posted blockers / nits to the PR. Forward to the original worker so they push fixes:
+    ```bash
+    radio send --to <worker-role> --intent changes-requested --pr <N> --body "see PR comments (reviewer flagged findings)"
+    ```
+    The actual review content is in the PR comment the reviewer posted — `radio` just carries the routing ping.
+
+  You still own the merge decision — the reviewer never approves, merges, closes, or mutates Status. The reviewer tab stays open showing the analysis (the user can scroll back); `task-done --remove-worktree` from inside that worktree cleans it up when they're done.
+
 If arguments were provided after `/pm`, treat them as the first instruction:
 $ARGUMENTS

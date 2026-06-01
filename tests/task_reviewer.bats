@@ -215,16 +215,39 @@ teardown() {
 # Mode flags
 # ---------------------------------------------------------------------------
 
-@test "claude task-reviewer: launches claude /reviewer with PR url" {
+@test "claude task-reviewer: launches claude /reviewer with PR url (auto by default)" {
+  # --auto is the default per PR #139 review — the reviewer prompt's authority
+  # boundaries rule out anything destructive, so hands-off dispatch is safe.
   run "$TASK_REVIEWER_CLAUDE" 42
   assert_success
-  assert_stub_called zellij "claude \"/reviewer https://github.com/owner/repo/pull/42\""
+  assert_stub_called zellij "claude --permission-mode auto \"/reviewer https://github.com/owner/repo/pull/42\""
 }
 
-@test "claude task-reviewer: --auto launches claude in auto permission mode" {
+@test "claude task-reviewer: --no-auto drops back to interactive permission mode" {
+  run "$TASK_REVIEWER_CLAUDE" 42 --no-auto
+  assert_success
+  # No permission-mode flag at all — runs in interactive default.
+  run grep -F "permission-mode" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude task-reviewer: explicit --auto stays auto (idempotent with new default)" {
   run "$TASK_REVIEWER_CLAUDE" 42 --auto
   assert_success
   assert_stub_called zellij "claude --permission-mode auto"
+}
+
+@test "claude task-reviewer: --auto propagates TASK_FORCE_AUTO_SUBMIT=1 by default" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "claude task-reviewer: --no-auto omits TASK_FORCE_AUTO_SUBMIT" {
+  run "$TASK_REVIEWER_CLAUDE" 42 --no-auto
+  assert_success
+  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
 }
 
 # ---------------------------------------------------------------------------
@@ -364,10 +387,25 @@ teardown() {
   assert_stub_called zellij "--model claude-opus-4.6"
 }
 
-@test "kiro task-reviewer: --trust-all propagates" {
+@test "kiro task-reviewer: --trust-all-tools is the default (idempotent with explicit --trust-all)" {
+  # Like claude's --auto-by-default (#139), kiro defaults to trust-all-tools.
+  # Reviewer's authority boundaries rule out anything destructive.
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_stub_called zellij "--trust-all-tools"
+}
+
+@test "kiro task-reviewer: explicit --trust-all stays trust-all" {
   run "$TASK_REVIEWER_KIRO" 42 --trust-all
   assert_success
   assert_stub_called zellij "--trust-all-tools"
+}
+
+@test "kiro task-reviewer: --no-trust-all drops back to interactive trust" {
+  run "$TASK_REVIEWER_KIRO" 42 --no-trust-all
+  assert_success
+  run grep -F "trust-all-tools" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
 }
 
 @test "kiro task-reviewer: --no-launch opens tab without kiro-cli" {

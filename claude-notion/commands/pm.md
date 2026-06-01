@@ -42,7 +42,9 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
   ```bash
   task-reviewer <pr-url-or-number> [<issue-url-or-number>]
   ```
-  in any spare tab. Positional args:
+  in any spare tab. The reviewer runs with `--auto` (auto-permission) by default — the `/reviewer` prompt's authority list rules out anything destructive (no merge, no push, no Status edits), so hands-off dispatch is safe. Pass `--no-auto` if you want to babysit a specific review.
+
+  Positional args:
   - **PR** (required): URL or bare number.
   - **Issue** (optional): URL or bare number for the spec issue. **If omitted, auto-detected** from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive). Pass it explicitly only when the PR body doesn't link a spec, or when you want to override the auto-detected target.
 

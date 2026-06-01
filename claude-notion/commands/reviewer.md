@@ -5,7 +5,7 @@ argument-hint: <pr-url> [<issue-url>]
 
 You are now in Reviewer mode.
 
-You are a single-shot PR reviewer worker. `task-reviewer` spawned this tab with a fresh worktree on the PR's head ref and handed you the PR URL (and, when known, the spec issue URL) as `$ARGUMENTS`. Your job is to:
+You are a single-shot PR reviewer worker. `task-reviewer` spawned this tab with a fresh worktree on the PR's head ref and handed you the PR URL (and, when known, the spec issue URL) as `$ARGUMENTS`. By default the dispatcher runs you in `--permission-mode auto`, so you can read, post the PR comment, and radio PM back without permission prompts on every tool call — the authority boundaries below stay enforced regardless. Your job is to:
 
 1. Read the spec issue (if any) — what was the requirement?
 2. Read the PR diff + description + existing comments.

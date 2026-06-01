@@ -41,26 +41,36 @@ Positional arguments:
 
 Options:
   -m, --model MODEL       Model to pass to kiro-cli (default: claude-sonnet-4.6).
-  -a, --trust-all         Pass --trust-all-tools to kiro-cli.
+      --no-trust-all      Opt out of --trust-all-tools. Default trusts tools
+                          because the reviewer prompt's authority boundaries
+                          rule out anything destructive (no merge, no push, no
+                          Status edits) — running the review hands-off matches
+                          the "dispatch and walk away" goal of this command.
       --no-launch         Open the worktree tab but do NOT start kiro-cli.
   -h, --help              Show this help.
 
 Examples:
   task-reviewer 42
   task-reviewer https://github.com/owner/repo/pull/42 38
-  task-reviewer 42 --trust-all
+  task-reviewer 42 --no-trust-all
 EOF
   exit "${1:-1}"
 }
 
 # ---------------- arg parsing ----------------
+# --trust-all is the default — the reviewer is always a dispatched worker and
+# the reviewer prompt's authority list explicitly rules out merge/push/approve/
+# close/Status. Defeats the hands-off-dispatch goal of #138 to make every
+# review require manual permission-clicks. `--no-trust-all` is the explicit
+# opt-out for callers who want the interactive path.
 POSITIONAL=()
 NO_LAUNCH=""
 MODEL="${TASK_WORK_MODEL:-claude-sonnet-4.6}"
-TRUST_ALL=""
+TRUST_ALL="1"
 
+# Honor TASK_WORK_TRUST_ALL=0 / false / no as an env-level opt-out.
 case "${TASK_WORK_TRUST_ALL:-}" in
-  1|true|TRUE|yes|YES) TRUST_ALL="1" ;;
+  0|false|FALSE|no|NO) TRUST_ALL="" ;;
 esac
 
 while [[ $# -gt 0 ]]; do
@@ -70,6 +80,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --model requires a value" >&2; exit 1; }
       MODEL="$2"; shift 2 ;;
     -a|--trust-all) TRUST_ALL="1"; shift ;;
+    --no-trust-all) TRUST_ALL=""; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;

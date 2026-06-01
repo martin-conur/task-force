@@ -519,11 +519,13 @@ The reviewer:
 PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates Status. The tab stays open showing the analysis; clean up the worktree later with `task-done --remove-worktree`.
 
 ```bash
-task-reviewer 42                                              # PR by number, auto-detect issue
+task-reviewer 42                                              # PR by number, auto-detect issue (auto-permission default)
 task-reviewer https://github.com/owner/repo/pull/42           # PR by URL
 task-reviewer 42 38                                           # PR + spec issue explicit
-task-reviewer 42 --auto                                       # run claude in auto-permission mode
+task-reviewer 42 --no-auto                                    # opt out of auto-permission (interactive review)
 ```
+
+`--auto` is the default — the reviewer's authority list rules out merge / push / approve / close / Status, so auto-permission is safe for the review flow, and matches the "dispatch and walk away" intent of the command. Pass `--no-auto` to drop into the interactive permission-prompt mode. Kiro reviewers default to `--trust-all-tools` for the same reason; opt out with `--no-trust-all`.
 
 ---
 

@@ -36,11 +36,7 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
 
 - **After approving without merging** (e.g., waiting on CI): `gh pr review <N> --approve` is enough; no radio beat needed until you actually merge.
 
-- **Delegating review to a reviewer worker** (optional, cost-saving): if a dedicated reviewer tab is running (`task-reviewer` — check `ls ~/.task-force/radio/sessions/` for a `reviewer-<repo>` entry), you can forward the worker's `review-requested` ping rather than reviewing inline:
-  ```bash
-  radio send --to reviewer-<repo> --intent review-requested --pr <N>
-  ```
-  The reviewer runs the code-review skill on a cheaper model, posts comments to the PR, and radios you back with `review-complete-clean` or `review-complete-with-findings`. You still decide whether to merge or request changes — the reviewer never merges. This is opt-in: with no reviewer tab running, keep doing inline reviews.
+- **Delegating review to a reviewer worker** (optional, cost-saving): on `review-requested` from a worker, run `task-reviewer <pr-url>` in any spare tab — it spawns its own ephemeral reviewer worker on a fresh worktree at the PR's head, posts findings to the PR, and radios you back with `review-complete-clean` or `review-complete-with-findings`. You still own the merge decision — the reviewer never approves, merges, or mutates Status. Opt-in: skip it and review inline if the PR is small enough that delegation isn't worth it.
 
 If arguments were provided after `/pm`, treat them as the first instruction:
 $ARGUMENTS

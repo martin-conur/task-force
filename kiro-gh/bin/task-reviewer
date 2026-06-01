@@ -1,29 +1,222 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # region:body
-# task-reviewer — in-place reviewer-tab takeover for kiro loadouts.
-# Renames the current zellij tab to "reviewer" and exec's kiro-cli's reviewer
-# agent so the session-start hook in <repo>/.kiro/ registers the reviewer
-# mailbox. Kiro doesn't have an equivalent to Claude Code's /code-review
-# orchestration skill, so the kiro reviewer reads `gh pr diff` directly and
-# posts comments via `gh pr comment` — single-agent prompt-driven review.
-if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
-  echo "Error: not in a git repo." >&2
-  echo "       task-reviewer requires a task-force-initialized repo so the" >&2
-  echo "       session-start hook can load the project's hooks config." >&2
+# task-reviewer — dispatch-style PR reviewer for kiro loadouts.
+#
+# Mirrors claude-gh/bin/task-reviewer (#138): spawns a fresh zellij tab +
+# git worktree on the PR's head ref, then launches the kiro `reviewer` agent
+# with the PR url + (optional) issue url as the initial prompt. The reviewer
+# reads the spec issue (if any), the PR diff, posts a single thorough PR
+# comment, and radios PM back with a verdict — clean or with findings.
+#
+# Kiro doesn't have an orchestrated /code-review skill the way Claude Code
+# does, so the kiro reviewer is prompt-driven (single agent reading the
+# diff directly).
+
+AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT_REAL/lib/zellij-tab.sh"
+# shellcheck source=lib/worktree-create.sh
+source "$AW_ROOT_REAL/lib/worktree-create.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  task-reviewer <pr-url-or-number> [<issue-url-or-number>] [options]
+
+Spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the
+kiro `reviewer` agent with the PR (and optional spec issue) as the initial
+prompt. The reviewer reads the spec issue (for compliance cross-check), the
+PR diff, posts a single thorough PR comment, and radios PM back with a
+verdict — clean or with findings.
+
+Positional arguments:
+  <pr-url-or-number>      The PR to review. Accepts a GitHub PR URL or a bare
+                          number (resolved in the current repo's `origin`).
+  <issue-url-or-number>   Optional — the spec issue this PR claims to close.
+                          If omitted, auto-detected from the PR body's
+                          `Closes #N` / `Fixes #N` / `Resolves #N` line.
+                          With no detectable issue, the reviewer proceeds with
+                          a diff-only review.
+
+Options:
+  -m, --model MODEL       Model to pass to kiro-cli (default: claude-sonnet-4.6).
+  -a, --trust-all         Pass --trust-all-tools to kiro-cli.
+      --no-launch         Open the worktree tab but do NOT start kiro-cli.
+  -h, --help              Show this help.
+
+Examples:
+  task-reviewer 42
+  task-reviewer https://github.com/owner/repo/pull/42 38
+  task-reviewer 42 --trust-all
+EOF
+  exit "${1:-1}"
+}
+
+# ---------------- arg parsing ----------------
+POSITIONAL=()
+NO_LAUNCH=""
+MODEL="${TASK_WORK_MODEL:-claude-sonnet-4.6}"
+TRUST_ALL=""
+
+case "${TASK_WORK_TRUST_ALL:-}" in
+  1|true|TRUE|yes|YES) TRUST_ALL="1" ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    -m|--model)
+      [[ $# -ge 2 ]] || { echo "Error: --model requires a value" >&2; exit 1; }
+      MODEL="$2"; shift 2 ;;
+    -a|--trust-all) TRUST_ALL="1"; shift ;;
+    --no-launch) NO_LAUNCH="1"; shift ;;
+    --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
+    -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+[[ ${#POSITIONAL[@]} -lt 1 ]] && { echo "Error: PR url or number is required" >&2; usage 1; }
+
+parse_pr_number() {
+  local input="$1"
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "$input"; return 0
+  fi
+  if [[ "$input" == *"github.com"*"/pull/"* ]]; then
+    echo "$input" | sed 's|.*/pull/||' | sed 's|[^0-9].*||'
+    return 0
+  fi
+  return 1
+}
+
+parse_issue_number() {
+  local input="$1"
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "$input"; return 0
+  fi
+  if [[ "$input" == *"github.com"*"/issues/"* ]]; then
+    echo "$input" | sed 's|.*/issues/||' | sed 's|[^0-9].*||'
+    return 0
+  fi
+  return 1
+}
+
+PR_INPUT="${POSITIONAL[0]}"
+ISSUE_INPUT="${POSITIONAL[1]:-}"
+
+PR_NUMBER=$(parse_pr_number "$PR_INPUT") || {
+  echo "Error: could not parse PR number from '$PR_INPUT'" >&2
+  exit 1
+}
+
+# ---------------- repo discovery ----------------
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
+REPO_NAME=$(basename "$REPO_ROOT")
+WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
+
+# ---------------- PR validation + metadata ----------------
+PR_URL=$(gh pr view "$PR_NUMBER" --json url --jq .url 2>/dev/null) || {
+  echo "Error: PR #$PR_NUMBER not found (or gh failed)." >&2
+  exit 1
+}
+
+PR_HEAD_REF=$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName 2>/dev/null || echo "")
+PR_BASE_REF=$(gh pr view "$PR_NUMBER" --json baseRefName --jq .baseRefName 2>/dev/null || echo "main")
+PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body 2>/dev/null || echo "")
+
+ISSUE_NUMBER=""
+ISSUE_URL=""
+if [[ -n "$ISSUE_INPUT" ]]; then
+  ISSUE_NUMBER=$(parse_issue_number "$ISSUE_INPUT") || {
+    echo "Error: could not parse issue number from '$ISSUE_INPUT'" >&2
+    exit 1
+  }
+  if [[ "$ISSUE_INPUT" == *"github.com"* ]]; then
+    ISSUE_URL="$ISSUE_INPUT"
+  fi
+elif [[ -n "$PR_BODY" ]]; then
+  ISSUE_NUMBER=$(printf '%s\n' "$PR_BODY" \
+    | grep -iEo '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+    | head -1 | grep -Eo '[0-9]+' || true)
+fi
+
+if [[ -n "$ISSUE_NUMBER" && -z "$ISSUE_URL" && -n "$PR_URL" ]]; then
+  ISSUE_URL=$(printf '%s\n' "$PR_URL" | sed "s|/pull/[0-9]*|/issues/$ISSUE_NUMBER|")
+fi
+
+if [[ -z "$ISSUE_NUMBER" ]]; then
+  echo "⚠ No spec issue associated with PR #$PR_NUMBER (no second arg, no Closes/Fixes in body)." >&2
+  echo "  Reviewer will proceed with a diff-only review." >&2
+fi
+
+# ---------------- worktree setup ----------------
+SLUG="review-pr${PR_NUMBER}"
+BRANCH="review/pr${PR_NUMBER}"
+WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
+
+if [[ -d "$WORKTREE_DIR" ]]; then
+  echo "Error: a review worktree already exists for PR #$PR_NUMBER at" >&2
+  echo "       $WORKTREE_DIR" >&2
+  echo "       Close that tab and run 'task-done --remove-worktree' to clean it up first." >&2
   exit 1
 fi
-cd "$(git rev-parse --show-toplevel)"
 
-REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
-
-if [[ -n "${ZELLIJ:-}" ]]; then
-  zellij action rename-tab "reviewer" >/dev/null 2>&1 || true
+FROM_REF="HEAD"
+if git fetch origin "pull/${PR_NUMBER}/head" --quiet 2>/dev/null; then
+  FROM_REF="FETCH_HEAD"
+else
+  echo "⚠ Could not fetch PR #$PR_NUMBER's head ref — using current HEAD as the worktree base." >&2
+  echo "  This is fine for review-only work (gh pr diff hits the API directly)." >&2
 fi
 
-export TASK_FORCE_ROLE="reviewer-${REPO_NAME}"
-export ZELLIJ_TAB=reviewer
-export TASK_FORCE_LOADOUT=reviewer
-# Sonnet default; pre-set $TASK_WORK_MODEL to override (e.g. for an Opus pass).
-exec kiro-cli chat --agent reviewer --model "${TASK_WORK_MODEL:-claude-sonnet-4.6}"
+mkdir -p "$WORKTREE_BASE"
+echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
+aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
+
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+BASE_BRANCH="${PR_BASE_REF:-main}"
+{
+  printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"
+  printf 'SLUG=%s\n' "$SLUG"
+  printf 'GH_URL=%s\n' "$PR_URL"
+  printf 'PR_NUMBER=%s\n' "$PR_NUMBER"
+  printf 'ISSUE_NUMBER=%s\n' "$ISSUE_NUMBER"
+} > "$INFO_FILE"
+
+# ---------------- kiro command builder ----------------
+build_kiro_cmd() {
+  local cmd="kiro-cli chat --agent reviewer"
+  [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
+  [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
+  local prompt="Review PR $PR_URL"
+  [[ -n "$ISSUE_URL" ]] && prompt+=" against spec issue $ISSUE_URL"
+  cmd+=" \"$prompt\""
+  echo "$cmd"
+}
+
+# ---------------- radio env injection ----------------
+TASK_FORCE_ROLE_VALUE="reviewer-${REPO_NAME}-pr${PR_NUMBER}"
+RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
+RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
+RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
+
+# ---------------- launch ----------------
+echo "Opening zellij tab '$SLUG'..."
+if [[ -n "$NO_LAUNCH" ]]; then
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "1"
+  echo "Tab opened at $WORKTREE_DIR — kiro NOT launched (--no-launch)."
+else
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_kiro_cmd)" "1"
+  desc="reviewer for PR #$PR_NUMBER"
+  [[ -n "$MODEL" ]] && desc+=" [model=$MODEL]"
+  [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
+  echo "Started $desc in $WORKTREE_DIR (issue: ${ISSUE_NUMBER:-none})"
+fi
+
+INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
+if [[ -n "$INFO_TAB_ID" ]]; then
+  printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"
+fi
 # endregion:body

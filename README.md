@@ -499,21 +499,31 @@ radio send --to worker-task-force-issue-42 --intent approved-and-merged --pr 42
 
 On its next turn the worker sees the ping, sets the project Status field to `Done`, and runs `task-done --remove-worktree` itself — removing the worktree and closing its own zellij tab. Done.
 
-### Optional: dedicated reviewer worker
+### Optional: dispatch a reviewer worker
 
-To shift PR review off the PM's (Opus) tab and onto a cheaper Sonnet model, spin up a reviewer worker in any spare zellij tab:
-
-```bash
-task-reviewer
-```
-
-Renames the current tab to `reviewer`, registers via the `SessionStart` hook as `reviewer-<reponame>`, and starts the `/reviewer` agent in-place on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6`). When a worker pings PM with `review-requested`, PM can forward the ping rather than reviewing inline:
+To shift PR review off the PM's (Opus) tab and onto a cheaper Sonnet model, dispatch a one-shot reviewer worker per PR:
 
 ```bash
-radio send --to reviewer-<reponame> --intent review-requested --pr 42
+task-reviewer <pr-url-or-number> [<issue-url-or-number>]
 ```
 
-The reviewer runs the `code-review` skill on the PR diff, posts substantive findings as PR comments via `gh pr comment`, and radios PM back with either `review-complete-clean` or `review-complete-with-findings`. PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates status. Opt-in: with no reviewer tab running, PM keeps doing inline reviews as in step 7.
+`task-reviewer` spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the `/reviewer` slash command (or the kiro `reviewer` agent) inside it on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6` by default — pre-set the env var to override). The PM's tab stays focused.
+
+The reviewer:
+1. Reads the spec issue (passed as the second arg, or auto-detected from the PR body's `Closes #N` / `Fixes #N` line).
+2. Reads the PR diff + comments.
+3. Cross-checks the diff against the spec, then runs the `code-review` skill on top (claude variants — kiro stays prompt-driven).
+4. Posts **one** thorough PR comment with spec-compliance findings, code-review findings, and a verdict (`clean`, `clean-with-nits`, or `changes-requested`).
+5. Radios PM back with `review-complete-clean` or `review-complete-with-findings`.
+
+PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates Status. The tab stays open showing the analysis; clean up the worktree later with `task-done --remove-worktree`.
+
+```bash
+task-reviewer 42                                              # PR by number, auto-detect issue
+task-reviewer https://github.com/owner/repo/pull/42           # PR by URL
+task-reviewer 42 38                                           # PR + spec issue explicit
+task-reviewer 42 --auto                                       # run claude in auto-permission mode
+```
 
 ---
 

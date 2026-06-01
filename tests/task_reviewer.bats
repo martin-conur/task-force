@@ -1,12 +1,15 @@
 #!/usr/bin/env bats
-# Tests for bin/task-reviewer: in-place reviewer-tab takeover.
-# Asserts:
-#   - rename-tab to "reviewer" via zellij (when $ZELLIJ is set)
-#   - exec's `claude /reviewer`
-#   - errors out cleanly outside a git repo
-#   - sets ANTHROPIC_MODEL to claude-sonnet-4-6 (default) and respects an
-#     existing value if pre-set
-#   - dispatcher routes to the claude-gh variant when the workflow doc exists
+# Tests for bin/task-reviewer: dispatch-style PR reviewer (#138).
+#
+# task-reviewer was redesigned from a long-lived listener-tab (rename-tab
+# in-place, no args) into a per-PR dispatch worker — fresh worktree on the
+# PR's head ref, new zellij tab, claude (or kiro) launched with the PR (and
+# optional spec issue) as args. Tests mirror tests/claude_gh_task_work.bats's
+# patterns: arg parsing, worktree creation, tab spawn, mode flags, errors.
+#
+# `gh pr view` is stubbed via $GH_STUB_PR_URL (+ optional PR_BODY/HEAD/BASE
+# overrides). With $GH_STUB_PR_URL unset, the stub exits 1 — modeling
+# "PR not found".
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -17,369 +20,429 @@ setup() {
   setup_repo
   setup_stubs
   cd "$MAIN_REPO"
-  export ZELLIJ=fake-session
+  # Default: PR exists; tests that need "no PR" unset this.
+  export GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
 }
 
 teardown() {
   teardown_all
 }
 
-# ----- claude variant -------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Arg parsing: PR by number / URL
+# ---------------------------------------------------------------------------
 
-@test "claude task-reviewer renames the current tab to reviewer and exec's claude /reviewer" {
-  run "$TASK_REVIEWER_CLAUDE"
+@test "claude task-reviewer: PR by bare number" {
+  run "$TASK_REVIEWER_CLAUDE" 42
   assert_success
-  assert_stub_called zellij "action rename-tab reviewer"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert [ -d "$WORKTREE_BASE/review-pr42" ]
 }
 
-@test "claude task-reviewer: works without zellij (\$ZELLIJ unset → no rename)" {
-  unset ZELLIJ
+@test "claude task-reviewer: PR by URL" {
+  run "$TASK_REVIEWER_CLAUDE" "https://github.com/owner/repo/pull/42"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/review-pr42" ]
+}
+
+@test "claude task-reviewer: PR URL with trailing params" {
+  run "$TASK_REVIEWER_CLAUDE" "https://github.com/owner/repo/pull/99?foo=bar"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/review-pr99" ]
+}
+
+@test "claude task-reviewer: missing PR arg errors" {
   run "$TASK_REVIEWER_CLAUDE"
+  assert_failure
+  assert_output --partial "PR url or number is required"
+}
+
+@test "claude task-reviewer: invalid PR input errors" {
+  run "$TASK_REVIEWER_CLAUDE" "not-a-pr"
+  assert_failure
+  assert_output --partial "could not parse PR number"
+}
+
+@test "claude task-reviewer: PR not found (gh pr view fails) errors" {
+  unset GH_STUB_PR_URL
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_failure
+  assert_output --partial "PR #42 not found"
+}
+
+# ---------------------------------------------------------------------------
+# Issue arg + auto-detection
+# ---------------------------------------------------------------------------
+
+@test "claude task-reviewer: explicit issue number passed to /reviewer" {
+  run "$TASK_REVIEWER_CLAUDE" 42 38
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
+}
+
+@test "claude task-reviewer: explicit issue URL passed to /reviewer" {
+  local issue="https://github.com/owner/repo/issues/38"
+  run "$TASK_REVIEWER_CLAUDE" 42 "$issue"
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 $issue"
+}
+
+@test "claude task-reviewer: auto-detects issue from PR body 'Closes #N'" {
+  export GH_STUB_PR_BODY="This PR adds X. Closes #38."
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
+}
+
+@test "claude task-reviewer: auto-detects from 'Fixes #N'" {
+  export GH_STUB_PR_BODY="Fixes #38"
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
+}
+
+@test "claude task-reviewer: auto-detects from 'Resolves #N'" {
+  export GH_STUB_PR_BODY="Resolves #99"
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/99"
+}
+
+@test "claude task-reviewer: picks first Closes/Fixes when PR body has many" {
+  export GH_STUB_PR_BODY=$'Closes #11.\nAlso fixes #22.\nResolves #33.'
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/11"
+}
+
+@test "claude task-reviewer: warns + diff-only when no issue in body" {
+  export GH_STUB_PR_BODY="Just some prose, no spec link."
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_output --partial "No spec issue associated"
+  # /reviewer is invoked with only the PR URL (no second arg).
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude task-reviewer: invalid issue input errors" {
+  run "$TASK_REVIEWER_CLAUDE" 42 "not-an-issue"
+  assert_failure
+  assert_output --partial "could not parse issue number"
+}
+
+# ---------------------------------------------------------------------------
+# Worktree creation
+# ---------------------------------------------------------------------------
+
+@test "claude task-reviewer: creates worktree at <repo-parent>/<repo>-worktrees/review-pr<N>" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert [ -d "$WORKTREE_BASE/review-pr42" ]
+}
+
+@test "claude task-reviewer: creates a review/pr<N> branch" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  local branches
+  branches=$(git -C "$MAIN_REPO" branch --list "review/pr42")
+  assert [ -n "$branches" ]
+}
+
+@test "claude task-reviewer: writes .info with PR_NUMBER and ISSUE_NUMBER" {
+  export GH_STUB_PR_BODY="Closes #38"
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  local info="$WORKTREE_BASE/.review-pr42.info"
+  assert [ -f "$info" ]
+  run cat "$info"
+  assert_output --partial "PR_NUMBER=42"
+  assert_output --partial "ISSUE_NUMBER=38"
+  assert_output --partial "SLUG=review-pr42"
+}
+
+@test "claude task-reviewer: refuses when review worktree already exists for this PR" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_failure
+  assert_output --partial "already exists"
+}
+
+# ---------------------------------------------------------------------------
+# Tab spawn
+# ---------------------------------------------------------------------------
+
+@test "claude task-reviewer: opens a new zellij tab named review-pr<N>" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "new-tab --name review-pr42"
+}
+
+@test "claude task-reviewer: does NOT rename the current tab in-place" {
+  export ZELLIJ=fake-session
+  run "$TASK_REVIEWER_CLAUDE" 42
   assert_success
   run stub_calls zellij
-  refute_output --partial "rename-tab"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  refute_output --partial "rename-tab reviewer"
 }
 
-@test "claude task-reviewer errors out cleanly outside a git repo" {
-  local outside
-  outside=$(mktemp -d)
-  cd "$outside"
-  run "$TASK_REVIEWER_CLAUDE"
+@test "claude task-reviewer: --no-launch opens tab but does not invoke claude" {
+  run "$TASK_REVIEWER_CLAUDE" 42 --no-launch
+  assert_success
+  assert_output --partial "claude NOT launched"
+  run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+# ---------------------------------------------------------------------------
+# Mode flags
+# ---------------------------------------------------------------------------
+
+@test "claude task-reviewer: launches claude /reviewer with PR url" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "claude \"/reviewer https://github.com/owner/repo/pull/42\""
+}
+
+@test "claude task-reviewer: --auto launches claude in auto permission mode" {
+  run "$TASK_REVIEWER_CLAUDE" 42 --auto
+  assert_success
+  assert_stub_called zellij "claude --permission-mode auto"
+}
+
+# ---------------------------------------------------------------------------
+# Env / model
+# ---------------------------------------------------------------------------
+
+@test "claude task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+}
+
+@test "claude task-reviewer: honors pre-set ANTHROPIC_MODEL" {
+  ANTHROPIC_MODEL=claude-opus-4-7 run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-opus-4-7"
+}
+
+@test "claude task-reviewer: sets per-PR radio role reviewer-<repo>-pr<N>" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "TASK_FORCE_ROLE=reviewer-${REPO_NAME}-pr42"
+}
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+@test "claude task-reviewer: fails outside a git repo" {
+  cd /tmp
+  run "$TASK_REVIEWER_CLAUDE" 42
   assert_failure
   assert_output --partial "not in a git repo"
-  rm -rf "$outside"
 }
 
-@test "claude task-reviewer defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  # Replace the claude stub with one that dumps its env, so we can assert.
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_ROLE=%s\n' "${TASK_FORCE_ROLE:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_LOADOUT=%s\n' "${TASK_FORCE_LOADOUT:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'ZELLIJ_TAB=%s\n' "${ZELLIJ_TAB:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  run "$TASK_REVIEWER_CLAUDE"
+@test "claude task-reviewer: --help prints usage and exits 0" {
+  run "$TASK_REVIEWER_CLAUDE" --help
   assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
-  assert_output --partial "TASK_FORCE_LOADOUT=reviewer"
-  assert_output --partial "ZELLIJ_TAB=reviewer"
-  # Role is reviewer-<repo-basename>; the basename is whatever mktemp produced.
-  assert_output --partial "TASK_FORCE_ROLE=reviewer-$(basename "$MAIN_REPO")"
+  assert_output --partial "Usage:"
+  assert_output --partial "task-reviewer <pr-url-or-number>"
 }
 
-@test "claude task-reviewer honors a pre-set ANTHROPIC_MODEL" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  ANTHROPIC_MODEL=claude-opus-4-7 run "$TASK_REVIEWER_CLAUDE"
+@test "claude task-reviewer: -h prints usage" {
+  run "$TASK_REVIEWER_CLAUDE" -h
   assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-opus-4-7"
-  refute_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_output --partial "Usage:"
 }
 
-# ----- claude-jira variant --------------------------------------------------
-
-@test "claude-jira task-reviewer renames the current tab to reviewer and exec's claude /reviewer" {
-  run "$TASK_REVIEWER_JIRA"
-  assert_success
-  assert_stub_called zellij "action rename-tab reviewer"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
-}
-
-@test "claude-jira task-reviewer: works without zellij (\$ZELLIJ unset → no rename)" {
-  unset ZELLIJ
-  run "$TASK_REVIEWER_JIRA"
-  assert_success
-  run stub_calls zellij
-  refute_output --partial "rename-tab"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
-}
-
-@test "claude-jira task-reviewer errors out cleanly outside a git repo" {
-  local outside
-  outside=$(mktemp -d)
-  cd "$outside"
-  run "$TASK_REVIEWER_JIRA"
+@test "claude task-reviewer: unknown flag errors" {
+  run "$TASK_REVIEWER_CLAUDE" 42 --bogus
   assert_failure
-  assert_output --partial "not in a git repo"
-  rm -rf "$outside"
+  assert_output --partial "unknown flag"
 }
 
-@test "claude-jira task-reviewer defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_ROLE=%s\n' "${TASK_FORCE_ROLE:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_LOADOUT=%s\n' "${TASK_FORCE_LOADOUT:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'ZELLIJ_TAB=%s\n' "${ZELLIJ_TAB:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
+# ===========================================================================
+# Per-loadout parity: jira / notion / local (claude variants byte-identical)
+# ===========================================================================
 
-  run "$TASK_REVIEWER_JIRA"
+@test "claude-jira task-reviewer: PR by number opens review tab" {
+  run "$TASK_REVIEWER_JIRA" 42
   assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
-  assert_output --partial "TASK_FORCE_LOADOUT=reviewer"
-  assert_output --partial "ZELLIJ_TAB=reviewer"
-  assert_output --partial "TASK_FORCE_ROLE=reviewer-$(basename "$MAIN_REPO")"
+  assert_stub_called zellij "new-tab --name review-pr42"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
-@test "claude-jira task-reviewer honors a pre-set ANTHROPIC_MODEL" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  ANTHROPIC_MODEL=claude-opus-4-7 run "$TASK_REVIEWER_JIRA"
+@test "claude-jira task-reviewer: --help" {
+  run "$TASK_REVIEWER_JIRA" --help
   assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-opus-4-7"
-  refute_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_output --partial "Usage:"
 }
 
-# ----- claude-notion variant ------------------------------------------------
-
-@test "claude-notion task-reviewer renames the current tab to reviewer and exec's claude /reviewer" {
-  run "$TASK_REVIEWER_NOTION"
+@test "claude-jira task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+  run "$TASK_REVIEWER_JIRA" 42
   assert_success
-  assert_stub_called zellij "action rename-tab reviewer"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
-@test "claude-notion task-reviewer: works without zellij (\$ZELLIJ unset → no rename)" {
-  unset ZELLIJ
-  run "$TASK_REVIEWER_NOTION"
+@test "claude-notion task-reviewer: PR by number opens review tab" {
+  run "$TASK_REVIEWER_NOTION" 42
   assert_success
-  run stub_calls zellij
-  refute_output --partial "rename-tab"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert_stub_called zellij "new-tab --name review-pr42"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
-@test "claude-notion task-reviewer errors out cleanly outside a git repo" {
-  local outside
-  outside=$(mktemp -d)
-  cd "$outside"
-  run "$TASK_REVIEWER_NOTION"
+@test "claude-notion task-reviewer: --help" {
+  run "$TASK_REVIEWER_NOTION" --help
+  assert_success
+  assert_output --partial "Usage:"
+}
+
+@test "claude-notion task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+  run "$TASK_REVIEWER_NOTION" 42
+  assert_success
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+}
+
+@test "claude-local task-reviewer: PR by number opens review tab" {
+  run "$TASK_REVIEWER_LOCAL" 42
+  assert_success
+  assert_stub_called zellij "new-tab --name review-pr42"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
+}
+
+@test "claude-local task-reviewer: --help" {
+  run "$TASK_REVIEWER_LOCAL" --help
+  assert_success
+  assert_output --partial "Usage:"
+}
+
+@test "claude-local task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+  run "$TASK_REVIEWER_LOCAL" 42
+  assert_success
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+}
+
+# ---------------------------------------------------------------------------
+# kiro variant
+# ---------------------------------------------------------------------------
+
+@test "kiro task-reviewer: PR by number opens review tab + kiro chat" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_stub_called zellij "new-tab --name review-pr42"
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  assert_stub_called zellij "Review PR https://github.com/owner/repo/pull/42"
+}
+
+@test "kiro task-reviewer: defaults to sonnet model" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_stub_called zellij "--model claude-sonnet-4.6"
+}
+
+@test "kiro task-reviewer: --model overrides default" {
+  run "$TASK_REVIEWER_KIRO" 42 --model claude-opus-4.6
+  assert_success
+  assert_stub_called zellij "--model claude-opus-4.6"
+}
+
+@test "kiro task-reviewer: --trust-all propagates" {
+  run "$TASK_REVIEWER_KIRO" 42 --trust-all
+  assert_success
+  assert_stub_called zellij "--trust-all-tools"
+}
+
+@test "kiro task-reviewer: --no-launch opens tab without kiro-cli" {
+  run "$TASK_REVIEWER_KIRO" 42 --no-launch
+  assert_success
+  assert_output --partial "kiro NOT launched"
+  run grep -F "kiro-cli " "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
-  assert_output --partial "not in a git repo"
-  rm -rf "$outside"
 }
 
-@test "claude-notion task-reviewer defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_ROLE=%s\n' "${TASK_FORCE_ROLE:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_LOADOUT=%s\n' "${TASK_FORCE_LOADOUT:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'ZELLIJ_TAB=%s\n' "${ZELLIJ_TAB:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  run "$TASK_REVIEWER_NOTION"
-  assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
-  assert_output --partial "TASK_FORCE_LOADOUT=reviewer"
-  assert_output --partial "ZELLIJ_TAB=reviewer"
-  assert_output --partial "TASK_FORCE_ROLE=reviewer-$(basename "$MAIN_REPO")"
-}
-
-@test "claude-notion task-reviewer honors a pre-set ANTHROPIC_MODEL" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  ANTHROPIC_MODEL=claude-opus-4-7 run "$TASK_REVIEWER_NOTION"
-  assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-opus-4-7"
-  refute_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
-}
-
-# ----- claude-local variant -------------------------------------------------
-
-@test "claude-local task-reviewer renames the current tab to reviewer and exec's claude /reviewer" {
-  run "$TASK_REVIEWER_LOCAL"
-  assert_success
-  assert_stub_called zellij "action rename-tab reviewer"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
-}
-
-@test "claude-local task-reviewer: works without zellij (\$ZELLIJ unset → no rename)" {
-  unset ZELLIJ
-  run "$TASK_REVIEWER_LOCAL"
-  assert_success
-  run stub_calls zellij
-  refute_output --partial "rename-tab"
-  run stub_calls claude
-  assert_output --partial "/reviewer"
-}
-
-@test "claude-local task-reviewer errors out cleanly outside a git repo" {
-  local outside
-  outside=$(mktemp -d)
-  cd "$outside"
-  run "$TASK_REVIEWER_LOCAL"
+@test "kiro task-reviewer: PR not found errors" {
+  unset GH_STUB_PR_URL
+  run "$TASK_REVIEWER_KIRO" 42
   assert_failure
-  assert_output --partial "not in a git repo"
-  rm -rf "$outside"
+  assert_output --partial "PR #42 not found"
 }
 
-@test "claude-local task-reviewer defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_ROLE=%s\n' "${TASK_FORCE_ROLE:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'TASK_FORCE_LOADOUT=%s\n' "${TASK_FORCE_LOADOUT:-}" >> "${STUB_CALLS_DIR}/claude.env"
-printf 'ZELLIJ_TAB=%s\n' "${ZELLIJ_TAB:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  run "$TASK_REVIEWER_LOCAL"
+@test "kiro task-reviewer: --help" {
+  run "$TASK_REVIEWER_KIRO" --help
   assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
-  assert_output --partial "TASK_FORCE_LOADOUT=reviewer"
-  assert_output --partial "ZELLIJ_TAB=reviewer"
-  assert_output --partial "TASK_FORCE_ROLE=reviewer-$(basename "$MAIN_REPO")"
+  assert_output --partial "Usage:"
 }
 
-@test "claude-local task-reviewer honors a pre-set ANTHROPIC_MODEL" {
-  cat >"$STUB_BIN/claude" <<'EOF'
-#!/usr/bin/env bash
-echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
-printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}" >> "${STUB_CALLS_DIR}/claude.env"
-EOF
-  chmod +x "$STUB_BIN/claude"
-
-  ANTHROPIC_MODEL=claude-opus-4-7 run "$TASK_REVIEWER_LOCAL"
+@test "kiro task-reviewer: explicit issue passes through to kiro prompt" {
+  run "$TASK_REVIEWER_KIRO" 42 38
   assert_success
-
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "ANTHROPIC_MODEL=claude-opus-4-7"
-  refute_output --partial "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_stub_called zellij "against spec issue https://github.com/owner/repo/issues/38"
 }
 
-# ----- kiro variant ---------------------------------------------------------
+# ===========================================================================
+# Dispatcher routing (preserved from previous suite)
+# ===========================================================================
 
-@test "kiro task-reviewer renames the current tab to reviewer and exec's kiro-cli reviewer agent" {
-  run "$TASK_REVIEWER_KIRO"
-  assert_success
-  assert_stub_called zellij "action rename-tab reviewer"
-  run stub_calls kiro-cli
-  assert_output --partial "chat --agent reviewer"
-}
-
-@test "kiro task-reviewer errors out cleanly outside a git repo" {
-  local outside
-  outside=$(mktemp -d)
-  cd "$outside"
-  run "$TASK_REVIEWER_KIRO"
-  assert_failure
-  assert_output --partial "not in a git repo"
-  rm -rf "$outside"
-}
-
-# ----- dispatcher -----------------------------------------------------------
-
-@test "top-level task-reviewer dispatches to the claude-gh variant based on workflow doc" {
+@test "top-level task-reviewer: dispatches to claude-gh variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/gh-workflow.md"
-
-  run "$TASK_REVIEWER_DISPATCHER"
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_success
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
-@test "top-level task-reviewer dispatches to the kiro-gh variant based on workflow doc" {
+@test "top-level task-reviewer: dispatches to kiro-gh variant" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/gh-workflow.md"
-
-  run "$TASK_REVIEWER_DISPATCHER"
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_success
-  run stub_calls kiro-cli
-  assert_output --partial "chat --agent reviewer"
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
 }
 
-@test "top-level task-reviewer dispatches to the claude-jira variant based on workflow doc" {
+@test "top-level task-reviewer: dispatches to claude-jira variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/jira-workflow.md"
-
-  run "$TASK_REVIEWER_DISPATCHER"
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_success
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
-@test "top-level task-reviewer dispatches to the claude-notion variant based on workflow doc" {
+@test "top-level task-reviewer: dispatches to claude-notion variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
-
-  run "$TASK_REVIEWER_DISPATCHER"
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_success
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
-@test "top-level task-reviewer dispatches to the claude-local variant based on workflow doc" {
+@test "top-level task-reviewer: dispatches to claude-local variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/local-workflow.md"
-
-  run "$TASK_REVIEWER_DISPATCHER"
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_success
-  run stub_calls claude
-  assert_output --partial "/reviewer"
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
-@test "top-level task-reviewer errors cleanly when no workflow doc is present" {
-  run "$TASK_REVIEWER_DISPATCHER"
+@test "top-level task-reviewer: errors cleanly without a workflow doc" {
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_failure
   assert_output --partial "no agentic-workflow impl configured"
 }
 
-@test "top-level task-reviewer errors cleanly for impls without a reviewer variant" {
-  # kiro-notion has no task-reviewer (claude-* and kiro-gh do). The dispatcher
-  # should surface a clear error, not the generic "Is the repository complete?"
-  # one.
+@test "top-level task-reviewer: errors cleanly for impls without a reviewer variant" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-
-  run "$TASK_REVIEWER_DISPATCHER"
+  run "$TASK_REVIEWER_DISPATCHER" 42
   assert_failure
   assert_output --partial "task-reviewer is not available for impl"
+}
+
+@test "top-level task-reviewer: forwards positional + flags through to loadout" {
+  mkdir -p "$MAIN_REPO/.claude"
+  touch "$MAIN_REPO/.claude/gh-workflow.md"
+  run "$TASK_REVIEWER_DISPATCHER" 42 38 --auto
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
+  assert_stub_called zellij "claude --permission-mode auto"
 }

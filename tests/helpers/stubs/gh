@@ -1,15 +1,44 @@
 #!/usr/bin/env bash
 # Stub for gh CLI — records invocations.
-# Set GH_STUB_PR_URL to simulate an existing PR on "gh pr view".
+#
+# Configurable via env vars:
+#   GH_STUB_PR_URL        URL returned by `gh pr view --json url`. Also
+#                         doubles as a "PR exists" signal — when unset, the
+#                         call exits 1 so callers fall through to "no PR".
+#   GH_STUB_PR_HEAD_REF   headRefName returned by `gh pr view --json
+#                         headRefName --jq .headRefName` (#138 task-reviewer).
+#                         Defaults to "feature-branch".
+#   GH_STUB_PR_BASE_REF   baseRefName returned similarly. Defaults to "main".
+#   GH_STUB_PR_BODY       PR body returned similarly. Defaults to empty.
+#
+# task-done uses the `--json url -q .url` form; task-reviewer uses the
+# per-field `--json <field> --jq .<field>` form. We match both.
 echo "gh $*" >> "${STUB_CALLS_DIR}/gh.calls"
 
-if [[ "$*" == *"pr view"* && "$*" == *"--json url"* ]]; then
-  if [[ -n "${GH_STUB_PR_URL:-}" ]]; then
-    echo "$GH_STUB_PR_URL"
+ARGS="$*"
+
+case "$ARGS" in
+  *"pr view"*"--json headRefName"*"--jq .headRefName"*)
+    echo "${GH_STUB_PR_HEAD_REF:-feature-branch}"
     exit 0
-  fi
-  # No PR — exit 1 so the caller's "|| true" produces empty string
-  exit 1
-fi
+    ;;
+  *"pr view"*"--json baseRefName"*"--jq .baseRefName"*)
+    echo "${GH_STUB_PR_BASE_REF:-main}"
+    exit 0
+    ;;
+  *"pr view"*"--json body"*"--jq .body"*)
+    echo "${GH_STUB_PR_BODY:-}"
+    exit 0
+    ;;
+  *"pr view"*"--json url"*)
+    # Matches both `--json url --jq .url` (#138 task-reviewer) and the
+    # legacy `--json url -q .url` (task-done).
+    if [[ -n "${GH_STUB_PR_URL:-}" ]]; then
+      echo "$GH_STUB_PR_URL"
+      exit 0
+    fi
+    exit 1
+    ;;
+esac
 
 exit 0

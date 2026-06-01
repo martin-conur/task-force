@@ -499,3 +499,27 @@ EOF
   assert_output --partial "Bash(custom *)"
   assert_output --partial "Bash(gh issue view *)"
 }
+
+# ---------------------------------------------------------------------------
+# jq >= 1.6 guard (#141 follow-up)
+# ---------------------------------------------------------------------------
+
+@test "fails with clear error when jq < 1.6 is on PATH" {
+  # Shadow the real jq with a fake one that reports version 1.5 so the guard
+  # is the only thing that can decide the outcome.
+  local stub_bin
+  stub_bin=$(mktemp -d)
+  cat > "$stub_bin/jq" <<'EOF'
+#!/usr/bin/env bash
+case "${1-}" in
+  --version) echo "jq-1.5" ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$stub_bin/jq"
+  PATH="$stub_bin:$PATH" run "$CLAUDE_GH_TASK_INIT"
+  rm -rf "$stub_bin"
+  assert_failure
+  assert_output --partial "jq >= 1.6 required"
+  assert_output --partial "1.5"
+}

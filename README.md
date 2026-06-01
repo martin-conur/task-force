@@ -504,13 +504,13 @@ On its next turn the worker sees the ping, sets the project Status field to `Don
 To shift PR review off the PM's (Opus) tab and onto a cheaper Sonnet model, dispatch a one-shot reviewer worker per PR:
 
 ```bash
-task-reviewer <pr-url-or-number> [<issue-url-or-number>]
+task-reviewer <pr-url-or-number> [<spec-identifier>]
 ```
 
 `task-reviewer` spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the `/reviewer` slash command (or the kiro `reviewer` agent) inside it on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6` by default — pre-set the env var to override). The PM's tab stays focused.
 
 The reviewer:
-1. Reads the spec issue (passed as the second arg, or auto-detected from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line, case-insensitive).
+1. Reads the spec (passed as the second arg — issue number / URL for `claude-gh` / `kiro-gh`; Jira key for `claude-jira`; Notion page URL for `claude-notion`; local task slug or path for `claude-local`). On `claude-gh` / `kiro-gh` only, the wrapper also auto-detects from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive); non-gh loadouts require the spec identifier explicitly because PR bodies don't carry their tracker's linking convention.
 2. Reads the PR diff + comments.
 3. Cross-checks the diff against the spec, then runs the `code-review` skill on top (claude variants — kiro stays prompt-driven).
 4. Posts **one** thorough PR comment with spec-compliance findings, code-review findings, and a verdict (`clean`, `clean-with-nits`, or `changes-requested`).
@@ -519,9 +519,12 @@ The reviewer:
 PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates Status. The tab stays open showing the analysis; clean up the worktree later with `task-done --remove-worktree`.
 
 ```bash
-task-reviewer 42                                              # PR by number, auto-detect issue (auto-permission default)
+task-reviewer 42                                              # claude-gh / kiro-gh: PR by number, auto-detect issue
 task-reviewer https://github.com/owner/repo/pull/42           # PR by URL
-task-reviewer 42 38                                           # PR + spec issue explicit
+task-reviewer 42 38                                           # claude-gh / kiro-gh: PR + GitHub issue explicit
+task-reviewer 42 PROJ-123                                     # claude-jira: PR + Jira key explicit (no auto-detect)
+task-reviewer 42 https://notion.so/page-id                    # claude-notion: PR + Notion page URL explicit
+task-reviewer 42 042-add-login                                # claude-local: PR + local task slug explicit
 task-reviewer 42 --no-auto                                    # opt out of auto-permission (interactive review)
 ```
 

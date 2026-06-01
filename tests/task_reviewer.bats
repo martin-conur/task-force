@@ -362,6 +362,34 @@ teardown() {
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
+# #144: jira loadout must accept a Jira issue key as opaque 2nd-arg and pass
+# it through to /reviewer verbatim (no GitHub URL synthesis).
+@test "claude-jira task-reviewer: passes Jira issue key through to /reviewer (#144)" {
+  run "$TASK_REVIEWER_JIRA" 42 PROJ-123
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 PROJ-123"
+}
+
+# #144: jira loadout must NOT scan PR body for `Closes #N` — that's a
+# GitHub-only convention. With no 2nd arg, behavior is diff-only regardless
+# of what's in the body.
+@test "claude-jira task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
+  export GH_STUB_PR_BODY="Closes #38"
+  run "$TASK_REVIEWER_JIRA" 42
+  assert_success
+  # /reviewer must receive only the PR URL, not a synthesized GitHub issues URL.
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude-jira task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
+  run "$TASK_REVIEWER_JIRA" 42
+  assert_success
+  assert_output --partial "No spec identifier passed"
+  assert_output --partial "auto-detect is GitHub-only"
+  assert_output --partial "diff-only review"
+}
+
 @test "claude-notion task-reviewer: PR by number opens review tab" {
   run "$TASK_REVIEWER_NOTION" 42
   assert_success
@@ -381,6 +409,29 @@ teardown() {
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
+# #144: notion loadout must accept a Notion page URL as opaque 2nd-arg.
+@test "claude-notion task-reviewer: passes Notion page URL through to /reviewer (#144)" {
+  local notion_url="https://www.notion.so/myws/Spec-Page-1234abcd"
+  run "$TASK_REVIEWER_NOTION" 42 "$notion_url"
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 $notion_url"
+}
+
+@test "claude-notion task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
+  export GH_STUB_PR_BODY="Fixes #38"
+  run "$TASK_REVIEWER_NOTION" 42
+  assert_success
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude-notion task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
+  run "$TASK_REVIEWER_NOTION" 42
+  assert_success
+  assert_output --partial "No spec identifier passed"
+  assert_output --partial "auto-detect is GitHub-only"
+}
+
 @test "claude-local task-reviewer: PR by number opens review tab" {
   run "$TASK_REVIEWER_LOCAL" 42
   assert_success
@@ -398,6 +449,40 @@ teardown() {
   run "$TASK_REVIEWER_LOCAL" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+}
+
+# #144: local loadout must accept a local task slug as opaque 2nd-arg.
+@test "claude-local task-reviewer: passes local task slug through to /reviewer (#144)" {
+  run "$TASK_REVIEWER_LOCAL" 42 042-add-login
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 042-add-login"
+}
+
+@test "claude-local task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
+  export GH_STUB_PR_BODY="Resolves #38"
+  run "$TASK_REVIEWER_LOCAL" 42
+  assert_success
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude-local task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
+  run "$TASK_REVIEWER_LOCAL" 42
+  assert_success
+  assert_output --partial "No spec identifier passed"
+  assert_output --partial "auto-detect is GitHub-only"
+}
+
+# #144: claude-gh path stays green — the advisory copy is GitHub-flavored, not
+# the non-gh "auto-detect is GitHub-only" one (regression for the gh branch).
+@test "claude-gh task-reviewer: 'no spec issue' advisory keeps the original GitHub-flavored copy (#144 regression)" {
+  export GH_STUB_PR_BODY="Just some prose, no spec link."
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_output --partial "No spec issue associated"
+  assert_output --partial "no Closes/Fixes in body"
+  # Must not regress to the non-gh advisory.
+  refute_output --partial "auto-detect is GitHub-only"
 }
 
 # ---------------------------------------------------------------------------

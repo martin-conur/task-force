@@ -35,11 +35,17 @@ PR comment, and radios PM back with a verdict — clean or with findings.
 Positional arguments:
   <pr-url-or-number>      The PR to review. Accepts a GitHub PR URL or a bare
                           number (resolved in the current repo's `origin`).
-  <issue-url-or-number>   Optional — the spec issue this PR claims to close.
-                          If omitted, auto-detected from the PR body's
-                          `Closes #N` / `Fixes #N` / `Resolves #N` line.
-                          With no detectable issue, the reviewer proceeds with
-                          a diff-only review.
+  <spec-identifier>       Optional — the spec this PR claims to close.
+                          Shape depends on the loadout:
+                            claude-gh     — issue number or GitHub issue URL.
+                                            If omitted, auto-detected from the
+                                            PR body's Closes/Fixes/Resolves #N.
+                            claude-jira   — Jira issue key (e.g. PROJ-123).
+                            claude-notion — Notion page URL.
+                            claude-local  — local task slug or filename.
+                          PR-body auto-detect is GitHub-only — non-gh loadouts
+                          must pass the 2nd arg explicitly. With no spec id,
+                          the reviewer proceeds with a diff-only review.
 
 Options:
       --no-auto           Opt out of --permission-mode auto. Default is auto
@@ -88,6 +94,15 @@ done
 
 [[ ${#POSITIONAL[@]} -lt 1 ]] && { echo "Error: PR url or number is required" >&2; usage 1; }
 
+# Detect which loadout this dispatcher is running as (claude-gh / claude-jira
+# / claude-notion / claude-local). The 4 dispatcher bodies are kept
+# byte-identical (sentinel-checked by tools/check-drift.sh) and branch on
+# this for tracker-aware behavior — only claude-gh resolves spec issues via
+# the GitHub `Closes #N` convention, the others accept any opaque 2nd
+# positional arg (Jira key, Notion URL, local slug) and pass it through to
+# /reviewer untouched (#144).
+AW_LOADOUT="$(basename "$(dirname "$(dirname "${BASH_SOURCE[0]}")")")"
+
 parse_pr_number() {
   local input="$1"
   if [[ "$input" =~ ^[0-9]+$ ]]; then
@@ -100,16 +115,24 @@ parse_pr_number() {
   return 1
 }
 
+# Spec identifier parsing is tracker-aware. claude-gh keeps numeric / GitHub
+# issue URL parsing. claude-jira / claude-notion / claude-local accept any
+# non-empty string and pass it through opaquely — the /reviewer prompt knows
+# how to resolve it via the loadout-appropriate MCP / file read.
 parse_issue_number() {
   local input="$1"
-  if [[ "$input" =~ ^[0-9]+$ ]]; then
-    echo "$input"; return 0
+  if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+      echo "$input"; return 0
+    fi
+    if [[ "$input" == *"github.com"*"/issues/"* ]]; then
+      echo "$input" | sed 's|.*/issues/||' | sed 's|[^0-9].*||'
+      return 0
+    fi
+    return 1
   fi
-  if [[ "$input" == *"github.com"*"/issues/"* ]]; then
-    echo "$input" | sed 's|.*/issues/||' | sed 's|[^0-9].*||'
-    return 0
-  fi
-  return 1
+  [[ -n "$input" ]] || return 1
+  printf '%s\n' "$input"
 }
 
 PR_INPUT="${POSITIONAL[0]}"
@@ -136,31 +159,54 @@ PR_URL=$(gh pr view "$PR_NUMBER" --json url --jq .url 2>/dev/null) || {
 PR_BASE_REF=$(gh pr view "$PR_NUMBER" --json baseRefName --jq .baseRefName 2>/dev/null || echo "main")
 PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body 2>/dev/null || echo "")
 
-# Issue resolution: explicit arg → parse; else scan PR body for first
-# Closes/Fixes/Resolves #N line.
+# Spec identifier resolution:
+#   - explicit 2nd arg always wins (parsed by tracker-aware parse_issue_number)
+#   - claude-gh additionally falls back to scanning the PR body for
+#     Closes/Fixes/Resolves #N (the GitHub linking convention)
+#   - non-gh loadouts have no PR-body convention to scan — Jira keys / Notion
+#     URLs / local slugs don't appear in PR bodies in a standard form — so
+#     the 2nd positional arg is the only path (#144).
+#
+# ISSUE_NUMBER is the raw identifier (numeric for gh, opaque string elsewhere)
+# persisted into the .info file for task-done. SPEC_IDENTIFIER is what
+# /reviewer receives as $ARGUMENTS[1] (a GitHub issues URL for gh, the opaque
+# identifier as-is for others).
 ISSUE_NUMBER=""
-ISSUE_URL=""
+SPEC_IDENTIFIER=""
 if [[ -n "$ISSUE_INPUT" ]]; then
   ISSUE_NUMBER=$(parse_issue_number "$ISSUE_INPUT") || {
-    echo "Error: could not parse issue number from '$ISSUE_INPUT'" >&2
+    if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+      echo "Error: could not parse issue number from '$ISSUE_INPUT'" >&2
+    else
+      echo "Error: spec identifier cannot be empty" >&2
+    fi
     exit 1
   }
-  if [[ "$ISSUE_INPUT" == *"github.com"* ]]; then
-    ISSUE_URL="$ISSUE_INPUT"
+  if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+    [[ "$ISSUE_INPUT" == *"github.com"* ]] && SPEC_IDENTIFIER="$ISSUE_INPUT"
+  else
+    SPEC_IDENTIFIER="$ISSUE_INPUT"
   fi
-elif [[ -n "$PR_BODY" ]]; then
+elif [[ "$AW_LOADOUT" == "claude-gh" && -n "$PR_BODY" ]]; then
   ISSUE_NUMBER=$(printf '%s\n' "$PR_BODY" \
     | grep -iEo '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
     | head -1 | grep -Eo '[0-9]+' || true)
 fi
 
-# Build a fallback ISSUE_URL from PR_URL when we only have a number.
-if [[ -n "$ISSUE_NUMBER" && -z "$ISSUE_URL" && -n "$PR_URL" ]]; then
-  ISSUE_URL=$(printf '%s\n' "$PR_URL" | sed "s|/pull/[0-9]*|/issues/$ISSUE_NUMBER|")
+# claude-gh: synthesize the GitHub issues URL from PR_URL + ISSUE_NUMBER when
+# the caller passed only a number (or we auto-detected from the body).
+if [[ "$AW_LOADOUT" == "claude-gh" && -n "$ISSUE_NUMBER" && -z "$SPEC_IDENTIFIER" && -n "$PR_URL" ]]; then
+  SPEC_IDENTIFIER=$(printf '%s\n' "$PR_URL" | sed "s|/pull/[0-9]*|/issues/$ISSUE_NUMBER|")
 fi
 
 if [[ -z "$ISSUE_NUMBER" ]]; then
-  echo "⚠ No spec issue associated with PR #$PR_NUMBER (no second arg, no Closes/Fixes in body)." >&2
+  if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+    echo "⚠ No spec issue associated with PR #$PR_NUMBER (no second arg, no Closes/Fixes in body)." >&2
+  else
+    echo "⚠ No spec identifier passed for PR #$PR_NUMBER." >&2
+    echo "  PR-body auto-detect is GitHub-only — pass the spec id (Jira key, Notion URL," >&2
+    echo "  local task slug) as the 2nd positional arg to enable spec-compliance review." >&2
+  fi
   echo "  Reviewer will proceed with a diff-only review." >&2
 fi
 
@@ -242,7 +288,7 @@ build_claude_cmd() {
   local mode_prefix=""
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   local slash_args="$PR_URL"
-  [[ -n "$ISSUE_URL" ]] && slash_args+=" $ISSUE_URL"
+  [[ -n "$SPEC_IDENTIFIER" ]] && slash_args+=" $SPEC_IDENTIFIER"
   echo "claude ${mode_prefix}\"/reviewer $slash_args\""
 }
 

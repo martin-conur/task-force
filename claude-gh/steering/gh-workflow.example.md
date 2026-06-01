@@ -85,13 +85,15 @@ Radio is the **canonical** coordination channel between the PM and workers — e
 role transition runs through it. The PM / planner / worker prompts shell out to
 `radio send` at every documented handoff point:
 
-| From    | When                            | Command                                                                |
-|---------|---------------------------------|------------------------------------------------------------------------|
-| Planner | spec written into the issue     | `radio send --to pm --intent spec-ready --issue <N>`                   |
-| Worker  | PR opened                       | `radio send --to pm --intent review-requested --pr <N>`                |
-| Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
-| PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
-| PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
+| From     | When                              | Command                                                                          |
+|----------|-----------------------------------|----------------------------------------------------------------------------------|
+| Planner  | spec written into the issue       | `radio send --to pm --intent spec-ready --issue <N>`                             |
+| Worker   | PR opened                         | `radio send --to pm --intent review-requested --pr <N>`                          |
+| Worker   | new commits pushed after review   | `radio send --to pm --intent re-review-requested --pr <N>`                       |
+| PM       | review requested changes          | `radio send --to <worker-role> --intent changes-requested --pr <N>`              |
+| PM       | PR merged                         | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`            |
+| Reviewer | review done, no findings          | `radio send --to pm --intent review-complete-clean --pr <N>`                     |
+| Reviewer | review done, blockers/nits posted | `radio send --to pm --intent review-complete-with-findings --pr <N>`             |
 
 When a worker finishes its task and has nothing pending, the `radio ready` step
 runs automatically via the `Stop` hook — you don't need to invoke it manually.
@@ -116,7 +118,7 @@ To dispatch a one-shot reviewer worker for a PR, run
 It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
 `/reviewer` agent on Sonnet (cheaper than the PM's Opus default), cross-checks
 the PR against the spec issue (passed as the second arg, or auto-detected from
-the PR body's `Closes #N` / `Fixes #N` line), runs the `code-review` skill on
+the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line, case-insensitive), runs the `code-review` skill on
 the diff, posts a single thorough PR comment via `gh pr comment`, and radios
 PM back with `review-complete-clean` or `review-complete-with-findings`. PM
 still owns the merge decision — the reviewer never approves, merges, or

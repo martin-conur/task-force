@@ -122,7 +122,6 @@ PR_URL=$(gh pr view "$PR_NUMBER" --json url --jq .url 2>/dev/null) || {
   exit 1
 }
 
-PR_HEAD_REF=$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName 2>/dev/null || echo "")
 PR_BASE_REF=$(gh pr view "$PR_NUMBER" --json baseRefName --jq .baseRefName 2>/dev/null || echo "main")
 PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body 2>/dev/null || echo "")
 
@@ -153,7 +152,11 @@ fi
 
 # ---------------- worktree setup ----------------
 SLUG="review-pr${PR_NUMBER}"
-BRANCH="review/pr${PR_NUMBER}"
+# Branch is prefixed `task/` so `task-done`'s `${BRANCH#task/}` slug-strip
+# yields `review-pr<N>` — matching the worktree dir and info file. Without
+# the `task/` prefix `task-done --remove-worktree` reads a nonsense info
+# path and leaks the worktree (PR #139 review).
+BRANCH="task/review-pr${PR_NUMBER}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 if [[ -d "$WORKTREE_DIR" ]]; then
@@ -203,6 +206,10 @@ RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
 
 # ---------------- launch ----------------
+# 4th arg to aw_launch_tab is `stay_on_caller_tab=1` — keep focus on the
+# caller's tab (PM or wherever this was dispatched from) instead of snapping
+# into the new reviewer tab. Same convention task-work --auto adopted in
+# #133; reviewer always opts in since it's always a dispatched worker.
 echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "1"

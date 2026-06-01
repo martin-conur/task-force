@@ -510,7 +510,7 @@ task-reviewer <pr-url-or-number> [<issue-url-or-number>]
 `task-reviewer` spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the `/reviewer` slash command (or the kiro `reviewer` agent) inside it on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6` by default — pre-set the env var to override). The PM's tab stays focused.
 
 The reviewer:
-1. Reads the spec issue (passed as the second arg, or auto-detected from the PR body's `Closes #N` / `Fixes #N` line).
+1. Reads the spec issue (passed as the second arg, or auto-detected from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line, case-insensitive).
 2. Reads the PR diff + comments.
 3. Cross-checks the diff against the spec, then runs the `code-review` skill on top (claude variants — kiro stays prompt-driven).
 4. Posts **one** thorough PR comment with spec-compliance findings, code-review findings, and a verdict (`clean`, `clean-with-nits`, or `changes-requested`).

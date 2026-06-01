@@ -140,12 +140,29 @@ teardown() {
   assert [ -d "$WORKTREE_BASE/review-pr42" ]
 }
 
-@test "claude task-reviewer: creates a review/pr<N> branch" {
+@test "claude task-reviewer: creates a task/review-pr<N> branch" {
+  # Branch is namespaced under `task/` so `task-done --remove-worktree`'s
+  # `${BRANCH#task/}` slug-strip yields `review-pr<N>` and finds the right
+  # info file. Without the prefix, task-done leaks the worktree (#139).
   run "$TASK_REVIEWER_CLAUDE" 42
   assert_success
   local branches
-  branches=$(git -C "$MAIN_REPO" branch --list "review/pr42")
+  branches=$(git -C "$MAIN_REPO" branch --list "task/review-pr42")
   assert [ -n "$branches" ]
+}
+
+@test "claude task-reviewer: branch + info file align so task-done --remove-worktree finds the info" {
+  # Regression for #139: the branch must be `task/review-pr<N>` and the
+  # info file at `.review-pr<N>.info` so task-done's
+  # `INFO_FILE="${WORKTREE_BASE}/.${BRANCH#task/}.info"` resolves.
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  local branch_in_wt
+  branch_in_wt=$(git -C "$WORKTREE_BASE/review-pr42" rev-parse --abbrev-ref HEAD)
+  assert_equal "$branch_in_wt" "task/review-pr42"
+  # Mirror task-done's slug derivation: ${BRANCH#task/} → review-pr42.
+  local slug="${branch_in_wt#task/}"
+  assert [ -f "$WORKTREE_BASE/.${slug}.info" ]
 }
 
 @test "claude task-reviewer: writes .info with PR_NUMBER and ISSUE_NUMBER" {

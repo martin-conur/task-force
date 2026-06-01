@@ -21,7 +21,7 @@ Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo convention
 
 `task-reviewer` passes 1–2 positional args:
 - **PR url** (required) — the PR you are reviewing.
-- **Issue url** (optional) — the spec issue this PR claims to close. If omitted, no spec was associated (either the user didn't pass one and the PR body had no `Closes #N`/`Fixes #N` line, or the user explicitly invoked a diff-only review). In that case, run a diff-only review and call it out in the verdict body.
+- **Issue url** (optional) — the spec issue this PR claims to close. The shell wrapper auto-detects from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive) when this arg is omitted. If neither path produced an issue (no second arg, no link in body) the wrapper emits a diff-only warning and passes you only the PR url. In that case, run a diff-only review and call it out in the verdict body.
 
 $ARGUMENTS
 

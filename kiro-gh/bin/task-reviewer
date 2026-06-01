@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# `set -E` (errtrace) makes the ERR trap below inherit into `aw_launch_tab`
+# and other sourced library functions — without it, a zellij `new-tab`
+# failure inside `aw_launch_tab` would exit the script via `set -e` but skip
+# the partial-state cleanup trap, leaving the worktree/branch/info file
+# behind. (PR #139 round-4 review.)
+set -eEuo pipefail
 # region:body
 # task-reviewer — dispatch-style PR reviewer for kiro loadouts.
 #
@@ -170,10 +175,20 @@ SLUG="review-pr${PR_NUMBER}"
 BRANCH="task/review-pr${PR_NUMBER}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
-if [[ -d "$WORKTREE_DIR" ]]; then
-  echo "Error: a review worktree already exists for PR #$PR_NUMBER at" >&2
-  echo "       $WORKTREE_DIR" >&2
-  echo "       Close that tab and run 'task-done --remove-worktree' to clean it up first." >&2
+# Concurrent-reviews guard: refuse with a clear error rather than silently
+# spawning a parallel session or appending a suffix. The branch check catches
+# the stale-branch-without-directory case: if a user manually deletes the
+# worktree dir but the `task/review-pr<N>` ref survives, `aw_create_worktree`
+# would silently reuse it (emitting a stderr warning the dispatched reviewer
+# never reads) and the review would open on stale code instead of the PR
+# head. Refusing here forces an explicit `git branch -D task/review-pr<N>`
+# cleanup instead. (PR #139 round-4 review.)
+if [[ -d "$WORKTREE_DIR" ]] || git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  echo "Error: a review worktree or branch already exists for PR #$PR_NUMBER:" >&2
+  [[ -d "$WORKTREE_DIR" ]] && echo "       worktree dir: $WORKTREE_DIR" >&2
+  git show-ref --verify --quiet "refs/heads/$BRANCH" && echo "       branch:       $BRANCH" >&2
+  echo "       Close that tab and run 'task-done --remove-worktree' to clean up," >&2
+  echo "       or (branch-only case) 'git branch -D $BRANCH' to delete the stale ref." >&2
   exit 1
 fi
 
@@ -186,10 +201,23 @@ else
 fi
 
 mkdir -p "$WORKTREE_BASE"
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+
+# Cleanup trap: if anything between here and the successful `aw_launch_tab`
+# below errors out, unwind the partial state so the next invocation isn't
+# permanently blocked by the concurrent-reviews guard above. Trap is cleared
+# after the successful launch so downstream non-fatal stderr can't roll the
+# spawn back. (PR #139 round-4 review.)
+_reviewer_cleanup_partial() {
+  git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+  git branch -D "$BRANCH" 2>/dev/null || true
+  rm -f "$INFO_FILE"
+}
+trap _reviewer_cleanup_partial ERR
+
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
 aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
 
-INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 BASE_BRANCH="${PR_BASE_REF:-main}"
 {
   printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"
@@ -215,6 +243,11 @@ TASK_FORCE_ROLE_VALUE="reviewer-${REPO_NAME}-pr${PR_NUMBER}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
 RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
+# Match the claude-variant convention: dispatched-with-trust-all reviewers
+# opt into radio's CR auto-submit wake-up so PM pings process without a
+# manual Enter (mirrors task-work --auto's behavior — see kiro-gh/bin/task-
+# work line 216 for the equivalent on the worker side).
+[[ -n "$TRUST_ALL" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
 
 # ---------------- launch ----------------
 # 4th arg to aw_launch_tab is `stay_on_caller_tab=1` — keep focus on the
@@ -232,6 +265,10 @@ else
   [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
   echo "Started $desc in $WORKTREE_DIR (issue: ${ISSUE_NUMBER:-none})"
 fi
+
+# Disarm the partial-state cleanup trap — the worktree is live and downstream
+# best-effort steps must not roll the spawn back if they fail.
+trap - ERR
 
 INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
 if [[ -n "$INFO_TAB_ID" ]]; then

@@ -19,5 +19,10 @@ case "$*" in
     # a non-zero go-to-tab without aborting the worker spawn.
     [[ -n "${STUB_ZELLIJ_GOTO_TAB_FAIL:-}" ]] && exit 1
     ;;
+  "action new-tab "*)
+    # Lets tests pin that task-reviewer's ERR trap unwinds the worktree +
+    # branch + info file when aw_launch_tab fails partway through (#139).
+    [[ -n "${STUB_ZELLIJ_NEW_TAB_FAIL:-}" ]] && exit 1
+    ;;
 esac
 exit 0

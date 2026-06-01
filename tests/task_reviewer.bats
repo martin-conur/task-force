@@ -185,6 +185,43 @@ teardown() {
   assert_output --partial "already exists"
 }
 
+@test "claude task-reviewer: refuses when stale branch exists without the worktree dir (#139 round-4)" {
+  # Concurrent guard must catch the case where the worktree dir got deleted
+  # manually but the task/review-prN branch survived. Otherwise
+  # aw_create_worktree silently reuses the stale branch and the reviewer
+  # opens on old code with only a stderr warning that --auto dispatch can't
+  # see. We model it by creating the branch directly with no worktree.
+  git -C "$MAIN_REPO" branch task/review-pr42
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_failure
+  assert_output --partial "already exists"
+  assert_output --partial "task/review-pr42"
+  assert_output --partial "git branch -D"
+}
+
+@test "claude task-reviewer: ERR trap cleans up partial worktree/branch/info on aw_launch_tab failure (#139 round-4)" {
+  # When zellij new-tab fails (e.g. zellij isn't running, or the cmd errored
+  # out), `set -e` aborts the script. Without the trap, the worktree dir,
+  # the task/review-prN branch, and the .info file would all be left behind
+  # — the concurrent guard would then permanently block re-invocation.
+  export STUB_ZELLIJ_NEW_TAB_FAIL=1
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_failure
+
+  # All three artifacts should be gone.
+  assert [ ! -d "$WORKTREE_BASE/review-pr42" ]
+  assert [ ! -f "$WORKTREE_BASE/.review-pr42.info" ]
+  run git -C "$MAIN_REPO" branch --list "task/review-pr42"
+  assert_output ""
+
+  # The next invocation (with new-tab fixed) must succeed — proves the
+  # concurrent guard isn't tripped by leftover state.
+  unset STUB_ZELLIJ_NEW_TAB_FAIL
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert [ -d "$WORKTREE_BASE/review-pr42" ]
+}
+
 # ---------------------------------------------------------------------------
 # Tab spawn
 # ---------------------------------------------------------------------------
@@ -399,6 +436,23 @@ teardown() {
   run "$TASK_REVIEWER_KIRO" 42 --trust-all
   assert_success
   assert_stub_called zellij "--trust-all-tools"
+}
+
+@test "kiro task-reviewer: --trust-all default propagates TASK_FORCE_AUTO_SUBMIT=1 to radio env (#139 round-4)" {
+  # Parity with the claude variants: when the dispatcher runs with
+  # trust-all (the default), the radio session inherits AUTO_SUBMIT=1 so
+  # that PM pings into the reviewer's pane auto-submit instead of sitting
+  # in the input buffer waiting for a manual Enter.
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "kiro task-reviewer: --no-trust-all omits TASK_FORCE_AUTO_SUBMIT (#139 round-4)" {
+  run "$TASK_REVIEWER_KIRO" 42 --no-trust-all
+  assert_success
+  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
 }
 
 @test "kiro task-reviewer: --no-trust-all drops back to interactive trust" {

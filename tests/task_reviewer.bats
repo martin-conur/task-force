@@ -370,16 +370,24 @@ teardown() {
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 PROJ-123"
 }
 
-# #144 round-2: SPEC_IDENTIFIER containing `!` must land in the assembled
-# command unmangled, and the assembled command must include `set +H` to
-# disable bash history expansion in the spawned interactive subshell. Without
-# the defense, a Jira / Notion / local id like `auth-login!v2` would be
-# silently history-substituted before /reviewer ever saw it.
+# #144 round-2 + round-3: SPEC_IDENTIFIER containing `!` must land in the
+# assembled command unmangled, and the assembled command must include
+# `set +H` to disable bash history expansion in the spawned interactive
+# subshell. Without the defense, a Jira / Notion / local id like
+# `auth-login!v2` would be silently history-substituted before /reviewer
+# ever saw it.
+#
+# Round-3 follow-up: `set +H;` must appear BEFORE the RADIO_ENV_PREFIX
+# assignments (TASK_FORCE_ROLE=, ANTHROPIC_MODEL=, etc.), not after.
+# `VAR=val cmd1; cmd2` in bash scopes the assignments to `cmd1` only — if
+# `set +H` sits between the env prefix and `claude`, the env vars attach
+# to the `set` builtin and never reach `claude` (radio routing /
+# model selection / AUTO_SUBMIT all dead).
 @test "claude-jira task-reviewer: SPEC_IDENTIFIER with '!' lands unmangled; cmd disables histexpand (#144 round-2)" {
   run "$TASK_REVIEWER_JIRA" 42 'PROJ-123!v2'
   assert_success
   assert_stub_called zellij "PROJ-123!v2"
-  assert_stub_called zellij "set +H; claude"
+  assert_stub_called zellij "set +H;"
 }
 
 @test "claude-gh task-reviewer: assembled command disables histexpand (#144 round-2)" {
@@ -388,7 +396,31 @@ teardown() {
   # byte-identical, and `set +H` is cheap and harmless on gh.
   run "$TASK_REVIEWER_CLAUDE" 42
   assert_success
-  assert_stub_called zellij "set +H; claude"
+  assert_stub_called zellij "set +H;"
+}
+
+# #144 round-3: `set +H;` must precede the RADIO_ENV_PREFIX assignments.
+# Regression check: the round-2 placement put `set +H;` BETWEEN the env
+# prefix and `claude`, which silently neutered env passthrough because
+# bash scoped `VAR=val set +H;` to the builtin only. This test pins the
+# correct ordering — `set +H` first, then env, then claude.
+@test "claude task-reviewer: 'set +H' precedes RADIO_ENV_PREFIX so env vars reach claude (#144 round-3)" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  # Extract the assembled command string from the most recent zellij
+  # new-tab call. It's the last token after `--` on the line.
+  local cmd_line
+  cmd_line=$(grep -m1 -F "new-tab --name review-pr42" "$STUB_CALLS_DIR/zellij.calls")
+  # `set +H;` must appear before `TASK_FORCE_ROLE=` in the same line.
+  local set_pos="${cmd_line%%set +H;*}"
+  local role_pos="${cmd_line%%TASK_FORCE_ROLE=*}"
+  # If `set +H;` comes first, the prefix-substring-stripped result is
+  # shorter than for `TASK_FORCE_ROLE=`. Compare lengths.
+  [[ ${#set_pos} -lt ${#role_pos} ]] || {
+    echo "ordering wrong: 'set +H;' must come before 'TASK_FORCE_ROLE='" >&2
+    echo "cmd: $cmd_line" >&2
+    return 1
+  }
 }
 
 # #144: jira loadout must NOT scan PR body for `Closes #N` — that's a
@@ -496,6 +528,11 @@ teardown() {
   assert_success
   assert_output --partial "No spec identifier passed"
   assert_output --partial "auto-detect is GitHub-only"
+  # Mirror claude-jira / claude-notion: pin the "diff-only review" trailer
+  # so a future regression that drops it for local-only would be visible
+  # to CI (#144 round-3 review — missed in round-1 when the assertion was
+  # added to claude-jira / claude-notion).
+  assert_output --partial "diff-only review"
 }
 
 # #144: claude-gh path stays green — the advisory copy is GitHub-flavored, not

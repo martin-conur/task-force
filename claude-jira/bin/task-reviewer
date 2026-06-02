@@ -289,14 +289,7 @@ build_claude_cmd() {
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   local slash_args="$PR_URL"
   [[ -n "$SPEC_IDENTIFIER" ]] && slash_args+=" $SPEC_IDENTIFIER"
-  # `set +H` disables bash history expansion (`!foo` event references) in
-  # the spawned `bash -ic` subshell. Without it, a SPEC_IDENTIFIER that
-  # contains `!` — e.g. a local task slug like `auth-login!v2` or a Jira
-  # key mistakenly typed with `!` — can be silently mangled into a history
-  # substitution before /reviewer ever sees the arg. Non-gh loadouts widen
-  # this blast radius by accepting opaque strings, so the defense lives in
-  # the shared assembled command. (#144 round-2 review.)
-  echo "set +H; claude ${mode_prefix}\"/reviewer $slash_args\""
+  echo "claude ${mode_prefix}\"/reviewer $slash_args\""
 }
 
 # ---------------- radio env injection ----------------
@@ -316,12 +309,22 @@ RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
 # caller's tab (PM or wherever this was dispatched from) instead of snapping
 # into the new reviewer tab. Same convention task-work --auto adopted in
 # #133; reviewer always opts in since it's always a dispatched worker.
+#
+# `set +H; ` prefix disables bash history expansion in the spawned `bash -ic`
+# subshell — defends against SPEC_IDENTIFIER values containing `!` (Jira /
+# Notion / local slugs with `auth-login!v2` shape, etc.) from being silently
+# history-substituted before /reviewer ever sees the arg. Critically, this
+# prefix must come BEFORE $RADIO_ENV_PREFIX, not inside build_claude_cmd's
+# output, because `VAR=val cmd; cmd2` scopes VAR=val to `cmd` only — putting
+# `set +H` between RADIO_ENV_PREFIX and `claude` would attach the env
+# assignments to the `set` builtin and they'd never reach `claude` after the
+# `;` (radio routing, model selection, AUTO_SUBMIT all dead). (#144 round-3.)
 echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "1"
   echo "Tab opened at $WORKTREE_DIR — claude NOT launched (--no-launch)."
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)" "1"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}$(build_claude_cmd)" "1"
   echo "Started reviewer in $WORKTREE_DIR for PR #$PR_NUMBER (issue: ${ISSUE_NUMBER:-none}, model: $RESOLVED_MODEL)"
 fi
 

@@ -370,6 +370,27 @@ teardown() {
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 PROJ-123"
 }
 
+# #144 round-2: SPEC_IDENTIFIER containing `!` must land in the assembled
+# command unmangled, and the assembled command must include `set +H` to
+# disable bash history expansion in the spawned interactive subshell. Without
+# the defense, a Jira / Notion / local id like `auth-login!v2` would be
+# silently history-substituted before /reviewer ever saw it.
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '!' lands unmangled; cmd disables histexpand (#144 round-2)" {
+  run "$TASK_REVIEWER_JIRA" 42 'PROJ-123!v2'
+  assert_success
+  assert_stub_called zellij "PROJ-123!v2"
+  assert_stub_called zellij "set +H; claude"
+}
+
+@test "claude-gh task-reviewer: assembled command disables histexpand (#144 round-2)" {
+  # Same defense applies on the claude-gh path even though SPEC_IDENTIFIER
+  # there is a GitHub issues URL (no `!`) — the 4 dispatcher bodies stay
+  # byte-identical, and `set +H` is cheap and harmless on gh.
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "set +H; claude"
+}
+
 # #144: jira loadout must NOT scan PR body for `Closes #N` — that's a
 # GitHub-only convention. With no 2nd arg, behavior is diff-only regardless
 # of what's in the body.
@@ -430,6 +451,10 @@ teardown() {
   assert_success
   assert_output --partial "No spec identifier passed"
   assert_output --partial "auto-detect is GitHub-only"
+  # Mirror claude-jira / claude-local: pin the "diff-only review" trailer so
+  # a future regression that accidentally drops it for notion-only would be
+  # visible to CI (#144 round-2 review).
+  assert_output --partial "diff-only review"
 }
 
 @test "claude-local task-reviewer: PR by number opens review tab" {

@@ -32,7 +32,11 @@ $ARGUMENTS
    ```
    Read("<repo-root>/tasks/<id>-<slug>.md")
    ```
-   If the arg is a bare slug, glob `tasks/<arg>*.md` to locate the file.
+   If the arg is a bare slug or partial id, locate the file with `Glob` first:
+   ```
+   Glob("tasks/<arg>*.md")
+   ```
+   then `Read` the match. Do **not** fall back to `Bash(find ...)` or `Bash(ls ...)` — `Glob` is the canonical tool for this and is already permitted; the bash variants would trip a permission prompt under `--permission-mode auto`.
 3. Read the PR:
    ```bash
    gh pr view <N> --comments

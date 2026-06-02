@@ -137,8 +137,14 @@ fi
 # `|| true` is a safety net: $TASK_FORCE_ROLE should be set inside a worker
 # tab, but if it isn't (e.g., task-done invoked from an unexpected shell)
 # the no-op must not abort cleanup. `radio unregister` itself already
-# silently exits when $TASK_FORCE_ROLE is unset (#93).
-radio unregister 2>/dev/null || true
+# silently exits when $TASK_FORCE_ROLE is unset (#93). Redirect stdin from
+# /dev/null so `radio unregister` doesn't inherit task-done's stdin — under
+# `--force` the calling shell may have piped `y` (or any other content)
+# to confirm something else, and post-#151 a non-empty stdin without a
+# parseable JSON reason triggers the cascade-skip path. That's correct
+# behaviour for SessionEnd hook invocations but wrong for explicit
+# task-done cleanup, which must always proceed with the unregister.
+radio unregister </dev/null 2>/dev/null || true
 
 # Move out of worktree before removing it
 cd "$MAIN_WORKTREE"

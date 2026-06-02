@@ -167,10 +167,24 @@ else
   fi
 fi
 
-if git branch -d "$BRANCH" 2>/dev/null; then
-  echo "Done. Deleted local branch '$BRANCH'."
+# Reviewer worktrees write PR_NUMBER into their info file; they're pure
+# scaffolding and their branch never merges into main (the PR does — its
+# head ref is what landed). Force-delete in that case so a subsequent
+# `task-reviewer <N>` re-dispatch isn't blocked by the per-PR branch
+# guard (#148). Worker branches keep the safe-delete `-d` so unmerged
+# work isn't silently dropped.
+if [[ -n "${PR_NUMBER:-}" ]]; then
+  if git branch -D "$BRANCH" 2>/dev/null; then
+    echo "Done. Deleted reviewer branch '$BRANCH' (-D, scaffold-only)."
+  else
+    echo "Done. Branch '$BRANCH' could not be deleted — clean up manually: git branch -D $BRANCH"
+  fi
 else
-  echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
+  if git branch -d "$BRANCH" 2>/dev/null; then
+    echo "Done. Deleted local branch '$BRANCH'."
+  else
+    echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
+  fi
 fi
 
 # Close this worker's zellij tab by its stable tab_id, captured before

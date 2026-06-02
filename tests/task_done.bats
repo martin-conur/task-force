@@ -473,6 +473,90 @@ assert_task_done_unregisters() {
   assert_task_done_unregisters "$KIRO_LOCAL_TASK_DONE"
 }
 
+# ---------------------------------------------------------------------------
+# Reviewer-worktree branch cleanup (issue #148)
+# A reviewer worktree (created by task-reviewer) writes PR_NUMBER= into its
+# $INFO_FILE. The branch (task/review-pr<N>) is pure scaffolding forked from
+# the PR's head ref — it's never going to merge into main, so the safe-delete
+# `git branch -d` always fails and leaves an orphan that blocks the next
+# `task-reviewer <N>` dispatch. task-done must force-delete (`git branch -D`)
+# when PR_NUMBER is set; worker behavior (BASE_BRANCH set, no PR_NUMBER) must
+# stay unchanged.
+# ---------------------------------------------------------------------------
+
+# Set up a fake reviewer worktree: branch with a commit not in main, plus a
+# PR_NUMBER marker in the .info file. Sets $RSLUG so tests can cd into it.
+setup_reviewer_worktree() {
+  local pr_num="${1:-42}"
+  RSLUG="review-pr${pr_num}"
+
+  # The reviewer branch carries a commit not in main, so `git branch -d` would
+  # refuse (this is the production case — branch forks from the PR's head ref).
+  git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$RSLUG" -b "task/$RSLUG"
+  touch "$WORKTREE_BASE/$RSLUG/scaffold.txt"
+  git -C "$WORKTREE_BASE/$RSLUG" add scaffold.txt
+  git -C "$WORKTREE_BASE/$RSLUG" commit -q -m "scaffold commit (simulated PR head)"
+
+  printf 'BASE_BRANCH=main\nSLUG=%s\nPR_NUMBER=%s\nISSUE_NUMBER=\n' \
+    "$RSLUG" "$pr_num" > "$WORKTREE_BASE/.$RSLUG.info"
+}
+
+assert_reviewer_branch_force_deleted() {
+  local script="$1"
+  setup_reviewer_worktree 42
+  cd "$WORKTREE_BASE/$RSLUG"
+
+  run "$script" --remove-worktree --force
+  assert_success
+  assert_output --partial "Deleted reviewer branch 'task/$RSLUG'"
+  refute_output --partial "still has unmerged commits"
+  run git -C "$MAIN_REPO" branch --list "task/$RSLUG"
+  assert_output ""
+}
+
+@test "claude-gh: reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$CLAUDE_GH_TASK_DONE"
+}
+
+@test "claude-jira: reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$JIRA_TASK_DONE"
+}
+
+@test "claude-notion: reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$CLAUDE_NOTION_TASK_DONE"
+}
+
+@test "claude-local: reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$CLAUDE_LOCAL_TASK_DONE"
+}
+
+@test "kiro-gh: reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$KIRO_GH_TASK_DONE"
+}
+
+@test "kiro: (kiro-notion) reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$KIRO_TASK_DONE"
+}
+
+@test "kiro-local: reviewer worktree force-deletes branch (PR_NUMBER set)" {
+  assert_reviewer_branch_force_deleted "$KIRO_LOCAL_TASK_DONE"
+}
+
+@test "claude-gh: worker worktree (no PR_NUMBER) still uses safe-delete -d" {
+  # Regression: BASE_BRANCH set, PR_NUMBER absent → unmerged commits leave the
+  # branch behind with the manual-cleanup message, unchanged from pre-#148.
+  touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
+  git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
+  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
+
+  run_task_done "$CLAUDE_GH_TASK_DONE" --force
+  assert_success
+  assert_output --partial "still has unmerged commits"
+  refute_output --partial "Deleted reviewer branch"
+  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
+  assert_output --partial "task/$SLUG"
+}
+
 @test "task-done cleanup tolerates radio binary missing from PATH (#94)" {
   # The `|| true` safety net: if radio isn't installed (or PATH doesn't
   # include it), cleanup must still succeed.

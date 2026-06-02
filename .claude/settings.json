@@ -83,6 +83,8 @@
   },
   "permissions": {
     "allow": [
+      "Bash(cat *)",
+      "Bash(find *)",
       "Bash(gh auth status)",
       "Bash(gh issue comment *)",
       "Bash(gh issue list *)",
@@ -97,7 +99,12 @@
       "Bash(gh project view *)",
       "Bash(gh repo view *)",
       "Bash(gh search issues *)",
-      "Bash(radio *)"
+      "Bash(ls *)",
+      "Bash(radio *)",
+      "Bash(rg *)",
+      "Glob",
+      "Grep",
+      "Read"
     ]
   }
 }

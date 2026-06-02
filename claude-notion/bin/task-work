@@ -147,9 +147,15 @@ WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 # ---------------- command builder ----------------
 build_claude_cmd() {
+  # printf %q the user-supplied NOTION_URL so `$var`, `$(...)`, backticks, and
+  # other shell metacharacters survive the `bash -ic` re-parse without
+  # being expanded by the child shell. Mirrors task-reviewer's
+  # SPEC_IDENTIFIER and RADIO_ENV_PREFIX. (#144 round-5 review.)
+  local q_notion_url=""
+  [[ -n "$NOTION_URL" ]] && q_notion_url=$(printf %q "$NOTION_URL")
   if [[ -n "$PLAN_MODE" ]]; then
     if [[ -n "$NOTION_URL" ]]; then
-      echo "claude --permission-mode plan \"/planner $NOTION_URL\""
+      echo "claude --permission-mode plan \"/planner $q_notion_url\""
     else
       echo "claude --permission-mode plan \"/planner\""
     fi
@@ -158,7 +164,7 @@ build_claude_cmd() {
   local mode_prefix=""
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$NOTION_URL" ]]; then
-    echo "claude ${mode_prefix}\"/worker Implement task: $NOTION_URL\""
+    echo "claude ${mode_prefix}\"/worker Implement task: $q_notion_url\""
   else
     echo "claude ${mode_prefix}\"/worker\""
   fi
@@ -220,10 +226,20 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 
 # region:worktree-creation-post-info
 echo "Opening zellij tab '$SLUG'..."
+# `set +H; ` prefix disables bash history expansion in the spawned `bash -ic`
+# subshell — defends against `!` in user-supplied $GH_URL (or future
+# user-input passthroughs that grow on this code path) from being silently
+# history-substituted before claude / the worker prompt ever sees the arg.
+# Critically, this prefix must come BEFORE $RADIO_ENV_PREFIX, not between
+# it and `claude`: `VAR=val cmd1; cmd2` scopes VAR=val to `cmd1` only, so
+# putting `set +H` between the env prefix and `claude` would attach the
+# env assignments to the `set` builtin and they'd never reach `claude`
+# after the `;` (radio routing / model / AUTO_SUBMIT all dead). Mirrors
+# the task-reviewer fix. (#144 round-4 review.)
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
 fi
 
 if [[ -n "$NO_LAUNCH" ]]; then

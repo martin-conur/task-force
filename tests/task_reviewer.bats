@@ -362,6 +362,122 @@ teardown() {
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
+# #144: jira loadout must accept a Jira issue key as opaque 2nd-arg and pass
+# it through to /reviewer verbatim (no GitHub URL synthesis).
+@test "claude-jira task-reviewer: passes Jira issue key through to /reviewer (#144)" {
+  run "$TASK_REVIEWER_JIRA" 42 PROJ-123
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 PROJ-123"
+}
+
+# #144 round-2 + round-3 + round-5: SPEC_IDENTIFIER containing shell
+# metacharacters must reach /reviewer un-expanded. The defenses combine:
+#   - `set +H;` (round-3) disables bash history expansion in the spawned
+#     `bash -ic` subshell, blocking the `!foo` event-reference class.
+#   - `printf %q` on SPEC_IDENTIFIER (round-5) shell-escapes the rest of
+#     the metachar class: `$var`, `$(...)`, backticks, etc.
+# Without printf %q, a child shell re-parse of the assembled string would
+# expand `$var` inside the double-quoted `/reviewer ...` payload before
+# /reviewer ever saw the arg.
+#
+# Round-3 follow-up: `set +H;` must appear BEFORE the RADIO_ENV_PREFIX
+# assignments (TASK_FORCE_ROLE=, ANTHROPIC_MODEL=, etc.), not after.
+# `VAR=val cmd1; cmd2` in bash scopes the assignments to `cmd1` only — if
+# `set +H` sits between the env prefix and `claude`, the env vars attach
+# to the `set` builtin and never reach `claude` (radio routing /
+# model selection / AUTO_SUBMIT all dead).
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '!' lands escaped; cmd disables histexpand (#144 round-2 + round-5)" {
+  run "$TASK_REVIEWER_JIRA" 42 'PROJ-123!v2'
+  assert_success
+  # printf %q on bash 3.2 (macOS default) renders `PROJ-123!v2` as
+  # `PROJ-123\!v2`. The escape is what we want — the child shell sees
+  # the backslash and forwards the literal `!` to /reviewer.
+  assert_stub_called zellij 'PROJ-123\!v2'
+  assert_stub_called zellij "set +H;"
+}
+
+# #144 round-5: SPEC_IDENTIFIER containing `$` must reach /reviewer un-expanded.
+# Without printf %q, the child `bash -ic` shell would expand `$HOME` inside
+# the double-quoted `/reviewer ...` payload before /reviewer saw the arg.
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '\$' lands escaped (#144 round-5)" {
+  run "$TASK_REVIEWER_JIRA" 42 '$HOME-test'
+  assert_success
+  # printf %q renders `$HOME-test` as `\$HOME-test`. The escape stops the
+  # child shell from expanding `$HOME`.
+  assert_stub_called zellij '\$HOME-test'
+}
+
+# #144 round-5: SPEC_IDENTIFIER containing `$(...)` command-substitution
+# syntax must reach /reviewer un-expanded.
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '\$(...)' lands escaped (#144 round-5)" {
+  run "$TASK_REVIEWER_JIRA" 42 'PROJ-$(date)'
+  assert_success
+  # printf %q renders `PROJ-$(date)` as `PROJ-\$\(date\)`. The escapes
+  # stop the child shell from executing `date`.
+  assert_stub_called zellij 'PROJ-\$\(date\)'
+}
+
+@test "claude-gh task-reviewer: assembled command disables histexpand (#144 round-2)" {
+  # Same defense applies on the claude-gh path even though SPEC_IDENTIFIER
+  # there is a GitHub issues URL (no `!`) — the 4 dispatcher bodies stay
+  # byte-identical, and `set +H` is cheap and harmless on gh.
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_stub_called zellij "set +H;"
+}
+
+# #144 round-3: `set +H;` must precede the RADIO_ENV_PREFIX assignments.
+# Regression check: the round-2 placement put `set +H;` BETWEEN the env
+# prefix and `claude`, which silently neutered env passthrough because
+# bash scoped `VAR=val set +H;` to the builtin only. This test pins the
+# correct ordering — `set +H` first, then env, then claude.
+@test "claude task-reviewer: 'set +H' precedes RADIO_ENV_PREFIX so env vars reach claude (#144 round-3)" {
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  # Extract the assembled command string from the most recent zellij
+  # new-tab call. It's the last token after `--` on the line.
+  local cmd_line
+  cmd_line=$(grep -m1 -F "new-tab --name review-pr42" "$STUB_CALLS_DIR/zellij.calls")
+  # Harden against the edge case noted in round-3 review: a missing
+  # TASK_FORCE_ROLE= would make `${cmd_line%%TASK_FORCE_ROLE=*}` equal to
+  # cmd_line itself, and the prefix-length comparison below would false-pass
+  # if `set +H;` is present but TASK_FORCE_ROLE= is gone. Pin presence first.
+  [[ "$cmd_line" == *"set +H;"* ]] || {
+    echo "missing 'set +H;' in cmd: $cmd_line" >&2; return 1; }
+  [[ "$cmd_line" == *"TASK_FORCE_ROLE="* ]] || {
+    echo "missing 'TASK_FORCE_ROLE=' in cmd: $cmd_line" >&2; return 1; }
+  # `set +H;` must appear before `TASK_FORCE_ROLE=` in the same line.
+  local set_pos="${cmd_line%%set +H;*}"
+  local role_pos="${cmd_line%%TASK_FORCE_ROLE=*}"
+  # If `set +H;` comes first, the prefix-substring-stripped result is
+  # shorter than for `TASK_FORCE_ROLE=`. Compare lengths.
+  [[ ${#set_pos} -lt ${#role_pos} ]] || {
+    echo "ordering wrong: 'set +H;' must come before 'TASK_FORCE_ROLE='" >&2
+    echo "cmd: $cmd_line" >&2
+    return 1
+  }
+}
+
+# #144: jira loadout must NOT scan PR body for `Closes #N` — that's a
+# GitHub-only convention. With no 2nd arg, behavior is diff-only regardless
+# of what's in the body.
+@test "claude-jira task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
+  export GH_STUB_PR_BODY="Closes #38"
+  run "$TASK_REVIEWER_JIRA" 42
+  assert_success
+  # /reviewer must receive only the PR URL, not a synthesized GitHub issues URL.
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude-jira task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
+  run "$TASK_REVIEWER_JIRA" 42
+  assert_success
+  assert_output --partial "No spec identifier passed"
+  assert_output --partial "auto-detect is GitHub-only"
+  assert_output --partial "diff-only review"
+}
+
 @test "claude-notion task-reviewer: PR by number opens review tab" {
   run "$TASK_REVIEWER_NOTION" 42
   assert_success
@@ -381,6 +497,33 @@ teardown() {
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
+# #144: notion loadout must accept a Notion page URL as opaque 2nd-arg.
+@test "claude-notion task-reviewer: passes Notion page URL through to /reviewer (#144)" {
+  local notion_url="https://www.notion.so/myws/Spec-Page-1234abcd"
+  run "$TASK_REVIEWER_NOTION" 42 "$notion_url"
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 $notion_url"
+}
+
+@test "claude-notion task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
+  export GH_STUB_PR_BODY="Fixes #38"
+  run "$TASK_REVIEWER_NOTION" 42
+  assert_success
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude-notion task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
+  run "$TASK_REVIEWER_NOTION" 42
+  assert_success
+  assert_output --partial "No spec identifier passed"
+  assert_output --partial "auto-detect is GitHub-only"
+  # Mirror claude-jira / claude-local: pin the "diff-only review" trailer so
+  # a future regression that accidentally drops it for notion-only would be
+  # visible to CI (#144 round-2 review).
+  assert_output --partial "diff-only review"
+}
+
 @test "claude-local task-reviewer: PR by number opens review tab" {
   run "$TASK_REVIEWER_LOCAL" 42
   assert_success
@@ -398,6 +541,45 @@ teardown() {
   run "$TASK_REVIEWER_LOCAL" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+}
+
+# #144: local loadout must accept a local task slug as opaque 2nd-arg.
+@test "claude-local task-reviewer: passes local task slug through to /reviewer (#144)" {
+  run "$TASK_REVIEWER_LOCAL" 42 042-add-login
+  assert_success
+  assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 042-add-login"
+}
+
+@test "claude-local task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
+  export GH_STUB_PR_BODY="Resolves #38"
+  run "$TASK_REVIEWER_LOCAL" 42
+  assert_success
+  run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude-local task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
+  run "$TASK_REVIEWER_LOCAL" 42
+  assert_success
+  assert_output --partial "No spec identifier passed"
+  assert_output --partial "auto-detect is GitHub-only"
+  # Mirror claude-jira / claude-notion: pin the "diff-only review" trailer
+  # so a future regression that drops it for local-only would be visible
+  # to CI (#144 round-3 review — missed in round-1 when the assertion was
+  # added to claude-jira / claude-notion).
+  assert_output --partial "diff-only review"
+}
+
+# #144: claude-gh path stays green — the advisory copy is GitHub-flavored, not
+# the non-gh "auto-detect is GitHub-only" one (regression for the gh branch).
+@test "claude-gh task-reviewer: 'no spec issue' advisory keeps the original GitHub-flavored copy (#144 regression)" {
+  export GH_STUB_PR_BODY="Just some prose, no spec link."
+  run "$TASK_REVIEWER_CLAUDE" 42
+  assert_success
+  assert_output --partial "No spec issue associated"
+  assert_output --partial "no Closes/Fixes in body"
+  # Must not regress to the non-gh advisory.
+  refute_output --partial "auto-detect is GitHub-only"
 }
 
 # ---------------------------------------------------------------------------

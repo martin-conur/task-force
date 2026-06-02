@@ -125,16 +125,39 @@ EOF
   assert_output --partial "group(s) checked"
 }
 
-@test "claude reviewer.md files are byte-identical across loadouts (#138)" {
-  # The 4 claude `/reviewer` slash commands ship identical prompts. The
-  # check-drift sentinel-region mechanism doesn't fit markdown cleanly, so
-  # we just diff the files directly.
-  local ref="$REPO_ROOT_REAL/claude-gh/commands/reviewer.md"
+@test "claude reviewer.md prompts use the right tracker-specific spec-lookup tool (#144)" {
+  # Per #144, the 4 reviewer.md files are NO LONGER byte-identical — each
+  # loadout's spec-lookup step legitimately differs (gh issue view vs. Jira
+  # MCP vs. Notion MCP vs. local file Read). Replace the byte-identical
+  # assertion (introduced in #138 by accident — the prompts were never
+  # drift-grouped in the check-drift manifest) with per-loadout content
+  # assertions: each prompt must reference its tracker's spec-lookup tool.
+  run grep -q "gh issue view" "$REPO_ROOT_REAL/claude-gh/commands/reviewer.md"
+  assert_success
+  run grep -q "mcp__atlassian__getJiraIssue" "$REPO_ROOT_REAL/claude-jira/commands/reviewer.md"
+  assert_success
+  run grep -q "mcp__notion__notion-fetch" "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md"
+  assert_success
+  run grep -q "tasks/" "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"
+  assert_success
+}
+
+@test "claude reviewer.md prompts share the same authority-boundaries spine (#144)" {
+  # Shared invariant across all 4 loadouts: the authority boundaries block
+  # (no merge, no push, no Status edits, etc.) and the radio handoff intents
+  # must stay consistent. Drift here would be a real bug.
   for f in \
+      "$REPO_ROOT_REAL/claude-gh/commands/reviewer.md" \
       "$REPO_ROOT_REAL/claude-jira/commands/reviewer.md" \
       "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md" \
       "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"; do
-    run diff -u "$ref" "$f"
+    run grep -q "### Authority boundaries" "$f"
+    assert_success
+    run grep -q "Merge PRs" "$f"
+    assert_success
+    run grep -q "review-complete-clean" "$f"
+    assert_success
+    run grep -q "review-complete-with-findings" "$f"
     assert_success
   done
 }

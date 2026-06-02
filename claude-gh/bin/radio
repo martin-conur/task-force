@@ -167,6 +167,17 @@ _loadout_sidecar() {
   printf '%s/%s.loadout' "$SESSIONS_DIR" "$1"
 }
 
+# Agent sidecar (#151). Same problem as LOADOUT: $TASK_FORCE_AGENT isn't
+# exported into Claude Code's hook subshells, so _ensure_session_file's
+# previous fallback to "${TASK_FORCE_AGENT:-claude}" silently wrote
+# AGENT=claude for kiro-* workers on every re-seed. Parallel sidecar, parallel
+# write/read/sweep semantics — no current runtime consumer, but a kiro worker
+# whose re-seeded session reports AGENT=claude is a footgun if anyone wires
+# AGENT-conditional behaviour later.
+_agent_sidecar() {
+  printf '%s/%s.agent' "$SESSIONS_DIR" "$1"
+}
+
 _inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
 _processed_dir(){ printf '%s/%s/processed' "$MAILBOX_DIR" "$1"; }
 
@@ -216,13 +227,26 @@ _ensure_session_file() {
   loadout=$(cat "$sidecar" 2>/dev/null || true)
   [[ -n "$loadout" ]] || loadout="${TASK_FORCE_LOADOUT:-unknown}"
 
+  # AGENT recovery (#151): same hook-subshell unset story as LOADOUT — the
+  # cascade wipes .info, and the next re-seed used to default to "claude"
+  # regardless of whether this was a kiro-* worker. Read the agent sidecar
+  # cmd_register persisted; fall back to the env var only for test paths that
+  # exercise _ensure_session_file directly. Same TOCTOU-safe `cat … || true`
+  # pattern as the loadout read above for the same reason (concurrent
+  # unregister race window).
+  local agent=""
+  local agent_sidecar
+  agent_sidecar=$(_agent_sidecar "$TASK_FORCE_ROLE")
+  agent=$(cat "$agent_sidecar" 2>/dev/null || true)
+  [[ -n "$agent" ]] || agent="${TASK_FORCE_AGENT:-claude}"
+
   local repo
   repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
       "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$repo" "$(_now)" \
-      "${TASK_FORCE_AGENT:-claude}" "$loadout"
+      "$agent" "$loadout"
     # Preserve the --auto opt-in across self-heal so cmd_send keeps using CR
     # for wake-up after an intra-session re-seed (#128). Use `if` rather than
     # `&&` so the brace group exits 0 when the flag is absent — otherwise
@@ -234,7 +258,7 @@ _ensure_session_file() {
   } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$TASK_FORCE_ROLE")" "$(_processed_dir "$TASK_FORCE_ROLE")"
-  _log "ensure_session: re-seeded $TASK_FORCE_ROLE (file was missing) tab_id=$tab_id loadout=$loadout"
+  _log "ensure_session: re-seeded $TASK_FORCE_ROLE (file was missing) tab_id=$tab_id loadout=$loadout agent=$agent"
 }
 
 # Update STATE=… and LAST_HEARTBEAT=… on the current session file.
@@ -385,29 +409,33 @@ cmd_register() {
     fi
   fi
 
-  # Persist the loadout sidecar BEFORE the session file (#150 round-2 review:
-  # Finding 1). If the process is killed (OOM, task-done --force, host
-  # shutdown) between these two _atomic_write calls, the order matters:
+  # Persist the loadout and agent sidecars BEFORE the session file (#150
+  # round-2 review: Finding 1; extended for AGENT in #151). If the process is
+  # killed (OOM, task-done --force, host shutdown) between these writes, the
+  # order matters:
   #
   #   sidecar-first (this order):
-  #     pre-kill state:  .loadout=claude-gh, .info absent
-  #     re-seed reads:   .loadout → LOADOUT=claude-gh recovered ✓
+  #     pre-kill state:  .loadout=claude-gh, .agent=claude, .info absent
+  #     re-seed reads:   sidecars → LOADOUT/AGENT recovered ✓
   #
   #   info-first (the OLD order — pre-#150-r3):
-  #     pre-kill state:  .info has LOADOUT=claude-gh, .loadout absent
-  #     unregister cascade deletes .info; .loadout never existed
+  #     pre-kill state:  .info has LOADOUT/AGENT, sidecars absent
+  #     unregister cascade deletes .info; sidecars never existed
   #     re-seed reads:   no sidecar, hook subshell has no $TASK_FORCE_LOADOUT
-  #                      → LOADOUT=unknown ✗
+  #                      / $TASK_FORCE_AGENT → LOADOUT=unknown / AGENT=claude ✗
   #
   # The window is microseconds wide, but the cascade in #140 makes it
   # statistically reachable. Reversing the order eliminates the failure mode
-  # entirely. Skipping the sidecar on empty $loadout keeps the sidecar's mere
+  # entirely. Skipping the loadout sidecar on empty $loadout keeps its mere
   # existence equivalent to "we have a real loadout to restore" — otherwise
   # a re-seed could read an empty sidecar and clobber the env-var fallback
-  # that test paths still rely on.
+  # that test paths still rely on. The agent sidecar is always written
+  # because --agent is required (cmd_register exits 2 above if absent), so
+  # $agent is always a real value here.
   if [[ -n "$loadout" ]]; then
     printf '%s' "$loadout" | _atomic_write "$(_loadout_sidecar "$role")"
   fi
+  printf '%s' "$agent" | _atomic_write "$(_agent_sidecar "$role")"
 
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
@@ -461,6 +489,22 @@ cmd_unregister() {
           _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
           return 0
           ;;
+        "")
+          # Cascade pattern (#151): payload is present but contains no
+          # parseable `.reason` field. The PR-#150 diagnostic showed bursts of
+          # 144 unregister calls in ~25s with payload literally "y" and
+          # reason=<unset> — phantom invocations from somewhere upstream of
+          # Claude Code's documented SessionEnd hook (which always includes
+          # reason ∈ {clear, resume, logout, prompt_input_exit, other}).
+          # Treat these the same as clear/resume: known non-real-exit events
+          # that must not wipe the session file or the sidecars. Real exits
+          # still flow through the logout/prompt_input_exit/other branches
+          # below and clean up normally; manual invocations (no stdin) also
+          # proceed because `[[ ! -t 0 ]]` is false then.
+          payload_oneline=$(printf '%s' "$payload" | tr '\n' ' ' | tr -s ' ')
+          _log "unregister: skipping (reason=<unset> — cascade, no real-exit signal) role=$TASK_FORCE_ROLE payload=$payload_oneline"
+          return 0
+          ;;
       esac
     fi
     # Instrumentation for #140: when the hook fires with a payload that
@@ -468,7 +512,10 @@ cmd_unregister() {
     # what reason (or non-reason) is driving the unregister cascade. Empirically
     # observed as bursts of 20+ unregister calls in ~30s on long-running
     # worker sessions; the root cause needs the payload to investigate. Log
-    # is compacted to one line via tr so it doesn't fragment radio.log.
+    # is compacted to one line via tr so it doesn't fragment radio.log. Post-
+    # #151, an empty reason is already short-circuited above, so this line
+    # only fires for non-empty named reasons (logout, prompt_input_exit,
+    # other, or anything new Claude Code adds in the future).
     if [[ -n "$payload" ]]; then
       payload_oneline=$(printf '%s' "$payload" | tr '\n' ' ' | tr -s ' ')
       _log "unregister: proceeding (reason=${reason:-<unset>}) role=$TASK_FORCE_ROLE payload=$payload_oneline"
@@ -478,10 +525,11 @@ cmd_unregister() {
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
   rm -f "$f"
-  # Sweep the loadout sidecar too — leaving it behind would let a future
-  # _ensure_session_file resurrect a stale loadout for a role whose tab has
-  # really exited and been re-used (#140).
+  # Sweep the loadout + agent sidecars too — leaving them behind would let a
+  # future _ensure_session_file resurrect a stale loadout / agent for a role
+  # whose tab has really exited and been re-used (#140, #151).
   rm -f "$(_loadout_sidecar "$TASK_FORCE_ROLE")"
+  rm -f "$(_agent_sidecar "$TASK_FORCE_ROLE")"
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 

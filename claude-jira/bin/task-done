@@ -50,6 +50,11 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 
 # Load base branch written by task-work; fall back to "main"
 BASE_BRANCH="main"
+# Zero PR_NUMBER before sourcing $INFO_FILE so an ambient shell export
+# (e.g., from an earlier task-reviewer in the same shell) can't sneak
+# into the reviewer-branch force-delete guard below and -D a worker
+# branch with unmerged commits (#148 review).
+PR_NUMBER=
 # shellcheck source=/dev/null
 [[ -f "$INFO_FILE" ]] && source "$INFO_FILE"
 # endregion:worktree-context
@@ -153,10 +158,24 @@ git worktree remove "$WORKTREE_DIR" --force || {
 # Clean up info file
 [[ -f "$INFO_FILE" ]] && rm -f "$INFO_FILE"
 
-if git branch -d "$BRANCH" 2>/dev/null; then
-  echo "Done. Deleted local branch '$BRANCH'."
+# Reviewer worktrees write PR_NUMBER into their info file; they're pure
+# scaffolding and their branch never merges into main (the PR does — its
+# head ref is what landed). Force-delete in that case so a subsequent
+# `task-reviewer <N>` re-dispatch isn't blocked by the per-PR branch
+# guard (#148). Worker branches keep the safe-delete `-d` so unmerged
+# work isn't silently dropped.
+if [[ -n "${PR_NUMBER:-}" ]]; then
+  if git branch -D "$BRANCH" 2>/dev/null; then
+    echo "Done. Deleted reviewer branch '$BRANCH' (-D, scaffold-only)."
+  else
+    echo "Done. Branch '$BRANCH' could not be deleted — clean up manually: git branch -D $BRANCH"
+  fi
 else
-  echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
+  if git branch -d "$BRANCH" 2>/dev/null; then
+    echo "Done. Deleted local branch '$BRANCH'."
+  else
+    echo "Done. Branch '$BRANCH' still has unmerged commits — delete manually after PR merge: git branch -D $BRANCH"
+  fi
 fi
 
 # Close this worker's zellij tab by its stable tab_id, captured before

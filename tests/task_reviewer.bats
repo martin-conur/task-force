@@ -370,12 +370,15 @@ teardown() {
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 PROJ-123"
 }
 
-# #144 round-2 + round-3: SPEC_IDENTIFIER containing `!` must land in the
-# assembled command unmangled, and the assembled command must include
-# `set +H` to disable bash history expansion in the spawned interactive
-# subshell. Without the defense, a Jira / Notion / local id like
-# `auth-login!v2` would be silently history-substituted before /reviewer
-# ever saw it.
+# #144 round-2 + round-3 + round-5: SPEC_IDENTIFIER containing shell
+# metacharacters must reach /reviewer un-expanded. The defenses combine:
+#   - `set +H;` (round-3) disables bash history expansion in the spawned
+#     `bash -ic` subshell, blocking the `!foo` event-reference class.
+#   - `printf %q` on SPEC_IDENTIFIER (round-5) shell-escapes the rest of
+#     the metachar class: `$var`, `$(...)`, backticks, etc.
+# Without printf %q, a child shell re-parse of the assembled string would
+# expand `$var` inside the double-quoted `/reviewer ...` payload before
+# /reviewer ever saw the arg.
 #
 # Round-3 follow-up: `set +H;` must appear BEFORE the RADIO_ENV_PREFIX
 # assignments (TASK_FORCE_ROLE=, ANTHROPIC_MODEL=, etc.), not after.
@@ -383,11 +386,35 @@ teardown() {
 # `set +H` sits between the env prefix and `claude`, the env vars attach
 # to the `set` builtin and never reach `claude` (radio routing /
 # model selection / AUTO_SUBMIT all dead).
-@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '!' lands unmangled; cmd disables histexpand (#144 round-2)" {
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '!' lands escaped; cmd disables histexpand (#144 round-2 + round-5)" {
   run "$TASK_REVIEWER_JIRA" 42 'PROJ-123!v2'
   assert_success
-  assert_stub_called zellij "PROJ-123!v2"
+  # printf %q on bash 3.2 (macOS default) renders `PROJ-123!v2` as
+  # `PROJ-123\!v2`. The escape is what we want — the child shell sees
+  # the backslash and forwards the literal `!` to /reviewer.
+  assert_stub_called zellij 'PROJ-123\!v2'
   assert_stub_called zellij "set +H;"
+}
+
+# #144 round-5: SPEC_IDENTIFIER containing `$` must reach /reviewer un-expanded.
+# Without printf %q, the child `bash -ic` shell would expand `$HOME` inside
+# the double-quoted `/reviewer ...` payload before /reviewer saw the arg.
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '\$' lands escaped (#144 round-5)" {
+  run "$TASK_REVIEWER_JIRA" 42 '$HOME-test'
+  assert_success
+  # printf %q renders `$HOME-test` as `\$HOME-test`. The escape stops the
+  # child shell from expanding `$HOME`.
+  assert_stub_called zellij '\$HOME-test'
+}
+
+# #144 round-5: SPEC_IDENTIFIER containing `$(...)` command-substitution
+# syntax must reach /reviewer un-expanded.
+@test "claude-jira task-reviewer: SPEC_IDENTIFIER with '\$(...)' lands escaped (#144 round-5)" {
+  run "$TASK_REVIEWER_JIRA" 42 'PROJ-$(date)'
+  assert_success
+  # printf %q renders `PROJ-$(date)` as `PROJ-\$\(date\)`. The escapes
+  # stop the child shell from executing `date`.
+  assert_stub_called zellij 'PROJ-\$\(date\)'
 }
 
 @test "claude-gh task-reviewer: assembled command disables histexpand (#144 round-2)" {

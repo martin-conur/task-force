@@ -150,9 +150,17 @@ WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 # ---------------- command builder ----------------
 build_claude_cmd() {
+  # printf %q the user-supplied GH_URL so `$var`, `$(...)`, backticks, and
+  # other shell metacharacters survive the `bash -ic` re-parse without
+  # being expanded by the child shell. Mirrors RADIO_ENV_PREFIX which
+  # already uses %q for its values. `set +H` in the launch-site prefix
+  # handles `!` history expansion; printf %q closes the rest of the
+  # metachar class. (#144 round-5 review.)
+  local q_gh_url=""
+  [[ -n "$GH_URL" ]] && q_gh_url=$(printf %q "$GH_URL")
   if [[ -n "$PLAN_MODE" ]]; then
     if [[ -n "$GH_URL" ]]; then
-      echo "claude --permission-mode plan \"/planner $GH_URL\""
+      echo "claude --permission-mode plan \"/planner $q_gh_url\""
     else
       echo "claude --permission-mode plan \"/planner\""
     fi
@@ -161,7 +169,7 @@ build_claude_cmd() {
   local mode_prefix=""
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$GH_URL" ]]; then
-    echo "claude ${mode_prefix}\"/worker Implement task: $GH_URL\""
+    echo "claude ${mode_prefix}\"/worker Implement task: $q_gh_url\""
   else
     echo "claude ${mode_prefix}\"/worker\""
   fi

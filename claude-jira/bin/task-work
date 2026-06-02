@@ -100,9 +100,15 @@ BRANCH="task/${SLUG}"
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 build_claude_cmd() {
+  # printf %q the user-supplied JIRA_REF so `$var`, `$(...)`, backticks, and
+  # other shell metacharacters survive the `bash -ic` re-parse without
+  # being expanded by the child shell. Mirrors task-reviewer's
+  # SPEC_IDENTIFIER and RADIO_ENV_PREFIX. (#144 round-5 review.)
+  local q_jira_ref=""
+  [[ -n "$JIRA_REF" ]] && q_jira_ref=$(printf %q "$JIRA_REF")
   if [[ -n "$PLAN_MODE" ]]; then
     if [[ -n "$JIRA_REF" ]]; then
-      echo "claude --permission-mode plan \"/planner $JIRA_REF\""
+      echo "claude --permission-mode plan \"/planner $q_jira_ref\""
     else
       echo "claude --permission-mode plan \"/planner\""
     fi
@@ -111,7 +117,7 @@ build_claude_cmd() {
   local mode_prefix=""
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$JIRA_REF" ]]; then
-    echo "claude ${mode_prefix}\"/worker Implement Jira issue: $JIRA_REF\""
+    echo "claude ${mode_prefix}\"/worker Implement Jira issue: $q_jira_ref\""
   else
     echo "claude ${mode_prefix}\"/worker\""
   fi

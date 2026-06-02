@@ -174,12 +174,13 @@ PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body 2>/dev/null || echo "")
 ISSUE_NUMBER=""
 SPEC_IDENTIFIER=""
 if [[ -n "$ISSUE_INPUT" ]]; then
+  # Only claude-gh's parse_issue_number can fail with a non-empty input
+  # (numeric / URL parse rejection). Non-gh accepts any non-empty string,
+  # and the [[ -n "$ISSUE_INPUT" ]] guard above means parse_issue_number
+  # is never called with an empty input — so the failure path here is
+  # claude-gh-only (#144 round-5).
   ISSUE_NUMBER=$(parse_issue_number "$ISSUE_INPUT") || {
-    if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
-      echo "Error: could not parse issue number from '$ISSUE_INPUT'" >&2
-    else
-      echo "Error: spec identifier cannot be empty" >&2
-    fi
+    echo "Error: could not parse issue number from '$ISSUE_INPUT'" >&2
     exit 1
   }
   if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
@@ -288,7 +289,14 @@ build_claude_cmd() {
   local mode_prefix=""
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   local slash_args="$PR_URL"
-  [[ -n "$SPEC_IDENTIFIER" ]] && slash_args+=" $SPEC_IDENTIFIER"
+  # printf %q the user-supplied SPEC_IDENTIFIER so `$var`, `$(...)`, and
+  # other metacharacters in non-gh tracker identifiers (Jira keys, Notion
+  # URLs, local slugs) survive the `bash -ic` re-parse without being
+  # expanded by the child shell. Mirrors how RADIO_ENV_PREFIX values are
+  # already protected. `set +H` in the launch-site prefix handles `!`
+  # history expansion; printf %q closes the rest of the metachar class.
+  # (#144 round-5 review.)
+  [[ -n "$SPEC_IDENTIFIER" ]] && slash_args+=" $(printf %q "$SPEC_IDENTIFIER")"
   echo "claude ${mode_prefix}\"/reviewer $slash_args\""
 }
 

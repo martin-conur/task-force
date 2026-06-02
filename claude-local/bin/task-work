@@ -138,9 +138,15 @@ WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 
 # ---------------- command builder ----------------
 build_claude_cmd() {
+  # printf %q the user-supplied TASK_FILE so `$var`, `$(...)`, backticks, and
+  # other shell metacharacters survive the `bash -ic` re-parse without
+  # being expanded by the child shell. Mirrors task-reviewer's
+  # SPEC_IDENTIFIER and RADIO_ENV_PREFIX. (#144 round-5 review.)
+  local q_task_file=""
+  [[ -n "$TASK_FILE" ]] && q_task_file=$(printf %q "$TASK_FILE")
   if [[ -n "$PLAN_MODE" ]]; then
     if [[ -n "$TASK_FILE" ]]; then
-      echo "claude --permission-mode plan \"/planner $TASK_FILE\""
+      echo "claude --permission-mode plan \"/planner $q_task_file\""
     else
       echo "claude --permission-mode plan \"/planner\""
     fi
@@ -149,7 +155,7 @@ build_claude_cmd() {
   local mode_prefix=""
   [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$TASK_FILE" ]]; then
-    echo "claude ${mode_prefix}\"/worker $TASK_FILE\""
+    echo "claude ${mode_prefix}\"/worker $q_task_file\""
   else
     echo "claude ${mode_prefix}\"/worker\""
   fi

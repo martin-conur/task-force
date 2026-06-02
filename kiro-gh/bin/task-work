@@ -157,7 +157,10 @@ build_kiro_cmd() {
   [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
   if [[ -n "$GH_URL" ]]; then
-    cmd+=" \"Implement task: $GH_URL\""
+    # printf %q the user-supplied GH_URL so `$var`, `$(...)`, backticks, and
+    # other shell metacharacters survive the `bash -ic` re-parse without
+    # being expanded by the child shell. (#144 round-5 review.)
+    cmd+=" \"Implement task: $(printf %q "$GH_URL")\""
   fi
   echo "$cmd"
 }

@@ -149,7 +149,10 @@ build_kiro_cmd() {
   [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
   if [[ -n "$TASK_FILE" ]]; then
-    cmd+=" \"Implement task: $TASK_FILE\""
+    # printf %q the user-supplied TASK_FILE so `$var`, `$(...)`, backticks,
+    # and other shell metacharacters survive the `bash -ic` re-parse without
+    # being expanded by the child shell. (#144 round-5 review.)
+    cmd+=" \"Implement task: $(printf %q "$TASK_FILE")\""
   fi
   echo "$cmd"
 }

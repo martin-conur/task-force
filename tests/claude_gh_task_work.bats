@@ -549,6 +549,37 @@ _setup_stale_local_base() {
   assert_failure
 }
 
+# #144 round-5: GH_URL containing shell metacharacters must reach the
+# /worker prompt un-expanded. `printf %q` in build_claude_cmd shell-escapes
+# the URL before it's embedded in the assembled `claude "/worker ..."`
+# string. Without %q, the child `bash -ic` re-parse would expand `$var`,
+# `$(...)`, backticks, etc. inside the double-quoted /worker payload before
+# the agent ever saw the arg. GitHub URLs don't normally carry these
+# characters, but the dispatcher passes any URL matching `is_github_url`
+# through verbatim — so a URL fragment / query string with a stray `$` is
+# theoretically possible.
+@test "task-work: GH_URL with '\$' in path lands escaped in /worker command (#144 round-5)" {
+  # is_github_url only checks for `github.com.../issues/` substring, so the
+  # query string is free to carry arbitrary characters that survive into
+  # build_claude_cmd. printf %q must escape the `$` before it lands in the
+  # double-quoted /worker payload.
+  local url='https://github.com/owner/repo/issues/42?$HOME'
+  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  assert_success
+  # printf %q on bash 3.2 renders `$` as `\$`.
+  assert_stub_called zellij '\$HOME'
+  # And the literal /worker prefix is still present (sanity).
+  assert_stub_called zellij "/worker Implement task:"
+}
+
+@test "task-work: GH_URL with '\$(...)' lands escaped in /worker command (#144 round-5)" {
+  local url='https://github.com/owner/repo/issues/42?q=$(date)'
+  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  assert_success
+  # `$(date)` becomes `\$\(date\)`.
+  assert_stub_called zellij '\$\(date\)'
+}
+
 # #144 round-4: task-work mirrors task-reviewer's `set +H;` defense. The
 # prefix must precede $RADIO_ENV_PREFIX so the env assignments bind to
 # `claude` (an external command), not the `set` builtin — `VAR=val cmd1;

@@ -84,20 +84,58 @@ teardown() {
   assert [ ! -f "$sess" ]
 }
 
-@test "unregister proceeds when stdin payload is not valid JSON" {
+@test "unregister skips when stdin payload is not valid JSON (cascade pattern #151)" {
+  # Pre-#151 this proceeded with the delete: jq returned an empty reason,
+  # nothing matched the skip-list, the file got wiped. The diagnostic logging
+  # added in PR #150 surfaced the actual cascade payload — literally a single
+  # "y" character, 144 instances in 25s on one long-running worker session.
+  # That's not a Claude Code SessionEnd hook firing (those always include a
+  # parseable JSON reason); it's a phantom invocation we don't want to act on.
+  # Treat any payload-present-but-no-reason input the same as clear/resume.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   TASK_FORCE_ROLE=worker-foo run bash -c "echo 'not json' | '$RADIO' unregister"
   assert_success
-  assert [ ! -f "$sess" ]
+  assert [ -f "$sess" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "skipping (reason=<unset>"
+  assert_output --partial "cascade"
 }
 
-@test "unregister proceeds when payload JSON has no reason field" {
+@test "unregister skips when payload JSON has no reason field (cascade pattern #151)" {
+  # Same as above, but with valid JSON whose `.reason` is missing. jq -r
+  # '.reason // empty' returns empty here too; the cascade case matches.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"other_field\":\"value\"}' | '$RADIO' unregister"
   assert_success
-  assert [ ! -f "$sess" ]
+  assert [ -f "$sess" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "skipping (reason=<unset>"
+}
+
+@test "unregister skips when payload is the literal 'y' observed in #151 logs (cascade pattern)" {
+  # The smoking-gun payload from #151's PR-#150-diagnostic logs: a single
+  # "y" character. 144 invocations in 25s, all identical, all reason=<unset>.
+  # Source uncertain (likely a Claude Code subagent termination leaking the
+  # parent's TUI confirmation keystroke into the SessionEnd hook stdin), but
+  # the fix is the same regardless of source: skip when reason is unparseable.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local loadout_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+  assert [ -f "$sess" ]
+  assert [ -f "$loadout_sidecar" ]
+  assert [ -f "$agent_sidecar" ]
+
+  # Single non-JSON character on stdin, exactly as the cascade fires it.
+  TASK_FORCE_ROLE=worker-foo run bash -c "printf 'y' | '$RADIO' unregister"
+  assert_success
+  # Session file AND both sidecars must survive — otherwise the next
+  # _ensure_session_file would write LOADOUT=unknown / AGENT=claude.
+  assert [ -f "$sess" ]
+  assert [ -f "$loadout_sidecar" ]
+  assert [ -f "$agent_sidecar" ]
 }
 
 # ----- register-if-missing (self-healing) -----------------------------------
@@ -510,11 +548,143 @@ teardown() {
   assert [ -f "$sidecar" ]
 }
 
+# ----- #151: AGENT sidecar (parallel to LOADOUT) ----------------------------
+#
+# Same hook-subshell unset problem _ensure_session_file had for $TASK_FORCE_LOADOUT
+# applies to $TASK_FORCE_AGENT. Pre-#151 a kiro-* worker that survived the
+# cascade and re-seeded ended up with AGENT=claude (the literal fallback in
+# the printf format string), silently flipping its identity. No runtime
+# consumer breaks today, but the sidecar is cheap and the alternative is a
+# trap for whoever adds AGENT-conditional behaviour next.
+
+@test "register: writes agent sidecar alongside session file (#151)" {
+  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
+  local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+  assert [ -f "$sidecar" ]
+  run cat "$sidecar"
+  assert_output "kiro"
+}
+
+@test "re-seed after unregister recovers AGENT from sidecar (#151)" {
+  # Mirror of the LOADOUT recovery test above: register as kiro, wipe the
+  # .info, re-seed via busy with $TASK_FORCE_AGENT unset (matches the hook
+  # subshell). Without the sidecar, the printf format string's "${...:-claude}"
+  # fallback would write AGENT=claude — silently misrepresenting the worker's
+  # identity.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  run grep "^AGENT=" "$sess"
+  assert_output "AGENT=kiro"
+
+  rm -f "$sess"
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_AGENT "$RADIO" busy
+  assert_success
+  run grep "^AGENT=" "$sess"
+  assert_output "AGENT=kiro"
+  refute_output --partial "claude"
+}
+
+@test "re-seed AGENT falls back to env var when sidecar is absent (#151)" {
+  # Test-harness escape hatch: directly poke _ensure_session_file without a
+  # prior register (so no sidecar exists). The env var fallback must still
+  # work — same shape as the loadout fallback at the same point.
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert [ ! -f "$sess" ]
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo TASK_FORCE_AGENT=kiro run "$RADIO" busy
+  assert_success
+  run grep "^AGENT=" "$sess"
+  assert_output "AGENT=kiro"
+}
+
+@test "re-seed AGENT defaults to 'claude' when no sidecar and no env var (#151)" {
+  # Last-resort fallback for the no-identity-context case (preserves the
+  # pre-#151 default so we don't regress non-task-force test paths).
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_AGENT "$RADIO" busy
+  assert_success
+  run grep "^AGENT=" "$sess"
+  assert_output "AGENT=claude"
+}
+
+@test "unregister: sweeps agent sidecar so a stale value can't leak (#151)" {
+  # Symmetric to the loadout sweep: real-exit unregister must remove the
+  # agent sidecar too, otherwise a tab reused for a different role would
+  # inherit the previous AGENT value on its first re-seed.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+  assert [ -f "$agent_sidecar" ]
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"logout\"}' | '$RADIO' unregister"
+  assert_success
+  assert [ ! -f "$sess" ]
+  assert [ ! -f "$agent_sidecar" ]
+}
+
+@test "unregister: skipped unregister (reason=clear) does NOT sweep agent sidecar (#151)" {
+  # Symmetric to the loadout no-sweep-on-skip test. If we skipped the .info
+  # delete, we must skip the sidecar delete too — otherwise the next re-seed
+  # rebuilds with the wrong AGENT.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+  assert [ -f "$agent_sidecar" ]
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"clear\"}' | '$RADIO' unregister"
+  assert_success
+  assert [ -f "$agent_sidecar" ]
+}
+
+@test "unregister: cascade-skipped unregister (reason=<unset>) does NOT sweep sidecars (#151)" {
+  # The new empty-reason skip branch must preserve both sidecars too — same
+  # invariant as clear/resume. This is the realistic worker-life scenario:
+  # 144 of these fire in 25s, each must be a no-op.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local loadout_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "printf 'y' | '$RADIO' unregister"
+  assert_success
+  assert [ -f "$sess" ]
+  assert [ -f "$loadout_sidecar" ]
+  assert [ -f "$agent_sidecar" ]
+}
+
+@test "end-to-end: cascade burst leaves LOADOUT + AGENT + TAB_ID intact (#151)" {
+  # Replays the #140/#151 cascade pattern: 20 unregister calls with the "y"
+  # payload, fired in rapid succession. The session file plus both sidecars
+  # must still be there at the end, and the values must be the original
+  # registration values — not the "unknown" / "claude" fallbacks that would
+  # land if any of the 20 calls had slipped through.
+  setup_stubs
+  seed_zellij_tabs worker-foo
+  export ZELLIJ=fake
+
+  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+
+  for _ in $(seq 1 20); do
+    TASK_FORCE_ROLE=worker-foo run bash -c "printf 'y' | '$RADIO' unregister"
+    assert_success
+  done
+
+  # Original identity preserved end-to-end.
+  run grep "^LOADOUT=" "$sess"
+  assert_output "LOADOUT=kiro-gh"
+  run grep "^AGENT=" "$sess"
+  assert_output "AGENT=kiro"
+  run grep "^TAB_ID=" "$sess"
+  assert_output "TAB_ID=7"
+}
+
 @test "unregister: logs full payload when proceeding past the skip-list (#140 Fix A instrumentation)" {
-  # When the cascade fires with a reason we don't recognise (or no reason
-  # at all), we still proceed with the delete — but log the full payload so
-  # we can investigate what's driving the cascade. Without the payload in
-  # the log, the cascade is invisible.
+  # For non-empty reasons we don't explicitly recognise (anything outside
+  # the clear|resume skip-list and the empty-reason cascade case added in
+  # #151), we still proceed with the delete — but log the full payload so
+  # the next time Claude Code adds a real-exit reason we can spot it. The
+  # empty-reason path now skips (#151) and is exercised by the test below.
   "$RADIO" register --role worker-foo --tab worker-foo --agent claude
   TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"weird_event\",\"extra\":\"data\"}' | '$RADIO' unregister"
   assert_success
@@ -525,13 +695,16 @@ teardown() {
   assert_output --partial "extra"
 }
 
-@test "unregister: logs payload even when reason is missing (#140 Fix A instrumentation)" {
+@test "unregister: logs payload even when reason is missing (#140 Fix A → #151 skip)" {
   # The smoking gun in #140 was unregister calls with no parseable reason.
-  # Make sure we log the payload then too.
+  # Post-#151 those route to the skip branch (cascade pattern) — but we still
+  # log the payload, so a future shift in the cascade source can be diagnosed
+  # without losing the diagnostic surface.
   "$RADIO" register --role worker-foo --tab worker-foo --agent claude
   TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"other\":\"value\"}' | '$RADIO' unregister"
   assert_success
   run cat "$TASK_FORCE_HOME/radio/log"
-  assert_output --partial "unregister: proceeding (reason=<unset>)"
+  assert_output --partial "unregister: skipping (reason=<unset>"
   assert_output --partial "payload="
+  assert_output --partial "other"
 }

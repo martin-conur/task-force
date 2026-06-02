@@ -52,6 +52,11 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 
 # Load base branch written by task-work; fall back to "main"
 BASE_BRANCH="main"
+# Zero PR_NUMBER before sourcing $INFO_FILE so an ambient shell export
+# (e.g., from an earlier task-reviewer in the same shell) can't sneak
+# into the reviewer-branch force-delete guard below and -D a worker
+# branch with unmerged commits (#148 review).
+PR_NUMBER=
 # shellcheck source=/dev/null
 [[ -f "$INFO_FILE" ]] && source "$INFO_FILE"
 # endregion:worktree-context

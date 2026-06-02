@@ -370,6 +370,69 @@ teardown() {
   refute_output --partial "unknown"
 }
 
+@test "re-seed survives when sidecar is unlinked between [[ -f ]] and read (#150 review: TOCTOU)" {
+  # Reproduces the race the reviewer called out on PR #150: a concurrent
+  # cmd_unregister (the very cascade we're guarding against) can unlink
+  # <role>.loadout in the microsecond window between _ensure_session_file's
+  # `[[ -f "$sidecar" ]]` check and the `$(<"$sidecar")` read.
+  #
+  # Without the `|| true` guard on the read, the inner command-substitution
+  # failure trips set -e and _ensure_session_file aborts — session file is
+  # never written, STATE tracking dies for the worker's lifetime. We can't
+  # easily race a real unregister against the read in bats, but we can
+  # produce the same effect by replacing the read step with a deletion: a
+  # bash DEBUG trap that fires *between* `[[ -f ]]` and the read, deletes
+  # the sidecar, and lets the read see ENOENT.
+  #
+  # Simpler approach used here: drive the same failure mode by making the
+  # sidecar unreadable (chmod 0) so the read fails the same way the unlink
+  # would. The TOCTOU guard `|| true` must convert that into "fall through
+  # to env-var fallback" rather than aborting.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  rm -f "$sess"
+
+  # Replace the sidecar's contents with an unreadable state — equivalent
+  # to "the file exists at -f time but the read can't complete". On macOS
+  # / Linux, chmod 0 on the file makes the read fail with EACCES (same
+  # set -e propagation as ENOENT from a delete).
+  chmod 0 "$sidecar"
+
+  # _ensure_session_file must NOT abort. Result: session file written,
+  # LOADOUT falls back to the env var (which we leave unset → "unknown").
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_LOADOUT "$RADIO" busy
+  # Restore permission so teardown can clean up.
+  chmod 644 "$sidecar"
+  assert_success
+  assert [ -f "$sess" ]
+  run grep "^STATE=" "$sess"
+  assert_output "STATE=busy"
+}
+
+@test "re-seed survives when sidecar is unlinked just before read (#150 review: TOCTOU, unlink variant)" {
+  # Companion to the chmod variant above: the literal scenario the reviewer
+  # described — sidecar present at the `-f` check, unlinked before the
+  # read. We simulate by deleting the sidecar AFTER cmd_register but BEFORE
+  # the busy hook fires. _ensure_session_file's `[[ -f ]]` will miss (and
+  # the read won't execute) — but this exercises the "sidecar gone by the
+  # time we look" path that the guard is also meant to handle.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+
+  rm -f "$sess" "$sidecar"
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_LOADOUT "$RADIO" busy
+  assert_success
+  assert [ -f "$sess" ]
+  # Fell back to env-var (unset → "unknown") — not the desired loadout
+  # value, but the worker keeps STATE tracking alive, which is the
+  # invariant the TOCTOU guard protects.
+  run grep "^LOADOUT=" "$sess"
+  assert_output "LOADOUT=unknown"
+}
+
 @test "register: writes loadout sidecar alongside session file (#140 Bug C)" {
   "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
   local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"

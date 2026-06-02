@@ -200,9 +200,20 @@ _ensure_session_file() {
   local loadout=""
   local sidecar
   sidecar=$(_loadout_sidecar "$TASK_FORCE_ROLE")
-  if [[ -f "$sidecar" ]]; then
-    loadout=$(<"$sidecar")
-  fi
+  # TOCTOU-safe read (#150 review): the sidecar can be unlinked by a
+  # concurrent cmd_unregister between any pre-check and the read — the
+  # unregister cascade documented in #140 is exactly that race window.
+  # `cat … 2>/dev/null || true` collapses three failure modes into "empty
+  # string" without tripping set -e: file absent, file unlinked mid-read,
+  # file unreadable. The env-var fallback below handles the empty case.
+  #
+  # Why not the obvious `loadout=$(<"$sidecar" || true)` the reviewer
+  # suggested: bash's `<file` is a command-substitution-only shorthand, not
+  # a real command, and `<file || true` short-circuits such that the read
+  # never returns the file's contents — so the sidecar value would be lost
+  # even on the happy path. Verified with `bash -c 'echo x>/tmp/f; v=$(</tmp/f || true); echo "[$v]"'`
+  # printing `[]`. cat is the unambiguous form.
+  loadout=$(cat "$sidecar" 2>/dev/null || true)
   [[ -n "$loadout" ]] || loadout="${TASK_FORCE_LOADOUT:-unknown}"
 
   local repo

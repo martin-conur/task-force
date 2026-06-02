@@ -445,6 +445,20 @@ _setup_stale_local_base() {
   assert_equal "${TAB_ID:-}" "12"
 }
 
+@test ".info records TAB_ID when the tab is awaiting-painted (❓︎ <slug>) at lookup time (#150 review: lib/radio emoji sync)" {
+  # The awaiting prefix in radio's _rename_tab uses U+2753 (❓) + U+FE0E
+  # (variation-selector-15, text-presentation) + space. Pre-#150 the strip
+  # in lib/zellij-tab.sh used U+2753 + space (no VS-15), so the byte
+  # sequences didn't match and the lookup missed when a tab was in the
+  # awaiting state. Sync the lib's strip to the radio's bytes and assert
+  # the lookup hits.
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"❓︎ my-feature","tab_id":12}]'
+  run "$CLAUDE_GH_TASK_WORK" my-feature
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "${TAB_ID:-}" "12"
+}
+
 # ---------------------------------------------------------------------------
 # Zellij interactions
 # ---------------------------------------------------------------------------

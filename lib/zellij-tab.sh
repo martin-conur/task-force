@@ -46,7 +46,7 @@ aw_zellij_tab_id_by_name() {
           | select((.name
                     | sub("^⏸️ "; "")
                     | sub("^▶️ "; "")
-                    | sub("^❓ "; "")) == $n)
+                    | sub("^❓︎ "; "")) == $n)
           | .tab_id]
          | .[0] // empty' 2>/dev/null
 }

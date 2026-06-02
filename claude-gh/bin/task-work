@@ -223,10 +223,20 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 
 # region:worktree-creation-post-info
 echo "Opening zellij tab '$SLUG'..."
+# `set +H; ` prefix disables bash history expansion in the spawned `bash -ic`
+# subshell — defends against `!` in user-supplied $GH_URL (or future
+# user-input passthroughs that grow on this code path) from being silently
+# history-substituted before claude / the worker prompt ever sees the arg.
+# Critically, this prefix must come BEFORE $RADIO_ENV_PREFIX, not between
+# it and `claude`: `VAR=val cmd1; cmd2` scopes VAR=val to `cmd1` only, so
+# putting `set +H` between the env prefix and `claude` would attach the
+# env assignments to the `set` builtin and they'd never reach `claude`
+# after the `;` (radio routing / model / AUTO_SUBMIT all dead). Mirrors
+# the task-reviewer fix. (#144 round-4 review.)
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}$(build_claude_cmd)" "${AUTO_MODE:-}"
 fi
 
 if [[ -n "$NO_LAUNCH" ]]; then

@@ -548,3 +548,28 @@ _setup_stale_local_base() {
   run "$CLAUDE_GH_TASK_WORK" --unknown-flag
   assert_failure
 }
+
+# #144 round-4: task-work mirrors task-reviewer's `set +H;` defense. The
+# prefix must precede $RADIO_ENV_PREFIX so the env assignments bind to
+# `claude` (an external command), not the `set` builtin — `VAR=val cmd1;
+# cmd2` scopes VAR=val to `cmd1` only. Pins the ordering to catch a future
+# regression where someone re-introduces `set +H` inside build_claude_cmd's
+# output (which is what broke round-2 in #144).
+@test "task-work: 'set +H' precedes RADIO_ENV_PREFIX so env vars reach claude (#144 round-4)" {
+  local url="https://github.com/owner/repo/issues/42"
+  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  assert_success
+  local cmd_line
+  cmd_line=$(grep -m1 -F "new-tab --name my-feature" "$STUB_CALLS_DIR/zellij.calls")
+  [[ "$cmd_line" == *"set +H;"* ]] || {
+    echo "missing 'set +H;' in cmd: $cmd_line" >&2; return 1; }
+  [[ "$cmd_line" == *"TASK_FORCE_ROLE="* ]] || {
+    echo "missing 'TASK_FORCE_ROLE=' in cmd: $cmd_line" >&2; return 1; }
+  local set_pos="${cmd_line%%set +H;*}"
+  local role_pos="${cmd_line%%TASK_FORCE_ROLE=*}"
+  [[ ${#set_pos} -lt ${#role_pos} ]] || {
+    echo "ordering wrong: 'set +H;' must come before 'TASK_FORCE_ROLE='" >&2
+    echo "cmd: $cmd_line" >&2
+    return 1
+  }
+}

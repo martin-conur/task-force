@@ -411,6 +411,14 @@ teardown() {
   # new-tab call. It's the last token after `--` on the line.
   local cmd_line
   cmd_line=$(grep -m1 -F "new-tab --name review-pr42" "$STUB_CALLS_DIR/zellij.calls")
+  # Harden against the edge case noted in round-3 review: a missing
+  # TASK_FORCE_ROLE= would make `${cmd_line%%TASK_FORCE_ROLE=*}` equal to
+  # cmd_line itself, and the prefix-length comparison below would false-pass
+  # if `set +H;` is present but TASK_FORCE_ROLE= is gone. Pin presence first.
+  [[ "$cmd_line" == *"set +H;"* ]] || {
+    echo "missing 'set +H;' in cmd: $cmd_line" >&2; return 1; }
+  [[ "$cmd_line" == *"TASK_FORCE_ROLE="* ]] || {
+    echo "missing 'TASK_FORCE_ROLE=' in cmd: $cmd_line" >&2; return 1; }
   # `set +H;` must appear before `TASK_FORCE_ROLE=` in the same line.
   local set_pos="${cmd_line%%set +H;*}"
   local role_pos="${cmd_line%%TASK_FORCE_ROLE=*}"

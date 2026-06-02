@@ -385,6 +385,30 @@ cmd_register() {
     fi
   fi
 
+  # Persist the loadout sidecar BEFORE the session file (#150 round-2 review:
+  # Finding 1). If the process is killed (OOM, task-done --force, host
+  # shutdown) between these two _atomic_write calls, the order matters:
+  #
+  #   sidecar-first (this order):
+  #     pre-kill state:  .loadout=claude-gh, .info absent
+  #     re-seed reads:   .loadout → LOADOUT=claude-gh recovered ✓
+  #
+  #   info-first (the OLD order — pre-#150-r3):
+  #     pre-kill state:  .info has LOADOUT=claude-gh, .loadout absent
+  #     unregister cascade deletes .info; .loadout never existed
+  #     re-seed reads:   no sidecar, hook subshell has no $TASK_FORCE_LOADOUT
+  #                      → LOADOUT=unknown ✗
+  #
+  # The window is microseconds wide, but the cascade in #140 makes it
+  # statistically reachable. Reversing the order eliminates the failure mode
+  # entirely. Skipping the sidecar on empty $loadout keeps the sidecar's mere
+  # existence equivalent to "we have a real loadout to restore" — otherwise
+  # a re-seed could read an empty sidecar and clobber the env-var fallback
+  # that test paths still rely on.
+  if [[ -n "$loadout" ]]; then
+    printf '%s' "$loadout" | _atomic_write "$(_loadout_sidecar "$role")"
+  fi
+
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
       "$role" "$tab" "$tab_id" "$repo" "$(_now)" "$agent" "$loadout"
@@ -401,15 +425,6 @@ cmd_register() {
   } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
-
-  # Persist the loadout name to a sidecar so _ensure_session_file can recover
-  # it during a mid-life re-seed (#140 Bug C). Skipping on empty values keeps
-  # the sidecar's mere existence equivalent to "we have a real loadout to
-  # restore" — otherwise a re-seed could read an empty sidecar and clobber
-  # the env-var fallback that test paths still rely on.
-  if [[ -n "$loadout" ]]; then
-    printf '%s' "$loadout" | _atomic_write "$(_loadout_sidecar "$role")"
-  fi
 
   _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout"
 

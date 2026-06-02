@@ -370,37 +370,27 @@ teardown() {
   refute_output --partial "unknown"
 }
 
-@test "re-seed survives when sidecar is unlinked between [[ -f ]] and read (#150 review: TOCTOU)" {
-  # Reproduces the race the reviewer called out on PR #150: a concurrent
-  # cmd_unregister (the very cascade we're guarding against) can unlink
-  # <role>.loadout in the microsecond window between _ensure_session_file's
-  # `[[ -f "$sidecar" ]]` check and the `$(<"$sidecar")` read.
+@test "re-seed survives when sidecar read fails (#150 round-2 review: TOCTOU on unconditional cat)" {
+  # _ensure_session_file does an unconditional `cat "$sidecar" 2>/dev/null
+  # || true` — no `[[ -f ]]` pre-check. The TOCTOU guard must convert any
+  # read failure (file absent, unlinked mid-read by concurrent unregister,
+  # unreadable) into "empty string" without tripping set -e. Otherwise the
+  # function aborts mid-re-seed and STATE tracking dies for the worker's
+  # lifetime.
   #
-  # Without the `|| true` guard on the read, the inner command-substitution
-  # failure trips set -e and _ensure_session_file aborts — session file is
-  # never written, STATE tracking dies for the worker's lifetime. We can't
-  # easily race a real unregister against the read in bats, but we can
-  # produce the same effect by replacing the read step with a deletion: a
-  # bash DEBUG trap that fires *between* `[[ -f ]]` and the read, deletes
-  # the sidecar, and lets the read see ENOENT.
-  #
-  # Simpler approach used here: drive the same failure mode by making the
-  # sidecar unreadable (chmod 0) so the read fails the same way the unlink
-  # would. The TOCTOU guard `|| true` must convert that into "fall through
-  # to env-var fallback" rather than aborting.
+  # We exercise the failure path by making the sidecar unreadable
+  # (chmod 0). cat returns ENOENT-equivalent (EACCES); without `|| true`,
+  # set -e propagates and `radio busy` exits non-zero. With it, the read
+  # returns empty and we fall through to the env-var fallback (unset →
+  # "unknown") — assert that fallback fired, not just that the script
+  # completed.
   "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
   rm -f "$sess"
 
-  # Replace the sidecar's contents with an unreadable state — equivalent
-  # to "the file exists at -f time but the read can't complete". On macOS
-  # / Linux, chmod 0 on the file makes the read fail with EACCES (same
-  # set -e propagation as ENOENT from a delete).
   chmod 0 "$sidecar"
 
-  # _ensure_session_file must NOT abort. Result: session file written,
-  # LOADOUT falls back to the env var (which we leave unset → "unknown").
   TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_LOADOUT "$RADIO" busy
   # Restore permission so teardown can clean up.
   chmod 644 "$sidecar"
@@ -408,15 +398,18 @@ teardown() {
   assert [ -f "$sess" ]
   run grep "^STATE=" "$sess"
   assert_output "STATE=busy"
+  # Fallback value confirms the read returned empty AND the env-var
+  # fallback fired — not that cat silently succeeded.
+  run grep "^LOADOUT=" "$sess"
+  assert_output "LOADOUT=unknown"
 }
 
-@test "re-seed survives when sidecar is unlinked just before read (#150 review: TOCTOU, unlink variant)" {
-  # Companion to the chmod variant above: the literal scenario the reviewer
-  # described — sidecar present at the `-f` check, unlinked before the
-  # read. We simulate by deleting the sidecar AFTER cmd_register but BEFORE
-  # the busy hook fires. _ensure_session_file's `[[ -f ]]` will miss (and
-  # the read won't execute) — but this exercises the "sidecar gone by the
-  # time we look" path that the guard is also meant to handle.
+@test "re-seed survives when sidecar is absent at read time (#150 review: TOCTOU, unlink variant)" {
+  # Companion to the chmod variant above: sidecar deleted before the
+  # busy hook fires (the realistic cascade pattern — unregister wipes
+  # both .info and .loadout, then the next hook event re-seeds). The
+  # unconditional `cat` must collapse to empty without aborting; the
+  # env-var fallback handles the LOADOUT.
   "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
@@ -426,11 +419,60 @@ teardown() {
   TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_LOADOUT "$RADIO" busy
   assert_success
   assert [ -f "$sess" ]
-  # Fell back to env-var (unset → "unknown") — not the desired loadout
-  # value, but the worker keeps STATE tracking alive, which is the
-  # invariant the TOCTOU guard protects.
   run grep "^LOADOUT=" "$sess"
   assert_output "LOADOUT=unknown"
+}
+
+@test "re-seed recovers LOADOUT when .info-write was killed but sidecar landed first (#150 round-3 review: Finding 1)" {
+  # Models the kill-window the reviewer flagged: cmd_register writes the
+  # sidecar BEFORE the session file (post-#150-r3), so if the process is
+  # killed between the two writes, the sidecar exists but .info doesn't.
+  # The next re-seed should find the sidecar and recover LOADOUT correctly
+  # instead of writing "unknown".
+  #
+  # Simulate by registering normally, then deleting only .info (matches
+  # the "sidecar landed, info didn't" state). Pre-r3 (write-info-first
+  # order) this state was unreachable except through manual file
+  # manipulation; post-r3 it's the natural mid-kill snapshot.
+  "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  assert [ -f "$sidecar" ]
+  rm -f "$sess"
+  assert [ -f "$sidecar" ]
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo run env -u TASK_FORCE_LOADOUT "$RADIO" busy
+  assert_success
+  run grep "^LOADOUT=" "$sess"
+  assert_output "LOADOUT=claude-gh"
+}
+
+@test "register: writes sidecar before .info so a kill mid-call leaves sidecar recoverable (#150 round-3 review: Finding 1)" {
+  # Direct assertion of the write-order invariant: a kill that interrupts
+  # cmd_register between the sidecar write and the .info write must leave
+  # the system in a state that a subsequent re-seed can recover. Inverse
+  # case (sidecar absent but .info present) would be unrecoverable —
+  # that's the pre-r3 failure mode.
+  #
+  # We can't actually kill in the middle of a real register, but we can
+  # assert the timestamps: sidecar's mtime must be ≤ .info's mtime. (On
+  # POSIX, stat -f vs -c differ; use `find -newer` to compare without
+  # parsing.)
+  "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  assert [ -f "$sess" ]
+  assert [ -f "$sidecar" ]
+  # If sidecar were written AFTER .info, .info would be `-newer` than
+  # sidecar would be false (sidecar would be newer). Assert .info is
+  # newer-or-equal to sidecar.
+  run find "$sess" -newer "$sidecar"
+  # `find -newer` prints the file if it's STRICTLY newer. .info written
+  # immediately after sidecar may share the same mtime resolution on
+  # fast filesystems — either output (the path or empty) is fine; what
+  # matters is that sidecar isn't newer than .info.
+  run find "$sidecar" -newer "$sess"
+  refute_output --partial "$sidecar"
 }
 
 @test "register: writes loadout sidecar alongside session file (#140 Bug C)" {

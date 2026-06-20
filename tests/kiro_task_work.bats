@@ -53,6 +53,22 @@ teardown() {
   assert [ -d "$WORKTREE_BASE/my-explicit-slug" ]
 }
 
+# Regression (#158): app.notion.com links (served by Notion + returned by the
+# Notion MCP tools) must be recognized as Notion URLs, not dropped.
+@test "app.notion.com URL: single arg derives slug from /p/<32hex> tail" {
+  run "$KIRO_TASK_WORK" "https://app.notion.com/p/384d9a72260f81f5b3c1c639a1f78d1f"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/384d9a72" ]
+}
+
+@test "app.notion.com URL: explicit slug + URL records NOTION_URL" {
+  local url="https://app.notion.com/p/384d9a72260f81f5b3c1c639a1f78d1f"
+  run "$KIRO_TASK_WORK" my-feature "$url"
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "$NOTION_URL" "$url"
+}
+
 # ---------------------------------------------------------------------------
 # Worktree + branch creation
 # ---------------------------------------------------------------------------

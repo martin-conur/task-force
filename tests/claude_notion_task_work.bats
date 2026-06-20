@@ -53,6 +53,30 @@ teardown() {
   assert [ -d "$WORKTREE_BASE/my-explicit-slug" ]
 }
 
+# Regression (#158): Notion serves workspace/page links — and the Notion MCP
+# fetch/search tools return them — as app.notion.com URLs. is_notion_url() must
+# recognize these or the URL is silently dropped (slug-only fallthrough).
+@test "app.notion.com URL: single arg derives slug from /p/<32hex> tail" {
+  run "$CLAUDE_NOTION_TASK_WORK" "https://app.notion.com/p/384d9a72260f81f5b3c1c639a1f78d1f"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/384d9a72" ]
+}
+
+@test "app.notion.com URL: explicit slug + URL records NOTION_URL" {
+  local url="https://app.notion.com/p/384d9a72260f81f5b3c1c639a1f78d1f"
+  run "$CLAUDE_NOTION_TASK_WORK" my-feature "$url"
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "$NOTION_URL" "$url"
+}
+
+@test "app.notion.com URL: claude command includes task URL" {
+  local url="https://app.notion.com/p/384d9a72260f81f5b3c1c639a1f78d1f"
+  run "$CLAUDE_NOTION_TASK_WORK" my-feature "$url"
+  assert_success
+  assert_stub_called zellij "Implement task: $url"
+}
+
 # ---------------------------------------------------------------------------
 # Worktree + branch creation
 # ---------------------------------------------------------------------------

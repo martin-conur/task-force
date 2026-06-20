@@ -85,7 +85,10 @@ fi
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
 
 is_notion_url() {
-  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* ]]
+  # notion.com covers app.notion.com workspace/page links — the form Notion
+  # now serves and the Notion MCP fetch/search tools return (#158). Adding it
+  # is safe: notion.so/notion.site URLs never contain it, nor does a real slug.
+  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* || "$1" == *"notion.com"* ]]
 }
 
 derive_slug_from_url() {

@@ -115,6 +115,29 @@ The body comes from `--body` or stdin. PR review *content* still lives in
 follow `worker-<reponame>-<slug>`; discover the live one via
 `ls ~/.task-force/radio/sessions/`.
 
+### Reviewer role (single-shot, self-cleaning)
+
+On a worker's `review-requested`, the PM may dispatch a reviewer with
+`task-reviewer <pr> [<notion-spec-url>]` (add `Bash(task-reviewer *)` to your
+project's `.claude/settings.json` `permissions.allow` so the PM dispatches
+hands-off without a permission prompt). The reviewer is **single-shot**: it reads
+the spec + diff, runs the `code-review` skill, posts **one** PR comment carrying
+its full analysis + verdict, radios the PM `review-complete-clean` /
+`review-complete-with-findings`, then **auto-destructs** (`task-done
+--remove-worktree` — removes its worktree and closes its tab). It does NOT idle
+waiting to be closed. The analysis lives in the PR comment, not the tab; the PM
+reads the verdict on its next `radio check` and forwards findings to the worker.
+
+### Tight-PR norm — minimize deferrals
+
+Default to landing each PR **complete**. The reviewer frames every finding as
+fix-in-this-PR (never "defer to a follow-up" for in-scope work), and the PM forwards
+**all** in-scope findings — blockers *and* nits — in a single `changes-requested`
+round rather than trailing a backlog of deferred items. The only thing that gets
+deferred is work genuinely out of the PR's scope (a separate subsystem, a large
+refactor) — and the PM grooms that into a ticket during the session, not left as a
+loose "later."
+
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm`, registers via the `SessionStart` hook, and
 starts the PM agent in-place.

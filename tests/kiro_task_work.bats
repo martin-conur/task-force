@@ -53,6 +53,36 @@ teardown() {
   assert [ -d "$WORKTREE_BASE/my-explicit-slug" ]
 }
 
+@test "app.notion.com single-arg: derives slug from title segment (#158)" {
+  run "$KIRO_TASK_WORK" "https://app.notion.com/My-Feature-abc123def456abc123def456abc123de"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/my-feature" ]
+}
+
+@test "app.notion.com <slug> <url>: records NOTION_URL in .info (#158)" {
+  local url="https://app.notion.com/My-Feature-abc123def456abc123def456abc123de"
+  run "$KIRO_TASK_WORK" my-feature "$url"
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "$NOTION_URL" "$url"
+}
+
+@test "false-positive guard: slug containing 'notion.com' resolves URL, not slug (#158)" {
+  # A free-form slug that merely contains "notion.com" must NOT be treated as a
+  # URL — the real app.notion.com arg must win and land in NOTION_URL.
+  local url="https://app.notion.com/Real-Page-abc123def456abc123def456abc123de"
+  run "$KIRO_TASK_WORK" "my-notion.com-feature" "$url"
+  assert_success
+  source "$WORKTREE_BASE/.my-notioncom-feature.info"
+  assert_equal "$NOTION_URL" "$url"
+}
+
+@test "notion.site subdomain URL still recognized (#158)" {
+  run "$KIRO_TASK_WORK" "https://myworkspace.notion.site/My-Feature-abc123def456abc123def456abc123de"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/my-feature" ]
+}
+
 # ---------------------------------------------------------------------------
 # Worktree + branch creation
 # ---------------------------------------------------------------------------

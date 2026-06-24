@@ -91,7 +91,11 @@ done
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
 
 is_notion_url() {
-  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* ]]
+  # Anchored to the URL host so a free-form slug that merely contains the text
+  # (e.g. "my-notion.com-feature") is not misclassified as a URL. Allows any
+  # subdomain (www., app., or a published-site workspace) so the original
+  # *.notion.site behavior is preserved. (#158)
+  [[ "$1" =~ ^https?://([a-zA-Z0-9-]+\.)*notion\.(so|site|com)/ ]]
 }
 
 derive_slug_from_url() {

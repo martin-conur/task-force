@@ -53,6 +53,20 @@ teardown() {
   assert [ -d "$WORKTREE_BASE/my-explicit-slug" ]
 }
 
+@test "app.notion.com single-arg: derives slug from title segment (#158)" {
+  run "$KIRO_TASK_WORK" "https://app.notion.com/My-Feature-abc123def456abc123def456abc123de"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/my-feature" ]
+}
+
+@test "app.notion.com <slug> <url>: records NOTION_URL in .info (#158)" {
+  local url="https://app.notion.com/My-Feature-abc123def456abc123def456abc123de"
+  run "$KIRO_TASK_WORK" my-feature "$url"
+  assert_success
+  source "$WORKTREE_BASE/.my-feature.info"
+  assert_equal "$NOTION_URL" "$url"
+}
+
 # ---------------------------------------------------------------------------
 # Worktree + branch creation
 # ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ done
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
 
 is_notion_url() {
-  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* ]]
+  [[ "$1" == *"notion.so"* || "$1" == *"notion.site"* || "$1" == *"notion.com"* ]]
 }
 
 derive_slug_from_url() {

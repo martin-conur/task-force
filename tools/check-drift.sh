@@ -28,6 +28,7 @@ GROUPS_DEFAULT=(
   "read-only-allow|read-only-allow|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
   "require-jq-source|require-jq-source|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
   "require-jq-call|require-jq-call|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
+  "install-shared-symlinks|install-shared-symlinks|claude-gh/install.sh claude-jira/install.sh claude-local/install.sh claude-notion/install.sh kiro-gh/install.sh kiro-local/install.sh kiro-notion/install.sh"
 )
 # endregion:default-manifest
 

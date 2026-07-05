@@ -110,17 +110,20 @@ if [[ "$IMPL" == kiro-* ]]; then
     echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
     echo "       Reviewer support currently ships for claude-gh, claude-jira," >&2
     echo "       claude-notion, claude-local, and kiro-gh." >&2
-    echo "       See https://github.com/martin-conur/task-force/issues/136 for tracking." >&2
+    echo "       See https://github.com/martin-conur/task-force/issues/146 for tracking." >&2
     exit 1
   fi
   exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 fi
 
-# The claude body branches on the loadout for tracker-aware behavior — only
-# claude-gh resolves spec issues via the GitHub `Closes #N` convention; the
-# others accept any opaque 2nd positional arg (Jira key, Notion URL, local
-# slug) and pass it through to /reviewer untouched (#144).
-AW_LOADOUT="$IMPL"
+# The claude body branches on the impl's tracker suffix (gh / jira / notion /
+# local) for tracker-aware behavior — only the gh tracker resolves spec issues
+# via the GitHub `Closes #N` convention; the others accept any opaque 2nd
+# positional arg (Jira key, Notion URL, local slug) and pass it through to
+# /reviewer untouched (#144). Keying on the suffix rather than the full impl
+# name means a future kiro-* body reuse (#146) or new loadout (#92) inherits
+# the right tracker behavior for free.
+TRACKER="${IMPL##*-}"
 
 # Continue with --impl (and its value) stripped from the argv.
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
@@ -167,7 +170,7 @@ parse_pr_number() {
 # how to resolve it via the loadout-appropriate MCP / file read.
 parse_issue_number() {
   local input="$1"
-  if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+  if [[ "$TRACKER" == "gh" ]]; then
     if [[ "$input" =~ ^[0-9]+$ ]]; then
       echo "$input"; return 0
     fi
@@ -229,12 +232,12 @@ if [[ -n "$ISSUE_INPUT" ]]; then
     echo "Error: could not parse issue number from '$ISSUE_INPUT'" >&2
     exit 1
   }
-  if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+  if [[ "$TRACKER" == "gh" ]]; then
     [[ "$ISSUE_INPUT" == *"github.com"* ]] && SPEC_IDENTIFIER="$ISSUE_INPUT"
   else
     SPEC_IDENTIFIER="$ISSUE_INPUT"
   fi
-elif [[ "$AW_LOADOUT" == "claude-gh" && -n "$PR_BODY" ]]; then
+elif [[ "$TRACKER" == "gh" && -n "$PR_BODY" ]]; then
   ISSUE_NUMBER=$(printf '%s\n' "$PR_BODY" \
     | grep -iEo '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
     | head -1 | grep -Eo '[0-9]+' || true)
@@ -242,12 +245,12 @@ fi
 
 # claude-gh: synthesize the GitHub issues URL from PR_URL + ISSUE_NUMBER when
 # the caller passed only a number (or we auto-detected from the body).
-if [[ "$AW_LOADOUT" == "claude-gh" && -n "$ISSUE_NUMBER" && -z "$SPEC_IDENTIFIER" && -n "$PR_URL" ]]; then
+if [[ "$TRACKER" == "gh" && -n "$ISSUE_NUMBER" && -z "$SPEC_IDENTIFIER" && -n "$PR_URL" ]]; then
   SPEC_IDENTIFIER=$(printf '%s\n' "$PR_URL" | sed "s|/pull/[0-9]*|/issues/$ISSUE_NUMBER|")
 fi
 
 if [[ -z "$ISSUE_NUMBER" ]]; then
-  if [[ "$AW_LOADOUT" == "claude-gh" ]]; then
+  if [[ "$TRACKER" == "gh" ]]; then
     echo "⚠ No spec issue associated with PR #$PR_NUMBER (no second arg, no Closes/Fixes in body)." >&2
   else
     echo "⚠ No spec identifier passed for PR #$PR_NUMBER." >&2

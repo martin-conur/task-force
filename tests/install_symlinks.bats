@@ -49,3 +49,43 @@ teardown() {
   resolved=$(cd "$(dirname "$target")" && pwd)/$(basename "$target")
   [[ "$resolved" == "$REPO_ROOT_REAL/bin/radio" ]]
 }
+
+# Resolve a ~/.local/bin symlink to its physical target path.
+resolve_link() {
+  local target
+  target=$(readlink "$HOME/.local/bin/$1")
+  echo "$(cd "$(dirname "$target")" && pwd)/$(basename "$target")"
+}
+
+@test "all 7 installers: shared symlinks resolve to the canonical root copies" {
+  # Every loadout must land radio / task-pm (and, where shipped, task-reviewer)
+  # on the same root binaries — the exact regression class the #170
+  # consolidation exists to prevent. Each installer runs against a clean
+  # ~/.local/bin so a previous loadout's links can't mask a broken target.
+  local impls=(claude-gh claude-jira claude-local claude-notion kiro-gh kiro-local kiro-notion)
+  for impl in "${impls[@]}"; do
+    rm -rf "$HOME/.local/bin"
+    bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
+
+    for cmd in task-init task-work task-done task-pm radio; do
+      [ -L "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink missing"; return 1; }
+      [ -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink dangling"; return 1; }
+    done
+    [ "$(resolve_link radio)" = "$REPO_ROOT_REAL/bin/radio" ] \
+      || { echo "$impl: radio resolves to $(resolve_link radio)"; return 1; }
+    [ "$(resolve_link task-pm)" = "$REPO_ROOT_REAL/bin/task-pm" ] \
+      || { echo "$impl: task-pm resolves to $(resolve_link task-pm)"; return 1; }
+
+    case "$impl" in
+      claude-*|kiro-gh)
+        [ -e "$HOME/.local/bin/task-reviewer" ] || { echo "$impl: task-reviewer missing/dangling"; return 1; }
+        [ "$(resolve_link task-reviewer)" = "$REPO_ROOT_REAL/bin/task-reviewer" ] \
+          || { echo "$impl: task-reviewer resolves to $(resolve_link task-reviewer)"; return 1; }
+        ;;
+      *)
+        # kiro-local / kiro-notion ship no reviewer until #146.
+        [ ! -e "$HOME/.local/bin/task-reviewer" ] || { echo "$impl: unexpected task-reviewer"; return 1; }
+        ;;
+    esac
+  done
+}

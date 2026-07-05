@@ -57,4 +57,10 @@ export ZELLIJ_TAB=pm
 case "$AGENT" in
   claude) exec claude "/pm" ;;
   kiro)   exec kiro-cli chat --agent pm ;;
+  *)
+    # Unreachable today (aw_detect_impl validates the impl list), but a new
+    # agent family added there without a launch line here must fail loudly,
+    # not exit 0 after the tab rename.
+    echo "Error: no PM launch line for agent '$AGENT' (impl '$IMPL')" >&2
+    exit 1 ;;
 esac

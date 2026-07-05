@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Project-aware dispatcher for task-pm.
+# task-pm — in-place PM-tab takeover (canonical, all loadouts; #170).
 #
-# Detects which <impl>/bin/task-pm to run by inspecting the current git repo's
-# workflow docs (see lib/detect-impl.sh). Override with --impl <name> or
-# AW_IMPL=<name>.
+# The body is shared by every loadout — only the final launch line differs by
+# agent (claude vs kiro). The agent is the impl-name prefix resolved via
+# lib/detect-impl.sh. Override with --impl <name> or AW_IMPL=<name>.
+#
+# Renames the current zellij tab to "pm" and exec's the agent's PM entrypoint
+# so the project's session-start hook registers the PM mailbox.
 
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -17,16 +20,47 @@ BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
 AW_ROOT=$(dirname "$BIN_DIR")
 
 # shellcheck source=lib/detect-impl.sh
-# shellcheck source=lib/detect-impl.sh
 source "$AW_ROOT/lib/detect-impl.sh"
 
 aw_parse_impl_flag "$@" || exit 1
+
+for arg in ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}; do
+  case "$arg" in
+    -h|--help)
+      cat <<'EOF'
+Usage: task-pm [--impl <name>]
+
+Rename the current zellij tab to "pm" and launch the PM agent in-place
+(claude /pm on claude loadouts, kiro-cli chat --agent pm on kiro loadouts).
+Run from inside a task-force-initialized git repo.
+EOF
+      exit 0 ;;
+  esac
+done
+
 IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+AGENT="${IMPL%%-*}"
 
-TARGET="$AW_ROOT/$IMPL/bin/task-pm"
-[[ -x "$TARGET" ]] || {
-  echo "Error: $TARGET not found or not executable. Is the repository complete?" >&2
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "Error: not in a git repo (task-pm requires a task-force-initialized repo" >&2
+  echo "       so the session-start hook can register the PM mailbox)" >&2
   exit 1
-}
+fi
+cd "$(git rev-parse --show-toplevel)"
 
-exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+if [[ -n "${ZELLIJ:-}" ]]; then
+  zellij action rename-tab "pm" >/dev/null 2>&1 || true
+fi
+
+export TASK_FORCE_ROLE=pm
+export ZELLIJ_TAB=pm
+case "$AGENT" in
+  claude) exec claude "/pm" ;;
+  kiro)   exec kiro-cli chat --agent pm ;;
+  *)
+    # Unreachable today (aw_detect_impl validates the impl list), but a new
+    # agent family added there without a launch line here must fail loudly,
+    # not exit 0 after the tab rename.
+    echo "Error: no PM launch line for agent '$AGENT' (impl '$IMPL')" >&2
+    exit 1 ;;
+esac

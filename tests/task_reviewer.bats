@@ -7,6 +7,9 @@
 # optional spec issue) as args. Tests mirror tests/claude_gh_task_work.bats's
 # patterns: arg parsing, worktree creation, tab spawn, mode flags, errors.
 #
+# The claude flow lives in the canonical root bin/task-reviewer (#170); tests
+# pin the loadout via AW_IMPL. kiro-gh keeps its own file until #146.
+#
 # `gh pr view` is stubbed via $GH_STUB_PR_URL (+ optional PR_BODY/HEAD/BASE
 # overrides). With $GH_STUB_PR_URL unset, the stub exits 1 — modeling
 # "PR not found".
@@ -33,38 +36,38 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "claude task-reviewer: PR by bare number" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert [ -d "$WORKTREE_BASE/review-pr42" ]
 }
 
 @test "claude task-reviewer: PR by URL" {
-  run "$TASK_REVIEWER_CLAUDE" "https://github.com/owner/repo/pull/42"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" "https://github.com/owner/repo/pull/42"
   assert_success
   assert [ -d "$WORKTREE_BASE/review-pr42" ]
 }
 
 @test "claude task-reviewer: PR URL with trailing params" {
-  run "$TASK_REVIEWER_CLAUDE" "https://github.com/owner/repo/pull/99?foo=bar"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" "https://github.com/owner/repo/pull/99?foo=bar"
   assert_success
   assert [ -d "$WORKTREE_BASE/review-pr99" ]
 }
 
 @test "claude task-reviewer: missing PR arg errors" {
-  run "$TASK_REVIEWER_CLAUDE"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER"
   assert_failure
   assert_output --partial "PR url or number is required"
 }
 
 @test "claude task-reviewer: invalid PR input errors" {
-  run "$TASK_REVIEWER_CLAUDE" "not-a-pr"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" "not-a-pr"
   assert_failure
   assert_output --partial "could not parse PR number"
 }
 
 @test "claude task-reviewer: PR not found (gh pr view fails) errors" {
   unset GH_STUB_PR_URL
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "PR #42 not found"
 }
@@ -74,49 +77,49 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "claude task-reviewer: explicit issue number passed to /reviewer" {
-  run "$TASK_REVIEWER_CLAUDE" 42 38
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 38
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
 }
 
 @test "claude task-reviewer: explicit issue URL passed to /reviewer" {
   local issue="https://github.com/owner/repo/issues/38"
-  run "$TASK_REVIEWER_CLAUDE" 42 "$issue"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 "$issue"
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 $issue"
 }
 
 @test "claude task-reviewer: auto-detects issue from PR body 'Closes #N'" {
   export GH_STUB_PR_BODY="This PR adds X. Closes #38."
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
 }
 
 @test "claude task-reviewer: auto-detects from 'Fixes #N'" {
   export GH_STUB_PR_BODY="Fixes #38"
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
 }
 
 @test "claude task-reviewer: auto-detects from 'Resolves #N'" {
   export GH_STUB_PR_BODY="Resolves #99"
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/99"
 }
 
 @test "claude task-reviewer: picks first Closes/Fixes when PR body has many" {
   export GH_STUB_PR_BODY=$'Closes #11.\nAlso fixes #22.\nResolves #33.'
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/11"
 }
 
 @test "claude task-reviewer: warns + diff-only when no issue in body" {
   export GH_STUB_PR_BODY="Just some prose, no spec link."
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "No spec issue associated"
   # /reviewer is invoked with only the PR URL (no second arg).
@@ -125,7 +128,7 @@ teardown() {
 }
 
 @test "claude task-reviewer: invalid issue input errors" {
-  run "$TASK_REVIEWER_CLAUDE" 42 "not-an-issue"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 "not-an-issue"
   assert_failure
   assert_output --partial "could not parse issue number"
 }
@@ -135,7 +138,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "claude task-reviewer: creates worktree at <repo-parent>/<repo>-worktrees/review-pr<N>" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert [ -d "$WORKTREE_BASE/review-pr42" ]
 }
@@ -144,7 +147,7 @@ teardown() {
   # Branch is namespaced under `task/` so `task-done --remove-worktree`'s
   # `${BRANCH#task/}` slug-strip yields `review-pr<N>` and finds the right
   # info file. Without the prefix, task-done leaks the worktree (#139).
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   local branches
   branches=$(git -C "$MAIN_REPO" branch --list "task/review-pr42")
@@ -155,7 +158,7 @@ teardown() {
   # Regression for #139: the branch must be `task/review-pr<N>` and the
   # info file at `.review-pr<N>.info` so task-done's
   # `INFO_FILE="${WORKTREE_BASE}/.${BRANCH#task/}.info"` resolves.
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   local branch_in_wt
   branch_in_wt=$(git -C "$WORKTREE_BASE/review-pr42" rev-parse --abbrev-ref HEAD)
@@ -167,7 +170,7 @@ teardown() {
 
 @test "claude task-reviewer: writes .info with PR_NUMBER and ISSUE_NUMBER" {
   export GH_STUB_PR_BODY="Closes #38"
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   local info="$WORKTREE_BASE/.review-pr42.info"
   assert [ -f "$info" ]
@@ -178,9 +181,9 @@ teardown() {
 }
 
 @test "claude task-reviewer: refuses when review worktree already exists for this PR" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "already exists"
 }
@@ -192,7 +195,7 @@ teardown() {
   # opens on old code with only a stderr warning that --auto dispatch can't
   # see. We model it by creating the branch directly with no worktree.
   git -C "$MAIN_REPO" branch task/review-pr42
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "already exists"
   assert_output --partial "task/review-pr42"
@@ -205,7 +208,7 @@ teardown() {
   # the task/review-prN branch, and the .info file would all be left behind
   # — the concurrent guard would then permanently block re-invocation.
   export STUB_ZELLIJ_NEW_TAB_FAIL=1
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_failure
 
   # All three artifacts should be gone.
@@ -217,7 +220,7 @@ teardown() {
   # The next invocation (with new-tab fixed) must succeed — proves the
   # concurrent guard isn't tripped by leftover state.
   unset STUB_ZELLIJ_NEW_TAB_FAIL
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert [ -d "$WORKTREE_BASE/review-pr42" ]
 }
@@ -227,21 +230,21 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "claude task-reviewer: opens a new zellij tab named review-pr<N>" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "new-tab --name review-pr42"
 }
 
 @test "claude task-reviewer: does NOT rename the current tab in-place" {
   export ZELLIJ=fake-session
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   run stub_calls zellij
   refute_output --partial "rename-tab reviewer"
 }
 
 @test "claude task-reviewer: --no-launch opens tab but does not invoke claude" {
-  run "$TASK_REVIEWER_CLAUDE" 42 --no-launch
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-launch
   assert_success
   assert_output --partial "claude NOT launched"
   run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
@@ -255,13 +258,13 @@ teardown() {
 @test "claude task-reviewer: launches claude /reviewer with PR url (auto by default)" {
   # --auto is the default per PR #139 review — the reviewer prompt's authority
   # boundaries rule out anything destructive, so hands-off dispatch is safe.
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "claude --permission-mode auto \"/reviewer https://github.com/owner/repo/pull/42\""
 }
 
 @test "claude task-reviewer: --no-auto drops back to interactive permission mode" {
-  run "$TASK_REVIEWER_CLAUDE" 42 --no-auto
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-auto
   assert_success
   # No permission-mode flag at all — runs in interactive default.
   run grep -F "permission-mode" "$STUB_CALLS_DIR/zellij.calls"
@@ -269,19 +272,19 @@ teardown() {
 }
 
 @test "claude task-reviewer: explicit --auto stays auto (idempotent with new default)" {
-  run "$TASK_REVIEWER_CLAUDE" 42 --auto
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --auto
   assert_success
   assert_stub_called zellij "claude --permission-mode auto"
 }
 
 @test "claude task-reviewer: --auto propagates TASK_FORCE_AUTO_SUBMIT=1 by default" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
 @test "claude task-reviewer: --no-auto omits TASK_FORCE_AUTO_SUBMIT" {
-  run "$TASK_REVIEWER_CLAUDE" 42 --no-auto
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-auto
   assert_success
   run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
@@ -292,19 +295,19 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "claude task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
 @test "claude task-reviewer: honors pre-set ANTHROPIC_MODEL" {
-  ANTHROPIC_MODEL=claude-opus-4-7 run "$TASK_REVIEWER_CLAUDE" 42
+  ANTHROPIC_MODEL=claude-opus-4-7 AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-opus-4-7"
 }
 
 @test "claude task-reviewer: sets per-PR radio role reviewer-<repo>-pr<N>" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "TASK_FORCE_ROLE=reviewer-${REPO_NAME}-pr42"
 }
@@ -315,49 +318,49 @@ teardown() {
 
 @test "claude task-reviewer: fails outside a git repo" {
   cd /tmp
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "not in a git repo"
 }
 
 @test "claude task-reviewer: --help prints usage and exits 0" {
-  run "$TASK_REVIEWER_CLAUDE" --help
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" --help
   assert_success
   assert_output --partial "Usage:"
   assert_output --partial "task-reviewer <pr-url-or-number>"
 }
 
 @test "claude task-reviewer: -h prints usage" {
-  run "$TASK_REVIEWER_CLAUDE" -h
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" -h
   assert_success
   assert_output --partial "Usage:"
 }
 
 @test "claude task-reviewer: unknown flag errors" {
-  run "$TASK_REVIEWER_CLAUDE" 42 --bogus
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --bogus
   assert_failure
   assert_output --partial "unknown flag"
 }
 
 # ===========================================================================
-# Per-loadout parity: jira / notion / local (claude variants byte-identical)
+# Per-loadout parity: jira / notion / local (same canonical body, AW_IMPL-pinned)
 # ===========================================================================
 
 @test "claude-jira task-reviewer: PR by number opens review tab" {
-  run "$TASK_REVIEWER_JIRA" 42
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "new-tab --name review-pr42"
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
 @test "claude-jira task-reviewer: --help" {
-  run "$TASK_REVIEWER_JIRA" --help
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" --help
   assert_success
   assert_output --partial "Usage:"
 }
 
 @test "claude-jira task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  run "$TASK_REVIEWER_JIRA" 42
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
@@ -365,7 +368,7 @@ teardown() {
 # #144: jira loadout must accept a Jira issue key as opaque 2nd-arg and pass
 # it through to /reviewer verbatim (no GitHub URL synthesis).
 @test "claude-jira task-reviewer: passes Jira issue key through to /reviewer (#144)" {
-  run "$TASK_REVIEWER_JIRA" 42 PROJ-123
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42 PROJ-123
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 PROJ-123"
 }
@@ -387,7 +390,7 @@ teardown() {
 # to the `set` builtin and never reach `claude` (radio routing /
 # model selection / AUTO_SUBMIT all dead).
 @test "claude-jira task-reviewer: SPEC_IDENTIFIER with '!' lands escaped; cmd disables histexpand (#144 round-2 + round-5)" {
-  run "$TASK_REVIEWER_JIRA" 42 'PROJ-123!v2'
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42 'PROJ-123!v2'
   assert_success
   # printf %q on bash 3.2 (macOS default) renders `PROJ-123!v2` as
   # `PROJ-123\!v2`. The escape is what we want — the child shell sees
@@ -400,7 +403,7 @@ teardown() {
 # Without printf %q, the child `bash -ic` shell would expand `$HOME` inside
 # the double-quoted `/reviewer ...` payload before /reviewer saw the arg.
 @test "claude-jira task-reviewer: SPEC_IDENTIFIER with '\$' lands escaped (#144 round-5)" {
-  run "$TASK_REVIEWER_JIRA" 42 '$HOME-test'
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42 '$HOME-test'
   assert_success
   # printf %q renders `$HOME-test` as `\$HOME-test`. The escape stops the
   # child shell from expanding `$HOME`.
@@ -410,7 +413,7 @@ teardown() {
 # #144 round-5: SPEC_IDENTIFIER containing `$(...)` command-substitution
 # syntax must reach /reviewer un-expanded.
 @test "claude-jira task-reviewer: SPEC_IDENTIFIER with '\$(...)' lands escaped (#144 round-5)" {
-  run "$TASK_REVIEWER_JIRA" 42 'PROJ-$(date)'
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42 'PROJ-$(date)'
   assert_success
   # printf %q renders `PROJ-$(date)` as `PROJ-\$\(date\)`. The escapes
   # stop the child shell from executing `date`.
@@ -419,9 +422,9 @@ teardown() {
 
 @test "claude-gh task-reviewer: assembled command disables histexpand (#144 round-2)" {
   # Same defense applies on the claude-gh path even though SPEC_IDENTIFIER
-  # there is a GitHub issues URL (no `!`) — the 4 dispatcher bodies stay
-  # byte-identical, and `set +H` is cheap and harmless on gh.
-  run "$TASK_REVIEWER_CLAUDE" 42
+  # there is a GitHub issues URL (no `!`) — the body is shared across the
+  # claude loadouts, and `set +H` is cheap and harmless on gh.
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "set +H;"
 }
@@ -432,7 +435,7 @@ teardown() {
 # bash scoped `VAR=val set +H;` to the builtin only. This test pins the
 # correct ordering — `set +H` first, then env, then claude.
 @test "claude task-reviewer: 'set +H' precedes RADIO_ENV_PREFIX so env vars reach claude (#144 round-3)" {
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   # Extract the assembled command string from the most recent zellij
   # new-tab call. It's the last token after `--` on the line.
@@ -463,7 +466,7 @@ teardown() {
 # of what's in the body.
 @test "claude-jira task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
   export GH_STUB_PR_BODY="Closes #38"
-  run "$TASK_REVIEWER_JIRA" 42
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42
   assert_success
   # /reviewer must receive only the PR URL, not a synthesized GitHub issues URL.
   run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
@@ -471,7 +474,7 @@ teardown() {
 }
 
 @test "claude-jira task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
-  run "$TASK_REVIEWER_JIRA" 42
+  AW_IMPL=claude-jira run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "No spec identifier passed"
   assert_output --partial "auto-detect is GitHub-only"
@@ -479,20 +482,20 @@ teardown() {
 }
 
 @test "claude-notion task-reviewer: PR by number opens review tab" {
-  run "$TASK_REVIEWER_NOTION" 42
+  AW_IMPL=claude-notion run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "new-tab --name review-pr42"
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
 @test "claude-notion task-reviewer: --help" {
-  run "$TASK_REVIEWER_NOTION" --help
+  AW_IMPL=claude-notion run "$TASK_REVIEWER" --help
   assert_success
   assert_output --partial "Usage:"
 }
 
 @test "claude-notion task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  run "$TASK_REVIEWER_NOTION" 42
+  AW_IMPL=claude-notion run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
@@ -500,21 +503,21 @@ teardown() {
 # #144: notion loadout must accept a Notion page URL as opaque 2nd-arg.
 @test "claude-notion task-reviewer: passes Notion page URL through to /reviewer (#144)" {
   local notion_url="https://www.notion.so/myws/Spec-Page-1234abcd"
-  run "$TASK_REVIEWER_NOTION" 42 "$notion_url"
+  AW_IMPL=claude-notion run "$TASK_REVIEWER" 42 "$notion_url"
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 $notion_url"
 }
 
 @test "claude-notion task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
   export GH_STUB_PR_BODY="Fixes #38"
-  run "$TASK_REVIEWER_NOTION" 42
+  AW_IMPL=claude-notion run "$TASK_REVIEWER" 42
   assert_success
   run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
 @test "claude-notion task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
-  run "$TASK_REVIEWER_NOTION" 42
+  AW_IMPL=claude-notion run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "No spec identifier passed"
   assert_output --partial "auto-detect is GitHub-only"
@@ -525,41 +528,41 @@ teardown() {
 }
 
 @test "claude-local task-reviewer: PR by number opens review tab" {
-  run "$TASK_REVIEWER_LOCAL" 42
+  AW_IMPL=claude-local run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "new-tab --name review-pr42"
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
 @test "claude-local task-reviewer: --help" {
-  run "$TASK_REVIEWER_LOCAL" --help
+  AW_IMPL=claude-local run "$TASK_REVIEWER" --help
   assert_success
   assert_output --partial "Usage:"
 }
 
 @test "claude-local task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
-  run "$TASK_REVIEWER_LOCAL" 42
+  AW_IMPL=claude-local run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
 }
 
 # #144: local loadout must accept a local task slug as opaque 2nd-arg.
 @test "claude-local task-reviewer: passes local task slug through to /reviewer (#144)" {
-  run "$TASK_REVIEWER_LOCAL" 42 042-add-login
+  AW_IMPL=claude-local run "$TASK_REVIEWER" 42 042-add-login
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 042-add-login"
 }
 
 @test "claude-local task-reviewer: ignores GitHub Closes/Fixes in PR body — diff-only without 2nd arg (#144)" {
   export GH_STUB_PR_BODY="Resolves #38"
-  run "$TASK_REVIEWER_LOCAL" 42
+  AW_IMPL=claude-local run "$TASK_REVIEWER" 42
   assert_success
   run grep -F "/reviewer https://github.com/owner/repo/pull/42 https" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
 @test "claude-local task-reviewer: emits 'GitHub-only' advisory when no 2nd arg (#144)" {
-  run "$TASK_REVIEWER_LOCAL" 42
+  AW_IMPL=claude-local run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "No spec identifier passed"
   assert_output --partial "auto-detect is GitHub-only"
@@ -574,7 +577,7 @@ teardown() {
 # the non-gh "auto-detect is GitHub-only" one (regression for the gh branch).
 @test "claude-gh task-reviewer: 'no spec issue' advisory keeps the original GitHub-flavored copy (#144 regression)" {
   export GH_STUB_PR_BODY="Just some prose, no spec link."
-  run "$TASK_REVIEWER_CLAUDE" 42
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "No spec issue associated"
   assert_output --partial "no Closes/Fixes in body"
@@ -672,13 +675,13 @@ teardown() {
 }
 
 # ===========================================================================
-# Dispatcher routing (preserved from previous suite)
+# Impl routing via workflow-doc auto-detection (no AW_IMPL pin)
 # ===========================================================================
 
 @test "top-level task-reviewer: dispatches to claude-gh variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/gh-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
@@ -686,7 +689,7 @@ teardown() {
 @test "top-level task-reviewer: dispatches to kiro-gh variant" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/gh-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent reviewer"
 }
@@ -694,7 +697,7 @@ teardown() {
 @test "top-level task-reviewer: dispatches to claude-jira variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/jira-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
@@ -702,7 +705,7 @@ teardown() {
 @test "top-level task-reviewer: dispatches to claude-notion variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
@@ -710,13 +713,13 @@ teardown() {
 @test "top-level task-reviewer: dispatches to claude-local variant" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/local-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42"
 }
 
 @test "top-level task-reviewer: errors cleanly without a workflow doc" {
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "no agentic-workflow impl configured"
 }
@@ -724,7 +727,7 @@ teardown() {
 @test "top-level task-reviewer: errors cleanly for impls without a reviewer variant" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42
+  run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "task-reviewer is not available for impl"
 }
@@ -732,7 +735,7 @@ teardown() {
 @test "top-level task-reviewer: forwards positional + flags through to loadout" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/gh-workflow.md"
-  run "$TASK_REVIEWER_DISPATCHER" 42 38 --auto
+  run "$TASK_REVIEWER" 42 38 --auto
   assert_success
   assert_stub_called zellij "/reviewer https://github.com/owner/repo/pull/42 https://github.com/owner/repo/issues/38"
   assert_stub_called zellij "claude --permission-mode auto"

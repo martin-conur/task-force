@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# region:body
 # radio — tiny mailbox + zellij wake-up CLI for PM <-> worker handoff.
 # See issue #63 for design.
 set -euo pipefail
@@ -779,4 +778,3 @@ case "$sub" in
   -h|--help)   usage 0 ;;
   *) echo "radio: unknown subcommand '$sub'" >&2; usage 1 ;;
 esac
-# endregion:body

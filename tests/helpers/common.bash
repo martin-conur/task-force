@@ -37,16 +37,13 @@ KIRO_LOCAL_TASK_DONE="$REPO_ROOT_REAL/kiro-local/bin/task-done"
 KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
 KIRO_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/kiro-local/bin/task-board"
 KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
-RADIO="$REPO_ROOT_REAL/claude-gh/bin/radio"
-TASK_PM_CLAUDE="$REPO_ROOT_REAL/claude-gh/bin/task-pm"
-TASK_PM_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-pm"
-TASK_PM_DISPATCHER="$REPO_ROOT_REAL/bin/task-pm"
-TASK_REVIEWER_CLAUDE="$REPO_ROOT_REAL/claude-gh/bin/task-reviewer"
-TASK_REVIEWER_JIRA="$REPO_ROOT_REAL/claude-jira/bin/task-reviewer"
-TASK_REVIEWER_NOTION="$REPO_ROOT_REAL/claude-notion/bin/task-reviewer"
-TASK_REVIEWER_LOCAL="$REPO_ROOT_REAL/claude-local/bin/task-reviewer"
+# radio / task-pm / task-reviewer are canonical root binaries (#170). Tests
+# pin a loadout by prefixing `AW_IMPL=<impl>` on the `run` invocation; the
+# kiro-gh task-reviewer is still a per-loadout file (kiro parity is #146).
+RADIO="$REPO_ROOT_REAL/bin/radio"
+TASK_PM="$REPO_ROOT_REAL/bin/task-pm"
+TASK_REVIEWER="$REPO_ROOT_REAL/bin/task-reviewer"
 TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"
-TASK_REVIEWER_DISPATCHER="$REPO_ROOT_REAL/bin/task-reviewer"
 
 # Creates a temp directory with a git repo, sets up $MAIN_REPO,
 # $REPO_NAME, and $WORKTREE_BASE.

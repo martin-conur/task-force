@@ -20,7 +20,7 @@ ln -sf "$SCRIPT_DIR/../bin/task-pm" ~/.local/bin/task-pm
 echo "  ✓ Script: task-pm (shared dispatcher)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-reviewer" ~/.local/bin/task-reviewer
 echo "  ✓ Script: task-reviewer (shared dispatcher)"; sleep 0.05
-ln -sf "$SCRIPT_DIR/bin/radio" ~/.local/bin/radio
+ln -sf "$SCRIPT_DIR/../bin/radio" ~/.local/bin/radio
 echo "  ✓ Script: radio (PM↔worker mailbox CLI)"; sleep 0.05
 
 # Ensure ~/.local/bin is on PATH

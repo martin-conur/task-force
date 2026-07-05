@@ -40,9 +40,12 @@ teardown() {
   assert [ -L "$HOME/.local/bin/task-board" ]
 }
 
-@test "radio symlink target is the loadout's own bin/radio" {
+@test "radio symlink target is the canonical root bin/radio" {
   bash "$REPO_ROOT_REAL/claude-gh/install.sh" >/dev/null
-  local target
+  local target resolved
   target=$(readlink "$HOME/.local/bin/radio")
-  [[ "$target" == *"claude-gh/bin/radio" ]]
+  # The installer links $SCRIPT_DIR/../bin/radio — resolve the ../ and pin
+  # the physical path to the single canonical copy (#170).
+  resolved=$(cd "$(dirname "$target")" && pwd)/$(basename "$target")
+  [[ "$resolved" == "$REPO_ROOT_REAL/bin/radio" ]]
 }

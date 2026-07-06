@@ -498,16 +498,16 @@ EOF
   }
 }
 EOF
+  # A single run both preserves the variant and warns — the stray check runs
+  # after every merge, so no second --force pass is needed to see it.
   run "$CLAUDE_GH_TASK_INIT"
   assert_success
-  # The variant is preserved untouched (never clobber a user customization)...
-  run jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
-  assert_output "radio busy && ./notify.sh"
-  # ...but task-init must not pretend everything is fine.
-  run "$CLAUDE_GH_TASK_INIT" --force
   assert_output --partial "WARNING"
   assert_output --partial "radio busy && ./notify.sh"
   assert_output --partial "radio prompt-hook"
+  # The variant is preserved untouched (never clobber a user customization).
+  run jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio busy && ./notify.sh"
 }
 
 @test "matcher-only user Stop entry is not given an empty hooks array by the upgrade (#172)" {

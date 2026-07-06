@@ -248,6 +248,7 @@ _radio_install_hooks() {
   require_jq_1_6 || exit 1
 # endregion:require-jq-call
 
+# region:radio-hook-cmds
   # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
   # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
   # session file without rewiring task-init. Plain `claude`/task-pm/task-work
@@ -274,9 +275,11 @@ _radio_install_hooks() {
   [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
 
   local tmp="${settings_file}.tmp.$$"
+# endregion:radio-hook-cmds
   # Seeded read-only `gh` patterns auto-approve PM/planner/worker tracker reads;
   # mutations (gh issue edit, gh pr merge, gh project item-edit, …) are
   # deliberately excluded so they remain confirmation-gated.
+# region:radio-hooks-jq-merge
   jq \
     --arg sess "$register_cmd" \
     --arg ups  "$prompt_cmd" \
@@ -314,6 +317,7 @@ _radio_install_hooks() {
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "AskUserQuestion"; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "ExitPlanMode";    $awaiting)
     | .hooks.PostToolUse       = add_radio(.hooks.PostToolUse;       $post)
+# endregion:radio-hooks-jq-merge
     | .permissions //= {}
     | .permissions.allow //= []
     | .permissions.allow = (
@@ -347,28 +351,30 @@ _radio_install_hooks() {
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
 
+# region:radio-stray-hook-verify
   # Post-merge verification (#172 review; extended to UserPromptSubmit in
   # #164): upgrade_cmd only rewrites the byte-exact legacy command. Any other
   # radio-prefixed command on these events (trailing whitespace, `radio ready
   # && radio check && ./notify.sh`, plain `radio ready`) is skipped by the
   # upgrade AND blocks add_radio from installing the new one — the repo would
   # keep a stale hook while task-init prints success. Detect and warn loudly
-  # instead.
+  # instead. stray() is per-event so the next migrated event is one line here.
   local stray
-  stray=$(jq -r --arg stop "$stop_cmd" --arg prompt "$prompt_cmd" \
-    '[(.hooks.Stop // [] | .[] | .hooks // [] | .[] | .command // ""
-       | select(startswith("radio ") and . != $stop)
-       | "Stop: \(.) — replace with: \($stop)"),
-      (.hooks.UserPromptSubmit // [] | .[] | .hooks // [] | .[] | .command // ""
-       | select(startswith("radio ") and . != $prompt)
-       | "UserPromptSubmit: \(.) — replace with: \($prompt)")] | .[]' \
-    "$settings_file")
+  stray=$(jq -r --arg stop "$stop_cmd" --arg prompt "$prompt_cmd" '
+    def stray(arr; evt; expected):
+      [arr // [] | .[] | .hooks // [] | .[] | .command // ""
+       | select(startswith("radio ") and . != expected)
+       | evt + ": \(.) — replace with: \(expected)"];
+    (stray(.hooks.Stop; "Stop"; $stop)
+     + stray(.hooks.UserPromptSubmit; "UserPromptSubmit"; $prompt)) | .[]
+    ' "$settings_file")
   if [[ -n "$stray" ]]; then
     {
       echo "WARNING: $settings_file has a radio hook task-init could not upgrade:"
       printf '  %s\n' "$stray"
     } >&2
   fi
+# endregion:radio-stray-hook-verify
   echo "✓ Merged radio hooks + gh read allow-list into $settings_file"
 }
 

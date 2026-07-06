@@ -404,8 +404,9 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 | `SessionStart`    | `radio register`              | Claims the role's session file for this tab    |
 | `UserPromptSubmit`| `radio prompt-hook`           | Marks the session busy — and surfaces any unread inbox into the model's context (its stdout is injected, unlike Stop's) |
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
+| `PostToolUse`     | `radio busy`                  | State flip only — deliberately NOT `prompt-hook`; it fires after every tool call, and the inbox summary belongs at prompt time, not sprayed mid-turn |
 
-For the kiro loadouts the same logic lives in `.kiro/hooks/` and runs off Kiro's equivalent triggers.
+For the kiro loadouts the equivalent wiring lives in `.kiro/hooks/` and runs off Kiro's triggers — except `userPromptSubmit`, which keeps plain `radio busy` (no context-injection mechanism there; revisit with #146).
 
 ### Idle workers don't auto-act
 

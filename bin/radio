@@ -81,6 +81,12 @@ _hook_role_gate() {
   [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0
   if ! _validate_role "$TASK_FORCE_ROLE" 2>/dev/null; then
     _log "hook: invalid role '$TASK_FORCE_ROLE' — no-op"
+    # A human typing `radio busy` at a shell shouldn't have their toggle
+    # silently ignored — note it on stderr (still exit 0). Hook invocations
+    # pipe stdin, so they stay silent.
+    if [[ -t 0 ]]; then
+      echo "radio: invalid role '$TASK_FORCE_ROLE' — ignoring (hook no-op)" >&2
+    fi
     exit 0
   fi
   return 0
@@ -720,13 +726,19 @@ _inbox_summary() {
 #
 # Fail open on EVERY path (#164 notes / #173 review): a nonzero exit here
 # blocks and erases the user's typed prompt, which is strictly worse than
-# any radio bookkeeping we could lose. Hence the _hook_role_gate, the
-# summary-before-state-flip ordering (stdout is the payload; the busy paint
-# is best-effort), and the `|| true` on _update_state.
+# any radio bookkeeping we could lose. Hence the _hook_role_gate and the
+# `|| true` on _update_state.
 cmd_prompt_hook() {
   _hook_role_gate
 
-  # Count first, pure bash — this hook fires on every user prompt (the
+  # Busy FIRST, before any inbox work — truthful-state doctrine (#172): the
+  # turn is starting now, and every instruction executed while the session
+  # file still says idle is a window for cmd_send to write-chars into the
+  # running pane. The `|| true` alone provides the fail-open behavior;
+  # deferring the flip would buy nothing (#173 supplemental).
+  _update_state busy || true
+
+  # Count next, pure bash — this hook fires on every user prompt (the
   # hottest path in the system) and the common case is an empty inbox:
   # nothing spawned beyond _update_state, zero stdout.
   local inbox n=0
@@ -737,9 +749,7 @@ cmd_prompt_hook() {
     shopt -u nullglob
     n=${#msgs[@]}
   fi
-
   if (( n == 0 )); then
-    _update_state busy || true
     return 0
   fi
 
@@ -749,7 +759,6 @@ cmd_prompt_hook() {
   done < <(_inbox_summary "${msgs[@]}")
   n=${#entries[@]}   # a concurrent radio read may have consumed some
   if (( n == 0 )); then
-    _update_state busy || true
     return 0
   fi
   for entry in "${entries[@]}"; do
@@ -762,7 +771,6 @@ cmd_prompt_hook() {
   # shellcheck disable=SC2016
   printf '[radio] %s unread message(s): %s. Process with `radio check` / `radio read <id>` before or after the user'\''s request, as appropriate.\n' \
     "$n" "$summary"
-  _update_state busy || true
   _log "prompt-hook: surfaced $n unread message(s) role=$TASK_FORCE_ROLE"
 }
 

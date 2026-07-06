@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "radio ready && radio check"
+            "command": "radio stop-hook"
           }
         ]
       }

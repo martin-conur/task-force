@@ -22,6 +22,9 @@ Usage:
   radio stop-hook                        Stop-hook entrypoint: empty inbox -> mark idle; unread
                                          messages -> mark busy + emit block JSON so the agent
                                          continues and drains them (reads hook payload on stdin)
+  radio prompt-hook                      UserPromptSubmit-hook entrypoint: mark busy; if the
+                                         inbox has unread messages, print a one-line summary
+                                         (injected into the model's context by Claude Code)
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
 
@@ -617,6 +620,49 @@ cmd_stop_hook() {
   _log "stop-hook: blocked stop — $n unread message(s) role=$TASK_FORCE_ROLE"
 }
 
+# UserPromptSubmit-hook entrypoint (#164). Unlike Stop, a UserPromptSubmit
+# hook's stdout IS injected into the model's context — which makes it the
+# reliable delivery path for a backlog that queued while the recipient was
+# idle and every send-time zellij wake failed (no writable pane, stale
+# TAB_ID, missing session file: an idle agent fires no hooks, so those
+# messages dangle until something else wakes it). Marks the role busy exactly
+# like the `radio busy` hook it replaces, then prints a compact summary of
+# any unread inbox. Empty inbox prints nothing — zero context noise.
+cmd_prompt_hook() {
+  _silent_exit_if_no_role
+  _update_state busy
+
+  local inbox
+  inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
+  [[ -d "$inbox" ]] || return 0
+  shopt -s nullglob
+  local msgs=("$inbox"/*.md)
+  shopt -u nullglob
+  local n=${#msgs[@]}
+  (( n > 0 )) || return 0
+
+  local f summary="" entry id from intent pr issue
+  for f in "${msgs[@]}"; do
+    id=$(basename "$f" .md)
+    from=$(awk -F': ' '/^from:/{print $2; exit}' "$f")
+    intent=$(awk -F': ' '/^intent:/{print $2; exit}' "$f")
+    pr=$(awk -F': ' '/^pr:/{print $2; exit}' "$f")
+    issue=$(awk -F': ' '/^issue:/{print $2; exit}' "$f")
+    entry="$id from=$from intent=$intent"
+    [[ -n "$pr"    ]] && entry+=" pr=$pr"
+    [[ -n "$issue" ]] && entry+=" issue=$issue"
+    [[ -n "$summary" ]] && summary+=" | "
+    summary+="$entry"
+  done
+
+  # The backticks are literal markdown for the agent reading the injected
+  # context, not command substitution.
+  # shellcheck disable=SC2016
+  printf '[radio] %s unread message(s): %s. Process with `radio check` / `radio read <id>` before or after the user'\''s request, as appropriate.\n' \
+    "$n" "$summary"
+  _log "prompt-hook: surfaced $n unread message(s) role=$TASK_FORCE_ROLE"
+}
+
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
   local body_set=0
@@ -855,6 +901,7 @@ case "$sub" in
   busy)        cmd_busy ;;
   awaiting)    cmd_awaiting ;;
   stop-hook)   cmd_stop_hook ;;
+  prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
   -h|--help)   usage 0 ;;

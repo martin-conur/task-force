@@ -388,6 +388,7 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 | `radio register` / `radio unregister` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`) |
 | `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
 | `radio stop-hook`                   | Stop-hook entrypoint: empty inbox → mark idle; unread messages → mark busy and emit Stop-hook block JSON so the agent continues and drains them |
+| `radio prompt-hook`                 | UserPromptSubmit-hook entrypoint: mark busy; if the inbox has unread messages, print a one-line summary that Claude Code injects into the model's context |
 | `radio orphans`                     | List session files whose heartbeat is >1h stale |
 
 ### How wake-up works
@@ -401,14 +402,14 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 | Hook              | Command                       | Why                                            |
 |-------------------|-------------------------------|------------------------------------------------|
 | `SessionStart`    | `radio register`              | Claims the role's session file for this tab    |
-| `UserPromptSubmit`| `radio busy`                  | Marks the session busy while a turn is running |
+| `UserPromptSubmit`| `radio prompt-hook`           | Marks the session busy — and surfaces any unread inbox into the model's context (its stdout is injected, unlike Stop's) |
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 
 For the kiro loadouts the same logic lives in `.kiro/hooks/` and runs off Kiro's equivalent triggers.
 
 ### Idle workers don't auto-act
 
-A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). This is deliberate: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body.
+A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body.
 
 ### Cleanup
 

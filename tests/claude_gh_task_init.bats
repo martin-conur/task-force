@@ -452,6 +452,64 @@ EOF
   assert_output --partial "radio stop-hook"
 }
 
+@test "UserPromptSubmit hook calls 'radio prompt-hook' (#164)" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio prompt-hook"
+}
+
+@test "legacy UserPromptSubmit hook 'radio busy' is upgraded in place; PostToolUse is not (#164)" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "radio busy"}]}
+    ],
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "radio busy"}]}
+    ]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  refute_output --partial "WARNING"
+  # Rewritten in place — no duplicate entry, no stale command left behind.
+  run jq -r '.hooks.UserPromptSubmit | length' "$TARGET_DIR/.claude/settings.json"
+  assert_output "1"
+  run jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio prompt-hook"
+  # The upgrade is scoped to UserPromptSubmit — PostToolUse keeps `radio busy`
+  # (its stdout is not injected; the mid-turn state flip is all it's for).
+  run jq -r '.hooks.PostToolUse[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio busy"
+}
+
+@test "non-byte-exact legacy UserPromptSubmit variant is not upgraded — loud warning instead (#164)" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "radio busy && ./notify.sh"}]}
+    ]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  # The variant is preserved untouched (never clobber a user customization)...
+  run jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio busy && ./notify.sh"
+  # ...but task-init must not pretend everything is fine.
+  run "$CLAUDE_GH_TASK_INIT" --force
+  assert_output --partial "WARNING"
+  assert_output --partial "radio busy && ./notify.sh"
+  assert_output --partial "radio prompt-hook"
+}
+
 @test "matcher-only user Stop entry is not given an empty hooks array by the upgrade (#172)" {
   mkdir -p "$TARGET_DIR/.claude"
   cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'

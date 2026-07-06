@@ -223,6 +223,13 @@ _radio_install_hooks() {
   # sessions don't set the env var, so they keep the loadout default ($loadout).
   local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout \${TASK_FORCE_LOADOUT:-$loadout}"
   local busy_cmd="radio busy"
+  # `radio prompt-hook` replaces `radio busy` on UserPromptSubmit (#164): it
+  # still marks the role busy, and additionally prints a one-line summary of
+  # any unread inbox. UserPromptSubmit stdout is injected into the model's
+  # context, so prompting an idle agent surfaces messages whose send-time
+  # zellij wake failed. PostToolUse keeps plain `radio busy` — its stdout is
+  # not injected, and the mid-turn state flip is all it's for.
+  local prompt_cmd="radio prompt-hook"
   # `radio stop-hook` replaces the old `radio ready && radio check` (#163):
   # it marks the role idle AND emits Stop-hook block JSON when the inbox has
   # unread messages, so a busy recipient drains its queue at end of turn
@@ -244,7 +251,8 @@ _radio_install_hooks() {
   # refreshed.
   jq \
     --arg sess "$register_cmd" \
-    --arg ups  "$busy_cmd" \
+    --arg ups  "$prompt_cmd" \
+    --arg post "$busy_cmd" \
     --arg stop "$stop_cmd" \
     --arg endcmd  "$end_cmd" \
     --arg awaiting "$awaiting_cmd" \
@@ -257,26 +265,27 @@ _radio_install_hooks() {
       if (arr // []) | any(((.matcher // "") == mtch) and ((.hooks // []) | any((.command // "") | startswith("radio ")))) then arr
       else (arr // []) + [{matcher: mtch, hooks: [{type: "command", command: cmd}]}]
       end;
-    # One-shot migration (#163): rewrite the legacy Stop command in place so
-    # re-running task-init upgrades existing repos. add_radio alone would see
-    # a "radio " command and leave the stale one behind.
-    def upgrade_stop(arr; cmd):
+    # One-shot migration (#163 Stop, #164 UserPromptSubmit): rewrite the
+    # legacy command in place so re-running task-init upgrades existing
+    # repos. add_radio alone would see a "radio " command and leave the
+    # stale one behind.
+    def upgrade_cmd(arr; old; new):
       (arr // []) | map(
         if has("hooks") then
           .hooks = (.hooks | map(
-            if (.command // "") == "radio ready && radio check" then (.command = cmd) else . end
+            if (.command // "") == old then (.command = new) else . end
           ))
         else . end
       );
     .hooks //= {}
     | .hooks.SessionStart      = add_radio(.hooks.SessionStart;     $sess)
-    | .hooks.UserPromptSubmit  = add_radio(.hooks.UserPromptSubmit; $ups)
-    | .hooks.Stop              = add_radio(upgrade_stop(.hooks.Stop; $stop); $stop)
+    | .hooks.UserPromptSubmit  = add_radio(upgrade_cmd(.hooks.UserPromptSubmit; "radio busy"; $ups); $ups)
+    | .hooks.Stop              = add_radio(upgrade_cmd(.hooks.Stop; "radio ready && radio check"; $stop); $stop)
     | .hooks.SessionEnd        = add_radio(.hooks.SessionEnd;       $endcmd)
     | .hooks.PermissionRequest = add_radio(.hooks.PermissionRequest; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "AskUserQuestion"; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "ExitPlanMode";    $awaiting)
-    | .hooks.PostToolUse       = add_radio(.hooks.PostToolUse;       $ups)
+    | .hooks.PostToolUse       = add_radio(.hooks.PostToolUse;       $post)
     | .permissions //= {}
     | .permissions.allow //= []
     | .permissions.allow = (
@@ -305,22 +314,26 @@ _radio_install_hooks() {
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
 
-  # Post-merge verification (#172 review): upgrade_stop only rewrites the
-  # byte-exact legacy command. Any other radio-prefixed Stop command (trailing
-  # whitespace, `radio ready && radio check && ./notify.sh`, plain
-  # `radio ready`) is skipped by the upgrade AND blocks add_radio from
-  # installing the new one — the repo would keep a dead Stop hook while
-  # task-init prints success. Detect and warn loudly instead.
+  # Post-merge verification (#172 review; extended to UserPromptSubmit in
+  # #164): upgrade_cmd only rewrites the byte-exact legacy command. Any other
+  # radio-prefixed command on these events (trailing whitespace, `radio ready
+  # && radio check && ./notify.sh`, plain `radio ready`) is skipped by the
+  # upgrade AND blocks add_radio from installing the new one — the repo would
+  # keep a stale hook while task-init prints success. Detect and warn loudly
+  # instead.
   local stray
-  stray=$(jq -r --arg stop "$stop_cmd" \
-    '[.hooks.Stop // [] | .[] | .hooks // [] | .[] | .command // ""
-      | select(startswith("radio ") and . != $stop)] | .[]' \
+  stray=$(jq -r --arg stop "$stop_cmd" --arg prompt "$prompt_cmd" \
+    '[(.hooks.Stop // [] | .[] | .hooks // [] | .[] | .command // ""
+       | select(startswith("radio ") and . != $stop)
+       | "Stop: \(.) — replace with: \($stop)"),
+      (.hooks.UserPromptSubmit // [] | .[] | .hooks // [] | .[] | .command // ""
+       | select(startswith("radio ") and . != $prompt)
+       | "UserPromptSubmit: \(.) — replace with: \($prompt)")] | .[]' \
     "$settings_file")
   if [[ -n "$stray" ]]; then
     {
-      echo "WARNING: $settings_file has a radio Stop hook task-init could not upgrade:"
+      echo "WARNING: $settings_file has a radio hook task-init could not upgrade:"
       printf '  %s\n' "$stray"
-      echo "  Replace it manually with: $stop_cmd"
     } >&2
   fi
   echo "✓ Merged radio hooks + Atlassian read allow-list into $settings_file"

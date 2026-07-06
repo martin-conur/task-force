@@ -91,14 +91,38 @@ _queue_message() {
   assert_output "1"
 }
 
-@test "stop-hook still marks idle when it blocks" {
+@test "stop-hook marks busy when it blocks — the agent is about to continue" {
+  # No UserPromptSubmit fires on a hook-forced continuation, so if we painted
+  # idle here cmd_send could write-chars into the running pane mid-drain
+  # (#172 review).
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
-  "$RADIO" busy
   _queue_message
   run bash -c "echo '{}' | '$RADIO' stop-hook"
   assert_success
   run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output "STATE=busy"
+}
+
+@test "stop-hook without jq fails safe: no block, idle, exit 0" {
+  # jq absent means stop_hook_active is unreadable; blocking blind could
+  # re-block on every Stop forever, so stop-hook degrades to queue-only.
+  # Build a PATH of symlinks to everything radio needs, minus jq.
+  local nojq_bin
+  nojq_bin=$(mktemp -d)
+  for cmd in bash cat mkdir mv rm awk grep cut head tr date dirname basename ls sed env; do
+    ln -s "$(command -v $cmd)" "$nojq_bin/$cmd"
+  done
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  "$RADIO" busy
+  _queue_message
+  run bash -c "echo '{}' | env PATH='$nojq_bin' '$RADIO' stop-hook"
+  rm -rf "$nojq_bin"
+  assert_success
+  assert_output ""
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   assert_output "STATE=idle"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "jq unavailable — not blocking"
 }
 
 @test "stop-hook without a stdin payload still blocks on pending mail (manual invocation)" {
@@ -121,6 +145,10 @@ _queue_message() {
   # ... but it still flips STATE to idle.
   run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   assert_output "STATE=idle"
+  # The stranded count is logged — a message arriving during the drain turn
+  # is otherwise invisible until #164/#168 close that path.
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "1 still unread"
 }
 
 # ----- usage string honesty (#163) --------------------------------------------

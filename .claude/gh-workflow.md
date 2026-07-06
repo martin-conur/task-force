@@ -95,10 +95,10 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 | Reviewer | review done, no findings          | `radio send --to pm --intent review-complete-clean --pr <N>`                     |
 | Reviewer | review done, blockers/nits posted | `radio send --to pm --intent review-complete-with-findings --pr <N>`             |
 
-When a worker goes idle, the `Stop` hook runs `radio stop-hook` automatically:
-it marks the role idle and, if messages queued up while the worker was busy,
-blocks the stop so the agent drains them immediately — you don't need to
-invoke it manually.
+When a worker's turn ends, the `Stop` hook runs `radio stop-hook`
+automatically: with an empty inbox it marks the role idle; if messages queued
+up while the worker was busy, it blocks the stop (staying busy) so the agent
+drains them immediately — you don't need to invoke it manually.
 
 Full command form:
 

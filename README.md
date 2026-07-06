@@ -387,11 +387,12 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 | `radio ack <id>`                    | Mark it acknowledged (idempotent — no-op if already processed by a prior `read`) |
 | `radio register` / `radio unregister` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`) |
 | `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
+| `radio stop-hook`                   | Stop-hook entrypoint: empty inbox → mark idle; unread messages → mark busy and emit Stop-hook block JSON so the agent continues and drains them |
 | `radio orphans`                     | List session files whose heartbeat is >1h stale |
 
 ### How wake-up works
 
-`radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. On the recipient's next turn end, the `Stop` hook (`radio ready && radio check`) surfaces the new message. If `STATE=busy`, the message is queued silently — no failed wake attempt, no interrupting the recipient mid-turn.
+`radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. If `STATE=busy`, the message is queued with no wake attempt — no interrupting the recipient mid-turn. Delivery then happens at the end of the recipient's current turn: its `Stop` hook (`radio stop-hook`) sees the non-empty inbox and emits Stop-hook block JSON, which makes Claude Code continue the agent so it drains the queue immediately (`radio check`, then `radio read` each message). A `stop_hook_active` payload never re-blocks, so a drain turn can't loop forever.
 
 ### The hooks that make it work
 
@@ -401,7 +402,7 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 |-------------------|-------------------------------|------------------------------------------------|
 | `SessionStart`    | `radio register`              | Claims the role's session file for this tab    |
 | `UserPromptSubmit`| `radio busy`                  | Marks the session busy while a turn is running |
-| `Stop`            | `radio ready && radio check`  | Marks idle and surfaces any queued messages    |
+| `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 
 For the kiro loadouts the same logic lives in `.kiro/hooks/` and runs off Kiro's equivalent triggers.
 
@@ -464,7 +465,7 @@ Then bumps the project Status field to `In Review` (or keeps it at `In Progress`
 radio send --to pm --intent review-requested --pr 42
 ```
 
-PM's zellij tab gets focused; on its next turn end the `Stop` hook's `radio check` surfaces the ping.
+If PM is idle, its pane is woken with a `radio check`; if PM is mid-turn, the message queues and PM's `Stop` hook (`radio stop-hook`) forces it to drain the ping at the end of that turn.
 
 **6. Worker idles.** The worker stops here. It does **not** run `task-done` yet — cleanup waits for PM's explicit go-ahead in step 8.
 

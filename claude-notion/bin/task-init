@@ -218,9 +218,11 @@ _radio_install_hooks() {
     # a "radio " command and leave the stale one behind.
     def upgrade_stop(arr; cmd):
       (arr // []) | map(
-        .hooks = ((.hooks // []) | map(
-          if (.command // "") == "radio ready && radio check" then (.command = cmd) else . end
-        ))
+        if has("hooks") then
+          .hooks = (.hooks | map(
+            if (.command // "") == "radio ready && radio check" then (.command = cmd) else . end
+          ))
+        else . end
       );
     .hooks //= {}
     | .hooks.SessionStart      = add_radio(.hooks.SessionStart;     $sess)
@@ -258,6 +260,25 @@ _radio_install_hooks() {
       )
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
+
+  # Post-merge verification (#172 review): upgrade_stop only rewrites the
+  # byte-exact legacy command. Any other radio-prefixed Stop command (trailing
+  # whitespace, `radio ready && radio check && ./notify.sh`, plain
+  # `radio ready`) is skipped by the upgrade AND blocks add_radio from
+  # installing the new one — the repo would keep a dead Stop hook while
+  # task-init prints success. Detect and warn loudly instead.
+  local stray
+  stray=$(jq -r --arg stop "$stop_cmd" \
+    '[.hooks.Stop // [] | .[] | .hooks // [] | .[] | .command // ""
+      | select(startswith("radio ") and . != $stop)] | .[]' \
+    "$settings_file")
+  if [[ -n "$stray" ]]; then
+    {
+      echo "WARNING: $settings_file has a radio Stop hook task-init could not upgrade:"
+      printf '  %s\n' "$stray"
+      echo "  Replace it manually with: $stop_cmd"
+    } >&2
+  fi
   echo "✓ Merged radio hooks + Notion read allow-list into $settings_file"
 }
 

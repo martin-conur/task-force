@@ -421,11 +421,52 @@ EOF
 EOF
   run "$CLAUDE_GH_TASK_INIT"
   assert_success
+  refute_output --partial "WARNING"
   # Rewritten in place — no duplicate entry, no stale command left behind.
   run jq -r '.hooks.Stop | length' "$TARGET_DIR/.claude/settings.json"
   assert_output "1"
   run jq -r '.hooks.Stop[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
   assert_output "radio stop-hook"
+}
+
+@test "non-byte-exact legacy Stop variant is not upgraded — loud warning instead (#172)" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "radio ready && radio check && ./notify.sh"}]}
+    ]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  # The variant is preserved untouched (never clobber a user customization)...
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio ready && radio check && ./notify.sh"
+  # ...but task-init must not pretend everything is fine.
+  run "$CLAUDE_GH_TASK_INIT" --force
+  assert_output --partial "WARNING"
+  assert_output --partial "radio ready && radio check && ./notify.sh"
+  assert_output --partial "radio stop-hook"
+}
+
+@test "matcher-only user Stop entry is not given an empty hooks array by the upgrade (#172)" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {"matcher": "user-thing"}
+    ]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -c '.hooks.Stop[] | select(.matcher == "user-thing")' "$TARGET_DIR/.claude/settings.json"
+  assert_output '{"matcher":"user-thing"}'
 }
 
 @test "idempotent re-run does not duplicate radio hook entries" {

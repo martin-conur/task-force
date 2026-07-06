@@ -19,8 +19,8 @@ Usage:
   radio ready                            mark this role idle
   radio busy                             mark this role busy
   radio awaiting                         mark this role awaiting user input
-  radio stop-hook                        Stop-hook entrypoint: mark idle; if the inbox has
-                                         unread messages, emit block JSON so the agent
+  radio stop-hook                        Stop-hook entrypoint: empty inbox -> mark idle; unread
+                                         messages -> mark busy + emit block JSON so the agent
                                          continues and drains them (reads hook payload on stdin)
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
@@ -549,28 +549,12 @@ cmd_awaiting() { _silent_exit_if_no_role; _update_state awaiting; }
 cmd_stop_hook() {
   _silent_exit_if_no_role
 
-  # Claude Code pipes the Stop-hook JSON payload on stdin. Manual invocations
-  # from a terminal carry no payload; treat both "no payload" and "no jq" as
-  # stop_hook_active=false. `// empty` maps false/null to "", so only a
-  # literal true suppresses the block.
-  local payload="" active=""
-  if [[ ! -t 0 ]]; then
-    payload=$(cat 2>/dev/null || true)
-  fi
-  if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
-    active=$(printf '%s' "$payload" | jq -r '.stop_hook_active // empty' 2>/dev/null || true)
-  fi
-
-  _update_state idle
-
-  # stop_hook_active=true means this Stop event was itself caused by a prior
-  # block from this hook. Blocking again would loop the agent forever — the
-  # agent already got one forced continuation to drain the inbox; let it stop.
-  if [[ "$active" == "true" ]]; then
-    _log "stop-hook: stop_hook_active=true — allowing stop role=$TASK_FORCE_ROLE"
-    return 0
-  fi
-
+  # Count first, pure bash — the common case is an empty inbox, and this
+  # ordering keeps the cat+jq spawns (below) entirely off that fast path
+  # (#172 review). It also shrinks the code that runs before the state flip,
+  # so a set -e failure mid-function is less likely to surface as a non-zero
+  # exit — which the Stop-hook contract interprets as "block, with raw
+  # stderr as the reason".
   local inbox n=0
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
   if [[ -d "$inbox" ]]; then
@@ -579,8 +563,56 @@ cmd_stop_hook() {
     shopt -u nullglob
     n=${#msgs[@]}
   fi
-  (( n > 0 )) || return 0
 
+  if (( n == 0 )); then
+    _update_state idle
+    return 0
+  fi
+
+  # Fail SAFE without jq (#172 review): we can't read stop_hook_active, and
+  # blocking blind could re-block on every Stop forever. jq-less hosts never
+  # get zellij wakes either, so degrading to the old queue-only behavior is
+  # consistent.
+  if ! command -v jq >/dev/null 2>&1; then
+    _log "stop-hook: jq unavailable — not blocking ($n unread) role=$TASK_FORCE_ROLE"
+    _update_state idle
+    return 0
+  fi
+
+  # Claude Code pipes the Stop-hook JSON payload on stdin. Manual invocations
+  # from a terminal carry no payload — treat that (and a malformed payload)
+  # as stop_hook_active=false. `// empty` maps false/null to "", so only a
+  # literal true suppresses the block.
+  local payload="" active=""
+  if [[ ! -t 0 ]]; then
+    payload=$(cat 2>/dev/null || true)
+  fi
+  if [[ -n "$payload" ]]; then
+    active=$(printf '%s' "$payload" | jq -r '.stop_hook_active // empty' 2>/dev/null || true)
+  fi
+
+  # stop_hook_active=true means this Stop event was itself caused by a prior
+  # block from this hook. Blocking again would loop the agent forever — the
+  # agent already got one forced continuation to drain the inbox; let it
+  # stop. Known gap: a message that arrives DURING the drain turn (state=busy
+  # → cmd_send queues silently) strands here until the next wake — logged for
+  # visibility; #164 (prompt-hook injection) and #168 (drain-on-register)
+  # close that path from other directions.
+  if [[ "$active" == "true" ]]; then
+    _log "stop-hook: stop_hook_active=true — allowing stop ($n still unread) role=$TASK_FORCE_ROLE"
+    _update_state idle
+    return 0
+  fi
+
+  # We're about to block, so the agent WILL continue — busy is the truthful
+  # state. Painting idle here would open a window (no UserPromptSubmit fires
+  # on a hook-forced continuation) where cmd_send sees idle and write-chars
+  # into a running pane mid-drain (#172 review).
+  _update_state busy
+
+  # The backticks in the reason are literal markdown for the agent reading
+  # the block message, not command substitution.
+  # shellcheck disable=SC2016
   printf '{"decision": "block", "reason": "radio: %s unread message(s) — run `radio check`, process each with `radio read <id>`, act on the intents, then stop."}\n' "$n"
   _log "stop-hook: blocked stop — $n unread message(s) role=$TASK_FORCE_ROLE"
 }

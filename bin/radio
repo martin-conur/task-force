@@ -16,9 +16,12 @@ Usage:
   radio read   [--peek|--no-ack] <id>    print body; by default also move inbox/<id>.md -> processed/
   radio ack    <id>                      move message to processed/ (idempotent: no-op if already processed)
   radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
-  radio ready                            mark this role idle (and process pending)
+  radio ready                            mark this role idle
   radio busy                             mark this role busy
   radio awaiting                         mark this role awaiting user input
+  radio stop-hook                        Stop-hook entrypoint: mark idle; if the inbox has
+                                         unread messages, emit block JSON so the agent
+                                         continues and drains them (reads hook payload on stdin)
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
 
@@ -536,6 +539,52 @@ cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
 cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
 cmd_awaiting() { _silent_exit_if_no_role; _update_state awaiting; }
 
+# Stop-hook entrypoint (#163). `radio send` makes exactly one wake attempt, at
+# send time — a message sent while the recipient is busy/awaiting queues with
+# zero redelivery, and the old Stop hook (`radio ready && radio check`)
+# couldn't fix that: Stop-hook stdout goes to the hook subshell, never to the
+# model. Instead, when the inbox is non-empty we emit Claude Code's
+# `{"decision": "block", ...}` JSON on stdout (with exit 0), which forces the
+# agent to continue and drain the queue the moment its turn ends.
+cmd_stop_hook() {
+  _silent_exit_if_no_role
+
+  # Claude Code pipes the Stop-hook JSON payload on stdin. Manual invocations
+  # from a terminal carry no payload; treat both "no payload" and "no jq" as
+  # stop_hook_active=false. `// empty` maps false/null to "", so only a
+  # literal true suppresses the block.
+  local payload="" active=""
+  if [[ ! -t 0 ]]; then
+    payload=$(cat 2>/dev/null || true)
+  fi
+  if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
+    active=$(printf '%s' "$payload" | jq -r '.stop_hook_active // empty' 2>/dev/null || true)
+  fi
+
+  _update_state idle
+
+  # stop_hook_active=true means this Stop event was itself caused by a prior
+  # block from this hook. Blocking again would loop the agent forever — the
+  # agent already got one forced continuation to drain the inbox; let it stop.
+  if [[ "$active" == "true" ]]; then
+    _log "stop-hook: stop_hook_active=true — allowing stop role=$TASK_FORCE_ROLE"
+    return 0
+  fi
+
+  local inbox n=0
+  inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
+  if [[ -d "$inbox" ]]; then
+    shopt -s nullglob
+    local msgs=("$inbox"/*.md)
+    shopt -u nullglob
+    n=${#msgs[@]}
+  fi
+  (( n > 0 )) || return 0
+
+  printf '{"decision": "block", "reason": "radio: %s unread message(s) — run `radio check`, process each with `radio read <id>`, act on the intents, then stop."}\n' "$n"
+  _log "stop-hook: blocked stop — $n unread message(s) role=$TASK_FORCE_ROLE"
+}
+
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
   local body_set=0
@@ -773,6 +822,7 @@ case "$sub" in
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
   awaiting)    cmd_awaiting ;;
+  stop-hook)   cmd_stop_hook ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
   -h|--help)   usage 0 ;;

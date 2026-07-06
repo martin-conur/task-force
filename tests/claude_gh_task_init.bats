@@ -398,7 +398,34 @@ EOF
   assert_output "2"
   run jq -r '.hooks.Stop[].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
   assert_output --partial "./scripts/pre-tool-lint.sh"
-  assert_output --partial "radio ready"
+  assert_output --partial "radio stop-hook"
+}
+
+@test "Stop hook calls 'radio stop-hook' (#163)" {
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio stop-hook"
+}
+
+@test "legacy Stop hook 'radio ready && radio check' is upgraded in place (#163)" {
+  mkdir -p "$TARGET_DIR/.claude"
+  cat > "$TARGET_DIR/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "radio ready && radio check"}]}
+    ]
+  }
+}
+EOF
+  run "$CLAUDE_GH_TASK_INIT"
+  assert_success
+  # Rewritten in place — no duplicate entry, no stale command left behind.
+  run jq -r '.hooks.Stop | length' "$TARGET_DIR/.claude/settings.json"
+  assert_output "1"
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$TARGET_DIR/.claude/settings.json"
+  assert_output "radio stop-hook"
 }
 
 @test "idempotent re-run does not duplicate radio hook entries" {

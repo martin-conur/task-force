@@ -101,8 +101,10 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 | PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
 | PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
 
-When a worker finishes its task and has nothing pending, the `radio ready` step
-runs automatically via the `Stop` hook — you don't need to invoke it manually.
+When a worker goes idle, the `Stop` hook runs `radio stop-hook` automatically:
+it marks the role idle and, if messages queued up while the worker was busy,
+blocks the stop so the agent drains them immediately — you don't need to
+invoke it manually.
 
 Full command form:
 

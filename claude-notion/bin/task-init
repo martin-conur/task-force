@@ -178,7 +178,12 @@ _radio_install_hooks() {
   # sessions don't set the env var, so they keep the loadout default ($loadout).
   local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout \${TASK_FORCE_LOADOUT:-$loadout}"
   local busy_cmd="radio busy"
-  local stop_cmd="radio ready && radio check"
+  # `radio stop-hook` replaces the old `radio ready && radio check` (#163):
+  # it marks the role idle AND emits Stop-hook block JSON when the inbox has
+  # unread messages, so a busy recipient drains its queue at end of turn
+  # (Stop-hook stdout never reaches the model, so `radio check` there was
+  # dead output).
+  local stop_cmd="radio stop-hook"
   local end_cmd="radio unregister"
   local awaiting_cmd="radio awaiting"
 
@@ -208,10 +213,19 @@ _radio_install_hooks() {
       if (arr // []) | any(((.matcher // "") == mtch) and ((.hooks // []) | any((.command // "") | startswith("radio ")))) then arr
       else (arr // []) + [{matcher: mtch, hooks: [{type: "command", command: cmd}]}]
       end;
+    # One-shot migration (#163): rewrite the legacy Stop command in place so
+    # re-running task-init upgrades existing repos. add_radio alone would see
+    # a "radio " command and leave the stale one behind.
+    def upgrade_stop(arr; cmd):
+      (arr // []) | map(
+        .hooks = ((.hooks // []) | map(
+          if (.command // "") == "radio ready && radio check" then (.command = cmd) else . end
+        ))
+      );
     .hooks //= {}
     | .hooks.SessionStart      = add_radio(.hooks.SessionStart;     $sess)
     | .hooks.UserPromptSubmit  = add_radio(.hooks.UserPromptSubmit; $ups)
-    | .hooks.Stop              = add_radio(.hooks.Stop;             $stop)
+    | .hooks.Stop              = add_radio(upgrade_stop(.hooks.Stop; $stop); $stop)
     | .hooks.SessionEnd        = add_radio(.hooks.SessionEnd;       $endcmd)
     | .hooks.PermissionRequest = add_radio(.hooks.PermissionRequest; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "AskUserQuestion"; $awaiting)

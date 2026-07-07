@@ -94,6 +94,13 @@ automatically: with an empty inbox it marks the role idle; if messages queued
 up while the worker was busy, it blocks the stop (staying busy) so the agent
 drains them immediately — you don't need to invoke it manually.
 
+Likewise, every submitted prompt runs `radio prompt-hook` (the
+`UserPromptSubmit` hook): if the inbox has unread messages, a line like
+`[radio] 2 unread message(s): <id> from=pm intent=changes-requested pr=41 | …`
+is injected into the agent's context alongside the prompt. That line is the
+canonical radio channel, not user-typed text — trust it and process the
+listed messages with `radio check` / `radio read <id>`.
+
 Full command form:
 
 ```bash

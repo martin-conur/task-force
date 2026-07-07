@@ -40,6 +40,14 @@ _queue_message() {
   assert_output ""
 }
 
+@test "stop-hook with an invalid TASK_FORCE_ROLE is a logged silent exit 0 (#164)" {
+  run bash -c "echo '{}' | env TASK_FORCE_ROLE='worker-my.app-issue-7' '$RADIO' stop-hook"
+  assert_success
+  assert_output ""
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "invalid role"
+}
+
 # ----- idle transition --------------------------------------------------------
 
 @test "stop-hook marks the role idle" {

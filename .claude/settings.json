@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "radio busy"
+            "command": "radio prompt-hook"
           }
         ]
       }

@@ -172,12 +172,20 @@ _radio_install_hooks() {
   require_jq_1_6 || exit 1
 # endregion:require-jq-call
 
+# region:radio-hook-cmds
   # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
   # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
   # session file without rewiring task-init. Plain `claude`/task-pm/task-work
   # sessions don't set the env var, so they keep the loadout default ($loadout).
   local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent claude --loadout \${TASK_FORCE_LOADOUT:-$loadout}"
   local busy_cmd="radio busy"
+  # `radio prompt-hook` replaces `radio busy` on UserPromptSubmit (#164): it
+  # still marks the role busy, and additionally prints a one-line summary of
+  # any unread inbox. UserPromptSubmit stdout is injected into the model's
+  # context, so prompting an idle agent surfaces messages whose send-time
+  # zellij wake failed. PostToolUse keeps plain `radio busy` — its stdout is
+  # not injected, and the mid-turn state flip is all it's for.
+  local prompt_cmd="radio prompt-hook"
   # `radio stop-hook` replaces the old `radio ready && radio check` (#163):
   # it marks the role idle AND emits Stop-hook block JSON when the inbox has
   # unread messages, so a busy recipient drains its queue at end of turn
@@ -191,6 +199,7 @@ _radio_install_hooks() {
   [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
 
   local tmp="${settings_file}.tmp.$$"
+# endregion:radio-hook-cmds
   # Seeded read-only Notion MCP tools auto-approve PM/planner/worker tracker
   # reads; writes (notion-create-pages, notion-update-page, notion-move-pages,
   # notion-duplicate-page, notion-create-database, notion-update-data-source,
@@ -198,9 +207,11 @@ _radio_install_hooks() {
   # deliberately excluded so they remain confirmation-gated. Names verified
   # against developers.notion.com/guides/mcp/mcp-supported-tools (PR #76
   # review); if Notion renames a tool, this list must be refreshed.
+# region:radio-hooks-jq-merge
   jq \
     --arg sess "$register_cmd" \
-    --arg ups  "$busy_cmd" \
+    --arg ups  "$prompt_cmd" \
+    --arg post "$busy_cmd" \
     --arg stop "$stop_cmd" \
     --arg endcmd  "$end_cmd" \
     --arg awaiting "$awaiting_cmd" \
@@ -213,26 +224,28 @@ _radio_install_hooks() {
       if (arr // []) | any(((.matcher // "") == mtch) and ((.hooks // []) | any((.command // "") | startswith("radio ")))) then arr
       else (arr // []) + [{matcher: mtch, hooks: [{type: "command", command: cmd}]}]
       end;
-    # One-shot migration (#163): rewrite the legacy Stop command in place so
-    # re-running task-init upgrades existing repos. add_radio alone would see
-    # a "radio " command and leave the stale one behind.
-    def upgrade_stop(arr; cmd):
+    # One-shot migration (#163 Stop, #164 UserPromptSubmit): rewrite the
+    # legacy command in place so re-running task-init upgrades existing
+    # repos. add_radio alone would see a "radio " command and leave the
+    # stale one behind.
+    def upgrade_cmd(arr; old; new):
       (arr // []) | map(
         if has("hooks") then
           .hooks = (.hooks | map(
-            if (.command // "") == "radio ready && radio check" then (.command = cmd) else . end
+            if (.command // "") == old then (.command = new) else . end
           ))
         else . end
       );
     .hooks //= {}
     | .hooks.SessionStart      = add_radio(.hooks.SessionStart;     $sess)
-    | .hooks.UserPromptSubmit  = add_radio(.hooks.UserPromptSubmit; $ups)
-    | .hooks.Stop              = add_radio(upgrade_stop(.hooks.Stop; $stop); $stop)
+    | .hooks.UserPromptSubmit  = add_radio(upgrade_cmd(.hooks.UserPromptSubmit; "radio busy"; $ups); $ups)
+    | .hooks.Stop              = add_radio(upgrade_cmd(.hooks.Stop; "radio ready && radio check"; $stop); $stop)
     | .hooks.SessionEnd        = add_radio(.hooks.SessionEnd;       $endcmd)
     | .hooks.PermissionRequest = add_radio(.hooks.PermissionRequest; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "AskUserQuestion"; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "ExitPlanMode";    $awaiting)
-    | .hooks.PostToolUse       = add_radio(.hooks.PostToolUse;       $ups)
+    | .hooks.PostToolUse       = add_radio(.hooks.PostToolUse;       $post)
+# endregion:radio-hooks-jq-merge
     | .permissions //= {}
     | .permissions.allow //= []
     | .permissions.allow = (
@@ -261,24 +274,30 @@ _radio_install_hooks() {
     ' "$settings_file" >"$tmp"
   mv -f "$tmp" "$settings_file"
 
-  # Post-merge verification (#172 review): upgrade_stop only rewrites the
-  # byte-exact legacy command. Any other radio-prefixed Stop command (trailing
-  # whitespace, `radio ready && radio check && ./notify.sh`, plain
-  # `radio ready`) is skipped by the upgrade AND blocks add_radio from
-  # installing the new one — the repo would keep a dead Stop hook while
-  # task-init prints success. Detect and warn loudly instead.
+# region:radio-stray-hook-verify
+  # Post-merge verification (#172 review; extended to UserPromptSubmit in
+  # #164): upgrade_cmd only rewrites the byte-exact legacy command. Any other
+  # radio-prefixed command on these events (trailing whitespace, `radio ready
+  # && radio check && ./notify.sh`, plain `radio ready`) is skipped by the
+  # upgrade AND blocks add_radio from installing the new one — the repo would
+  # keep a stale hook while task-init prints success. Detect and warn loudly
+  # instead. stray() is per-event so the next migrated event is one line here.
   local stray
-  stray=$(jq -r --arg stop "$stop_cmd" \
-    '[.hooks.Stop // [] | .[] | .hooks // [] | .[] | .command // ""
-      | select(startswith("radio ") and . != $stop)] | .[]' \
-    "$settings_file")
+  stray=$(jq -r --arg stop "$stop_cmd" --arg prompt "$prompt_cmd" '
+    def stray(arr; evt; expected):
+      [arr // [] | .[] | .hooks // [] | .[] | .command // ""
+       | select(startswith("radio ") and . != expected)
+       | evt + ": \(.) — replace with: \(expected)"];
+    (stray(.hooks.Stop; "Stop"; $stop)
+     + stray(.hooks.UserPromptSubmit; "UserPromptSubmit"; $prompt)) | .[]
+    ' "$settings_file")
   if [[ -n "$stray" ]]; then
     {
-      echo "WARNING: $settings_file has a radio Stop hook task-init could not upgrade:"
+      echo "WARNING: $settings_file has a radio hook task-init could not upgrade:"
       printf '  %s\n' "$stray"
-      echo "  Replace it manually with: $stop_cmd"
     } >&2
   fi
+# endregion:radio-stray-hook-verify
   echo "✓ Merged radio hooks + Notion read allow-list into $settings_file"
 }
 

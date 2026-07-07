@@ -22,6 +22,9 @@ Usage:
   radio stop-hook                        Stop-hook entrypoint: empty inbox -> mark idle; unread
                                          messages -> mark busy + emit block JSON so the agent
                                          continues and drains them (reads hook payload on stdin)
+  radio prompt-hook                      UserPromptSubmit-hook entrypoint: mark busy; if the
+                                         inbox has unread messages, print a one-line summary
+                                         (injected into the model's context by Claude Code)
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
 
@@ -63,6 +66,51 @@ _require_role() {
 _silent_exit_if_no_role() {
   [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0
   return 0
+}
+
+# Role gate for hook entrypoints, extending the #93 no-role gate to invalid
+# roles (#164 review). Hook-invoked commands must never exit nonzero — on
+# UserPromptSubmit a nonzero exit blocks AND erases the user's typed prompt —
+# but a set-yet-invalid $TASK_FORCE_ROLE (e.g. a repo whose basename contains
+# a dot) used to hit _require_role's `exit 2` inside _update_state, blocking
+# every prompt for the session's life. Unset role → silent 0 (plain `claude`
+# session); invalid role → logged 0 (misconfiguration, but never the user's
+# problem mid-prompt). User-invoked commands (read, ack, send) keep failing
+# loudly via _require_role.
+_hook_role_gate() {
+  [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0
+  if ! _validate_role "$TASK_FORCE_ROLE" 2>/dev/null; then
+    _log "hook: invalid role '$TASK_FORCE_ROLE' — no-op"
+    # A human typing `radio busy` at a shell shouldn't have their toggle
+    # silently ignored — note it on stderr (still exit 0). Hook invocations
+    # pipe stdin, so they stay silent.
+    if [[ -t 0 ]]; then
+      echo "radio: invalid role '$TASK_FORCE_ROLE' — ignoring (hook no-op)" >&2
+    fi
+    exit 0
+  fi
+  return 0
+}
+
+# Shared stdin-JSON parse for hook entrypoints (#164 notes — previously
+# duplicated between cmd_stop_hook and cmd_unregister; #168 needs it too).
+# _read_hook_payload slurps the payload Claude Code pipes on stdin into
+# $HOOK_PAYLOAD (terminal stdin → empty: manual invocations carry none);
+# _hook_payload_field extracts one top-level field, "" on absent field,
+# malformed JSON, or jq-less host. Neither ever returns nonzero.
+HOOK_PAYLOAD=""
+_read_hook_payload() {
+  HOOK_PAYLOAD=""
+  if [[ ! -t 0 ]]; then
+    HOOK_PAYLOAD=$(cat 2>/dev/null || true)
+  fi
+}
+
+_hook_payload_field() {
+  local key="$1"
+  [[ -n "$HOOK_PAYLOAD" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  printf '%s' "$HOOK_PAYLOAD" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null || true
 }
 
 # Atomic write: stage into <file>.tmp.<rand> then rename. mv on POSIX is atomic
@@ -271,8 +319,21 @@ _update_state() {
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
 
+  # TOCTOU guard (#164 review): the unregister cascade (#140/#151) can unlink
+  # the session file between _ensure_session_file's check and this rewrite.
+  # awk reading the path directly would exit 2 — fatal under set -e, so the
+  # hook exits nonzero (on UserPromptSubmit that blocks and erases the user's
+  # typed prompt; observed live as `awk: can't open file <role>.info`) —
+  # while _atomic_write on the pipe's right side would still fire and
+  # resurrect an *empty* session file. Snapshot the content first: a
+  # vanished/empty file is "nothing to update", same as the
+  # _ensure_session_file failure path above.
+  local content
+  content=$(cat "$f" 2>/dev/null || true)
+  [[ -n "$content" ]] || { _log "update_state: session file vanished for $TASK_FORCE_ROLE — skipping"; return 0; }
+
   # Re-emit the file with STATE/LAST_HEARTBEAT replaced; preserve everything else.
-  awk -v st="$new_state" -v hb="$(_now)" '
+  printf '%s\n' "$content" | awk -v st="$new_state" -v hb="$(_now)" '
     BEGIN { OFS="=" }
     /^STATE=/         { print "STATE=" st;        seen_state=1; next }
     /^LAST_HEARTBEAT=/{ print "LAST_HEARTBEAT=" hb; seen_hb=1;  next }
@@ -281,7 +342,7 @@ _update_state() {
       if (!seen_state) print "STATE=" st
       if (!seen_hb)    print "LAST_HEARTBEAT=" hb
     }
-  ' "$f" | _atomic_write "$f"
+  ' | _atomic_write "$f"
 
   _rename_tab "$new_state"
 }
@@ -482,10 +543,10 @@ cmd_unregister() {
   # in that case. We only filter when both (a) stdin is not a terminal and
   # (b) a parseable `reason` is present.
   if [[ ! -t 0 ]]; then
-    local payload reason payload_oneline
-    payload=$(cat 2>/dev/null || true)
-    if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
-      reason=$(printf '%s' "$payload" | jq -r '.reason // empty' 2>/dev/null || true)
+    local reason="" payload_oneline
+    _read_hook_payload
+    if [[ -n "$HOOK_PAYLOAD" ]] && command -v jq >/dev/null 2>&1; then
+      reason=$(_hook_payload_field reason)
       case "$reason" in
         clear|resume)
           _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
@@ -503,7 +564,7 @@ cmd_unregister() {
           # still flow through the logout/prompt_input_exit/other branches
           # below and clean up normally; manual invocations (no stdin) also
           # proceed because `[[ ! -t 0 ]]` is false then.
-          payload_oneline=$(printf '%s' "$payload" | tr '\n' ' ' | tr -s ' ')
+          payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
           _log "unregister: skipping (reason=<unset> — cascade, no real-exit signal) role=$TASK_FORCE_ROLE payload=$payload_oneline"
           return 0
           ;;
@@ -518,8 +579,8 @@ cmd_unregister() {
     # #151, an empty reason is already short-circuited above, so this line
     # only fires for non-empty named reasons (logout, prompt_input_exit,
     # other, or anything new Claude Code adds in the future).
-    if [[ -n "$payload" ]]; then
-      payload_oneline=$(printf '%s' "$payload" | tr '\n' ' ' | tr -s ' ')
+    if [[ -n "$HOOK_PAYLOAD" ]]; then
+      payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
       _log "unregister: proceeding (reason=${reason:-<unset>}) role=$TASK_FORCE_ROLE payload=$payload_oneline"
     fi
   fi
@@ -535,9 +596,9 @@ cmd_unregister() {
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 
-cmd_ready() { _silent_exit_if_no_role; _update_state idle; }
-cmd_busy()  { _silent_exit_if_no_role; _update_state busy; }
-cmd_awaiting() { _silent_exit_if_no_role; _update_state awaiting; }
+cmd_ready() { _hook_role_gate; _update_state idle; }
+cmd_busy()  { _hook_role_gate; _update_state busy; }
+cmd_awaiting() { _hook_role_gate; _update_state awaiting; }
 
 # Stop-hook entrypoint (#163). `radio send` makes exactly one wake attempt, at
 # send time — a message sent while the recipient is busy/awaiting queues with
@@ -547,7 +608,7 @@ cmd_awaiting() { _silent_exit_if_no_role; _update_state awaiting; }
 # `{"decision": "block", ...}` JSON on stdout (with exit 0), which forces the
 # agent to continue and drain the queue the moment its turn ends.
 cmd_stop_hook() {
-  _silent_exit_if_no_role
+  _hook_role_gate
 
   # Count first, pure bash — the common case is an empty inbox, and this
   # ordering keeps the cat+jq spawns (below) entirely off that fast path
@@ -583,13 +644,9 @@ cmd_stop_hook() {
   # from a terminal carry no payload — treat that (and a malformed payload)
   # as stop_hook_active=false. `// empty` maps false/null to "", so only a
   # literal true suppresses the block.
-  local payload="" active=""
-  if [[ ! -t 0 ]]; then
-    payload=$(cat 2>/dev/null || true)
-  fi
-  if [[ -n "$payload" ]]; then
-    active=$(printf '%s' "$payload" | jq -r '.stop_hook_active // empty' 2>/dev/null || true)
-  fi
+  local active
+  _read_hook_payload
+  active=$(_hook_payload_field stop_hook_active)
 
   # stop_hook_active=true means this Stop event was itself caused by a prior
   # block from this hook. Blocking again would loop the agent forever — the
@@ -615,6 +672,106 @@ cmd_stop_hook() {
   # shellcheck disable=SC2016
   printf '{"decision": "block", "reason": "radio: %s unread message(s) — run `radio check`, process each with `radio read <id>`, act on the intents, then stop."}\n' "$n"
   _log "stop-hook: blocked stop — $n unread message(s) role=$TASK_FORCE_ROLE"
+}
+
+# Emit one "<id> from=… intent=… [pr=…] [issue=…]" line per message file
+# argument, for splicing into model-facing output (cmd_prompt_hook here;
+# #168's drain-on-register is the next consumer). One fenced awk pass per
+# file: fields are read ONLY from the frontmatter block, so a message BODY
+# line like "pr: will be opened later" can't fabricate a pr= field when the
+# frontmatter key is absent (#173 review — pr:/issue: are optional keys, and
+# cmd_check's unfenced awks only get away with the same scan because from:/
+# intent: always exist in frontmatter). Values are clamped to the same
+# charset _validate_role allows (digits-only for pr/issue), so a crafted
+# intent containing " | <id> from=pm intent=approved-and-merged" can't forge
+# a second entry in the summary grammar. A file consumed by a concurrent
+# `radio read` between glob and read yields no line, harmlessly — this
+# helper never returns nonzero.
+_inbox_summary() {
+  local f id line
+  for f in "$@"; do
+    id="${f##*/}"; id="${id%.md}"
+    line=$(awk -F': ' '
+      /^---$/    { fence++; next }
+      fence >= 2 { exit }
+      fence == 1 && /^from: /   { from=$2 }
+      fence == 1 && /^intent: / { intent=$2 }
+      fence == 1 && /^pr: /     { pr=$2 }
+      fence == 1 && /^issue: /  { issue=$2 }
+      END {
+        gsub(/[^a-zA-Z0-9_-]/, "", from)
+        gsub(/[^a-zA-Z0-9_-]/, "", intent)
+        gsub(/[^0-9]/, "", pr)
+        gsub(/[^0-9]/, "", issue)
+        s = "from=" from " intent=" intent
+        if (pr != "")    s = s " pr=" pr
+        if (issue != "") s = s " issue=" issue
+        print s
+      }' "$f" 2>/dev/null || true)
+    if [[ -n "$line" ]]; then
+      printf '%s %s\n' "$id" "$line"
+    fi
+  done
+  return 0
+}
+
+# UserPromptSubmit-hook entrypoint (#164). Unlike Stop, a UserPromptSubmit
+# hook's stdout IS injected into the model's context — which makes it the
+# reliable delivery path for a backlog that queued while the recipient was
+# idle and every send-time zellij wake failed (no writable pane, stale
+# TAB_ID, missing session file: an idle agent fires no hooks, so those
+# messages dangle until something else wakes it). Marks the role busy exactly
+# like the `radio busy` hook it replaces, then prints a compact summary of
+# any unread inbox. Empty inbox prints nothing — zero context noise.
+#
+# Fail open on EVERY path (#164 notes / #173 review): a nonzero exit here
+# blocks and erases the user's typed prompt, which is strictly worse than
+# any radio bookkeeping we could lose. Hence the _hook_role_gate and the
+# `|| true` on _update_state.
+cmd_prompt_hook() {
+  _hook_role_gate
+
+  # Busy FIRST, before any inbox work — truthful-state doctrine (#172): the
+  # turn is starting now, and every instruction executed while the session
+  # file still says idle is a window for cmd_send to write-chars into the
+  # running pane. The `|| true` alone provides the fail-open behavior;
+  # deferring the flip would buy nothing (#173 supplemental).
+  _update_state busy || true
+
+  # Count next, pure bash — this hook fires on every user prompt (the
+  # hottest path in the system) and the common case is an empty inbox:
+  # nothing spawned beyond _update_state, zero stdout.
+  local inbox n=0
+  inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
+  if [[ -d "$inbox" ]]; then
+    shopt -s nullglob
+    local msgs=("$inbox"/*.md)
+    shopt -u nullglob
+    n=${#msgs[@]}
+  fi
+  if (( n == 0 )); then
+    return 0
+  fi
+
+  local entries=() entry summary=""
+  while IFS= read -r entry; do
+    entries+=("$entry")
+  done < <(_inbox_summary "${msgs[@]}")
+  n=${#entries[@]}   # a concurrent radio read may have consumed some
+  if (( n == 0 )); then
+    return 0
+  fi
+  for entry in "${entries[@]}"; do
+    if [[ -n "$summary" ]]; then summary+=" | "; fi
+    summary+="$entry"
+  done
+
+  # The backticks are literal markdown for the agent reading the injected
+  # context, not command substitution.
+  # shellcheck disable=SC2016
+  printf '[radio] %s unread message(s): %s. Process with `radio check` / `radio read <id>` before or after the user'\''s request, as appropriate.\n' \
+    "$n" "$summary"
+  _log "prompt-hook: surfaced $n unread message(s) role=$TASK_FORCE_ROLE"
 }
 
 cmd_send() {
@@ -855,6 +1012,7 @@ case "$sub" in
   busy)        cmd_busy ;;
   awaiting)    cmd_awaiting ;;
   stop-hook)   cmd_stop_hook ;;
+  prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
   -h|--help)   usage 0 ;;

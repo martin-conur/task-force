@@ -523,6 +523,50 @@ cmd_register() {
   # _rename_tab reads $TASK_FORCE_ROLE, which the SessionStart hook sets to the
   # same value as --role here (`radio register --role $TASK_FORCE_ROLE …`).
   _rename_tab idle
+
+  # Drain-on-register (#168): surface any messages that queued while this role
+  # was offline. `radio send` makes exactly one wake attempt, at send time —
+  # a report sent while the recipient isn't running (the "no session for pm"
+  # strandings from the July investigation) just lands in the inbox with zero
+  # redelivery. Nothing else surfaces that backlog at startup: the stop-hook
+  # flush needs a Stop event and the prompt-hook injection needs a user
+  # prompt, but register runs from SessionStart — whose stdout IS injected
+  # into the model's context — so simply printing the backlog summary here
+  # puts it in front of the agent on its very first turn. This closes the
+  # offline→online gap, the companion to the stop-hook flush (busy case) and
+  # prompt-hook injection (idle case).
+  #
+  # Real register only: this lives in cmd_register, NOT _ensure_session_file's
+  # re-seed path, so a busy/ready self-heal mid-session never re-prints the
+  # summary (acceptance #3 — no spam). Empty inbox emits nothing (acceptance
+  # #2). The no-role SessionStart case never reaches here — the dispatcher
+  # exits 0 before calling cmd_register when $TASK_FORCE_ROLE is unset (#93).
+  local inbox
+  inbox=$(_inbox_dir "$role")
+  if [[ -d "$inbox" ]]; then
+    shopt -s nullglob
+    local msgs=("$inbox"/*.md)
+    shopt -u nullglob
+    if (( ${#msgs[@]} > 0 )); then
+      local entries=() entry summary="" n=0
+      while IFS= read -r entry; do
+        entries+=("$entry")
+      done < <(_inbox_summary "${msgs[@]}")
+      n=${#entries[@]}   # a concurrent radio read may have consumed some
+      if (( n > 0 )); then
+        for entry in "${entries[@]}"; do
+          if [[ -n "$summary" ]]; then summary+=" | "; fi
+          summary+="$entry"
+        done
+        # The backticks are literal markdown for the agent reading the
+        # injected context, not command substitution.
+        # shellcheck disable=SC2016
+        printf '[radio] %s message(s) were queued while this role was offline: %s. Run `radio check` and process them before taking new work.\n' \
+          "$n" "$summary"
+        _log "register: surfaced $n queued message(s) role=$role"
+      fi
+    fi
+  fi
 }
 
 cmd_unregister() {

@@ -45,6 +45,18 @@ _now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 _compact_now() { date -u +%Y%m%d-%H%M%S; }
 
+# Parse a UTC ISO-8601 timestamp (YYYY-MM-DDTHH:MM:SSZ, as _now emits) into
+# epoch seconds. GNU date wants -d; BSD/macOS date wants -j -f. Prints nothing
+# on parse failure so callers can guard with [[ -n ]]. Shared by cmd_orphans
+# and cmd_send's dead-session check (#166).
+_iso_to_epoch() {
+  local ts="$1"
+  [[ -n "$ts" ]] || return 0
+  date -u -d "$ts" +%s 2>/dev/null \
+    || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null \
+    || true
+}
+
 _rand_id() {
   # 32 bytes of /dev/urandom is plenty for 6 alphanumeric chars after `tr`
   # filtering — the previous 256-byte read was wasteful, not wrong.
@@ -857,6 +869,23 @@ cmd_prompt_hook() {
   _log "prompt-hook: surfaced $n unread message(s) role=$TASK_FORCE_ROLE"
 }
 
+# Emit the "queued — idle but wake failed" outcome line (#166). Every wake miss
+# after the recipient is confirmed idle funnels through here so the five reasons
+# (no zellij, no tab, no TAB_ID, no pane, write-chars failed) share one wording
+# — and so #165's "via alias …" suffix is a one-site edit, not five.
+#
+# The redelivery promise is agent-specific: claude has a prompt-hook + register
+# drain, so a missed wake resurfaces on the recipient's next prompt/register;
+# kiro has neither hook injected (#146), so soften to the neutral "check/register"
+# rather than promise a prompt-hook that will never fire.
+_send_outcome_wake_failed() {
+  local to="$1" reason="$2" agent="${3:-}"
+  local surface="prompt/register"
+  [[ "$agent" == "kiro" ]] && surface="check/register"
+  printf 'radio: queued — %s is idle but wake failed (%s); message will surface on its next %s\n' \
+    "$to" "$reason" "$surface"
+}
+
 cmd_send() {
   local to="" intent="" pr="" issue="" repo="" body=""
   local body_set=0
@@ -903,27 +932,65 @@ cmd_send() {
 
   _log "send id=$id from=$from to=$to intent=$intent"
 
-  # Wake the recipient — only if zellij is running, the recipient is registered,
-  # idle, and has a tab name. Any other case is a silent no-op (logged).
-  if [[ -z "${ZELLIJ:-}" ]]; then
-    _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
-    return 0
-  fi
+  # Report the delivery outcome on stdout so the sending agent knows what
+  # actually happened (#166). `radio send` prints nothing today, so a queued
+  # send behind a busy — or entirely absent — recipient looks identical to a
+  # live wake. Four honest outcomes, all exit 0 (queuing is legitimate); usage
+  # errors above still exit 2.
+  #
+  # The session-file check comes first — "nobody is listening" is the most
+  # important signal, and it doesn't depend on the sender being inside zellij.
   local rs
   rs=$(_session_file "$to")
   if [[ ! -f "$rs" ]]; then
     _log "send: no session for $to — message queued (id=$id)"
+    printf 'radio: WARNING — no session for %s; message queued but nobody is listening. Verify the role name (ls ~/.task-force/radio/sessions/) or start the recipient.\n' "$to"
     return 0
   fi
-  local rstate rtab
+  local rstate rtab ragent
   rstate=$(_session_field "$rs" STATE || true)
   rtab=$(_session_field "$rs" TAB || true)
+  ragent=$(_session_field "$rs" AGENT || true)
   if [[ "$rstate" != "idle" ]]; then
+    # Dead-but-non-idle: a crashed tab leaves STATE=busy/awaiting forever (the
+    # `radio orphans` case). If the heartbeat is >1h stale (same threshold as
+    # `radio orphans`), the "drains on its next Stop" promise is a lie — no Stop
+    # is coming — so escalate to a warning instead of falsely reassuring the
+    # sender. Full self-heal of the stale session stays #127's job.
+    local hb hb_epoch now_epoch age
+    hb=$(_session_field "$rs" LAST_HEARTBEAT || true)
+    hb_epoch=$(_iso_to_epoch "$hb")
+    now_epoch=$(date -u +%s)
+    if [[ -n "$hb_epoch" ]] && (( now_epoch - hb_epoch > 3600 )); then
+      age=$(( now_epoch - hb_epoch ))
+      _log "send: $to looks dead (state=$rstate, heartbeat ${age}s stale) — queued (id=$id)"
+      # shellcheck disable=SC2016  # backticks are literal output, not a subshell
+      printf 'radio: WARNING — %s looks dead (state=%s, heartbeat %ss stale); message queued but it may not be listening. See `radio orphans`.\n' "$to" "$rstate" "$age"
+      return 0
+    fi
+    # An `awaiting` agent's turn is already over — no Stop event is coming, and
+    # the drain path is prompt-hook after the human responds. Don't promise a
+    # Stop that won't happen; the honest signal is different from `busy`.
+    if [[ "$rstate" == "awaiting" ]]; then
+      _log "send: $to is awaiting (state=$rstate) — queued (id=$id)"
+      printf 'radio: queued — %s is awaiting user input; it will surface via prompt-hook when next prompted\n' "$to"
+      return 0
+    fi
     _log "send: $to is busy (state=$rstate) — queued (id=$id)"
+    printf 'radio: queued — %s is busy; it will drain on its next Stop\n' "$to"
+    return 0
+  fi
+  # Recipient is registered and idle from here on. Any failure to wake it is a
+  # transient wake miss, not a "nobody home" — the message surfaces on the
+  # recipient's next prompt-hook / register. Report the reason honestly.
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
+    _send_outcome_wake_failed "$to" "sender is not in a zellij session" "$ragent"
     return 0
   fi
   if [[ -z "$rtab" ]]; then
     _log "send: $to has no TAB — queued (id=$id)"
+    _send_outcome_wake_failed "$to" "recipient has no tab" "$ragent"
     return 0
   fi
   # Wake-up via per-pane targeting (#102): read the recipient's stable TAB_ID=
@@ -936,11 +1003,13 @@ cmd_send() {
   rtab_id=$(_session_field "$rs" TAB_ID || true)
   if [[ -z "$rtab_id" ]]; then
     _log "send: $to has no TAB_ID (not zellij-registered?) — queued (id=$id)"
+    _send_outcome_wake_failed "$to" "not zellij-registered" "$ragent"
     return 0
   fi
   rpane_id=$(_zellij_pane_in_tab "$rtab_id")
   if [[ -z "$rpane_id" ]]; then
     _log "send: no writable pane on tab_id=$rtab_id for $to — queued (id=$id)"
+    _send_outcome_wake_failed "$to" "no writable pane on its tab" "$ragent"
     return 0
   fi
   # Only ever write the literal string "radio check<term>" — never the message
@@ -961,8 +1030,11 @@ cmd_send() {
     wake_term=$'\r'
   fi
   zellij action write-chars --pane-id "$rpane_id" "radio check${wake_term}" >/dev/null 2>&1 || {
-    _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"; return 0; }
+    _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"
+    _send_outcome_wake_failed "$to" "write-chars failed" "$ragent"
+    return 0; }
   _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (id=$id)"
+  printf 'radio: delivered — woke %s (tab_id=%s)\n' "$to" "$rtab_id"
 }
 
 cmd_check() {
@@ -1059,11 +1131,8 @@ cmd_orphans() {
       printf '%s\t(no LAST_HEARTBEAT)\n' "$role"
       continue
     fi
-    # POSIX-portable parse of UTC ISO-8601 (YYYY-MM-DDTHH:MM:SSZ) -> epoch.
-    # GNU date supports -d; BSD date wants -j -f. Try GNU first, then BSD.
-    hb_epoch=$(date -u -d "$hb" +%s 2>/dev/null \
-               || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$hb" +%s 2>/dev/null \
-               || echo 0)
+    hb_epoch=$(_iso_to_epoch "$hb")
+    hb_epoch=${hb_epoch:-0}
     age=$(( now_epoch - hb_epoch ))
     if (( age > 3600 )); then
       printf '%s\tage=%ss\thb=%s\n' "$role" "$age" "$hb"

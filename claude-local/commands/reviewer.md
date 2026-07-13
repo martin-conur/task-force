@@ -58,6 +58,7 @@ $ARGUMENTS
    # — or —
    radio send --to pm --intent review-complete-with-findings --pr <N> --body "<one-line summary>"
    ```
+   Check `radio send`'s stdout: `delivered` / `queued — pm is busy` means the verdict reached PM. But `radio: WARNING — no session for pm` (or `WARNING — pm looks dead …`) means PM isn't running, and `queued — pm is idle but wake failed …` means it's queued with no auto-redelivery — in those cases say so to the user instead of assuming the verdict was delivered.
 9. Idle. The tab stays open so the user can scroll back through the analysis. They'll close the tab manually when done; `task-done --remove-worktree` cleans up the review worktree if they want.
 
 ### Authority boundaries

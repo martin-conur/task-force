@@ -174,28 +174,101 @@ teardown() {
   assert_output --partial "hello via stdin"
 }
 
-@test "send queues silently when recipient has no session file" {
+@test "send queues (logs no-session) when recipient has no session file" {
   # No `register` for pm — but with $ZELLIJ set we still hit the no-session branch.
   export ZELLIJ=fake-session
-  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ping --body "queue me"
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ping --body "queue me" >/dev/null
   run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox/'*.md 2>/dev/null | wc -l"
   assert_output --partial "1"
   run cat "$TASK_FORCE_HOME/radio/log"
   assert_output --partial "no session for pm"
 }
 
-@test "send queues silently when recipient is awaiting (send-gate covers non-idle) (#119)" {
-  # Pins the spec's send-gate contract: STATE != idle blocks wake-ups. `awaiting`
-  # is not `idle`, so it composes for free with the existing gate — no logic
-  # changes at radio:437 needed.
+# ----- honest delivery feedback on stdout (#166) ----------------------------
+
+@test "send to absent recipient prints the no-session WARNING but still exits 0 (#166)" {
+  # No `register` for pm — the message queues, but the sender must be *told*
+  # nobody is listening rather than assuming delivery.
+  export ZELLIJ=fake-session
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --pr 42 --body "PR up"
+  assert_success   # queuing is legitimate — exit 0
+  assert_output --partial "radio: WARNING — no session for pm"
+  assert_output --partial "message queued but nobody is listening"
+  # And the message is still queued for whenever pm shows up.
+  run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox/'*.md 2>/dev/null | wc -l | tr -d ' '"
+  assert_output "1"
+}
+
+@test "send to busy recipient prints the queued-busy line, exit 0 (#166)" {
+  export ZELLIJ=fake-session
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is busy; it will drain on its next Stop"
+}
+
+@test "send to idle recipient with no zellij prints the queued idle-wake-failed line, exit 0 (#166)" {
+  # pm is registered and idle, but the sender is not inside a zellij session, so
+  # there's no live pane to wake — the message surfaces on pm's next prompt.
+  unset ZELLIJ
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed"
+  assert_output --partial "will surface on its next prompt/register"
+}
+
+@test "send to a kiro recipient softens the redelivery promise (no prompt-hook there) (#166)" {
+  # kiro has neither prompt-hook nor register-drain injection (#146), so the
+  # wake-failed line must not promise "prompt/register" — it says "check/register".
+  unset ZELLIJ
+  "$RADIO" register --role pm --tab pm --agent kiro
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed"
+  assert_output --partial "will surface on its next check/register"
+  refute_output --partial "prompt/register"
+}
+
+@test "send to an awaiting recipient names the state honestly (not 'busy') (#166)" {
+  # An awaiting agent's turn is over — no Stop is coming. The line must not
+  # promise a next-Stop drain; the honest path is prompt-hook on the next prompt.
   export ZELLIJ=fake-session
   "$RADIO" register --role pm --tab pm --agent claude
   TASK_FORCE_ROLE=pm "$RADIO" awaiting
-  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent review-requested --body "PR up"
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is awaiting user input; it will surface via prompt-hook when next prompted"
+  refute_output --partial "next Stop"
   run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox/'*.md 2>/dev/null | wc -l | tr -d ' '"
   assert_output "1"
   run cat "$TASK_FORCE_HOME/radio/log"
-  assert_output --partial "is busy (state=awaiting)"
+  assert_output --partial "is awaiting (state=awaiting)"
+}
+
+@test "send to a dead-but-busy recipient warns instead of promising a next-Stop drain (#166)" {
+  # A crashed tab leaves STATE=busy with a frozen heartbeat (the `radio orphans`
+  # case). Promising "drains on its next Stop" would be a lie — no Stop is coming.
+  # A heartbeat older than the 1h orphan threshold must escalate to a warning.
+  export ZELLIJ=fake-session
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  # Freeze pm's heartbeat 3h into the past — well past the 3600s orphan cutoff.
+  local stale
+  stale=$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+          || date -u -v-3H +%Y-%m-%dT%H:%M:%SZ)
+  awk -v h="LAST_HEARTBEAT=$stale" \
+    '/^LAST_HEARTBEAT=/{print h; next} {print}' \
+    "$TASK_FORCE_HOME/radio/sessions/pm.info" > "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp"
+  mv "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: WARNING — pm looks dead"
+  assert_output --partial "state=busy"
+  assert_output --partial "radio orphans"
+  refute_output --partial "next Stop"
 }
 
 @test "check lists unread messages and prints (no unread messages) when empty" {

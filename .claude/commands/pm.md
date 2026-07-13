@@ -22,6 +22,11 @@ When showing the backlog, group by project Status and sort by priority.
 
 The worker pings you via `radio` at every transition. Reciprocate so the worker knows when to push more commits, when to clean up, or when to keep waiting. Worker role names follow `worker-<reponame>-<slug>`; discover the live one via `ls ~/.task-force/radio/sessions/`.
 
+`radio send` reports the delivery outcome on stdout — read it before assuming the worker got the ping:
+- `delivered`, or `queued — <role> is busy` / `awaiting` → the ping landed (or drains on the worker's next Stop / prompt). Fine.
+- `queued — <role> is idle but wake failed …` → queued with **no automatic redelivery until the worker is next prompted**. Mention it to the user alongside your handoff so the worker gets nudged.
+- `WARNING — no session for <role>`, or `WARNING — <role> looks dead …` → that worker isn't running: **surface it to the user** rather than assuming the ping landed (role name likely wrong — re-check `ls ~/.task-force/radio/sessions/`; or the tab died — `radio orphans` lists stale sessions).
+
 - **After merging a PR**: run `gh pr merge <N> --squash --delete-branch` (or `--merge` / `--rebase` per project convention), **then**:
   ```bash
   radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"

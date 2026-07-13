@@ -40,6 +40,17 @@ teardown() {
   refute_output --partial "go-to-tab-name"
 }
 
+# ----- delivered: sender is told the wake landed (#166) ---------------------
+
+@test "send to idle recipient prints the delivered outcome on stdout (#166)" {
+  # pm registered with tab_id=7; a successful write-chars must report back so
+  # the sending agent knows the ping actually woke pm (not just queued).
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=7)"
+}
+
 # ----- busy: no zellij wake calls at all -----------------------------------
 
 @test "send to busy recipient does not call zellij wake actions" {
@@ -81,11 +92,52 @@ teardown() {
   "$RADIO" register --role pm --tab pm --agent claude
   export STUB_ZELLIJ_PANES_JSON='[]'
 
-  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent review-requested --body "PR up"
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+
+  # Idle recipient but no pane to wake → honest queued/idle-wake-failed line (#166).
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed (no writable pane on its tab)"
 
   run stub_calls zellij
   refute_output --partial "write-chars"
   refute_output --partial "go-to-tab-name"
   run cat "$TASK_FORCE_HOME/radio/log"
   assert_output --partial "no writable pane on tab_id=7"
+}
+
+# ----- remaining wake-failed reasons, pinned via the stub (#166) ------------
+
+@test "send to idle recipient whose TAB= is blank prints the no-tab wake-failed line (#166)" {
+  "$RADIO" register --role pm --tab pm --agent claude
+  # Blank the TAB= field so the rtab guard fires before pane resolution.
+  awk '/^TAB=/{print "TAB="; next} {print}' \
+    "$TASK_FORCE_HOME/radio/sessions/pm.info" > "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp"
+  mv "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed (recipient has no tab)"
+}
+
+@test "send to idle recipient whose TAB_ID= is blank prints the not-registered wake-failed line (#166)" {
+  "$RADIO" register --role pm --tab pm --agent claude
+  # Blank only TAB_ID= (keep TAB=) — the "registered outside zellij" shape.
+  awk '/^TAB_ID=/{print "TAB_ID="; next} {print}' \
+    "$TASK_FORCE_HOME/radio/sessions/pm.info" > "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp"
+  mv "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed (not zellij-registered)"
+}
+
+@test "send whose write-chars call fails prints the write-chars-failed wake-failed line (#166)" {
+  "$RADIO" register --role pm --tab pm --agent claude
+  export STUB_ZELLIJ_WRITE_CHARS_FAIL=1   # pane resolves, but the write returns non-zero
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed (write-chars failed)"
+  # The write was attempted (reached the pane) before failing.
+  assert_stub_called zellij "action write-chars --pane-id 700 radio check"
 }

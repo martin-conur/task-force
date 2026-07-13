@@ -401,7 +401,7 @@ Role names are addressable strings, not free-form: the PM is `pm`, and each work
 
 | Hook              | Command                       | Why                                            |
 |-------------------|-------------------------------|------------------------------------------------|
-| `SessionStart`    | `radio register`              | Claims the role's session file for this tab    |
+| `SessionStart`    | `radio register`              | Claims the role's session file — and on a *fresh* start injects a summary of any inbox that queued while the role was offline (its stdout is injected into context, like `UserPromptSubmit`; claude loadouts only) |
 | `UserPromptSubmit`| `radio prompt-hook`           | Marks the session busy — and surfaces any unread inbox into the model's context (its stdout is injected, unlike Stop's) |
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 | `PostToolUse`     | `radio busy`                  | State flip only — deliberately NOT `prompt-hook`; it fires after every tool call, and the inbox summary belongs at prompt time, not sprayed mid-turn |

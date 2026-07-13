@@ -24,5 +24,10 @@ case "$*" in
     # branch + info file when aw_launch_tab fails partway through (#139).
     [[ -n "${STUB_ZELLIJ_NEW_TAB_FAIL:-}" ]] && exit 1
     ;;
+  "action write-chars "*)
+    # Lets tests pin cmd_send's write-chars-failed outcome line (#166): the
+    # pane resolves but the actual write returns non-zero.
+    [[ -n "${STUB_ZELLIJ_WRITE_CHARS_FAIL:-}" ]] && exit 1
+    ;;
 esac
 exit 0

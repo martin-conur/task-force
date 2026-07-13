@@ -22,6 +22,8 @@ When showing the backlog, group by epic (or project) and sort by priority.
 
 The worker pings you via `radio` at every transition. Reciprocate so the worker knows when to push more commits, when to clean up, or when to keep waiting. Worker role names follow `worker-<reponame>-<slug>`; discover the live one via `ls ~/.task-force/radio/sessions/`.
 
+`radio send` reports the delivery outcome on stdout — `delivered`/`queued` are both fine (the worker gets it now or on its next Stop). If it prints `radio: WARNING — no session for <role>`, that worker isn't running: **surface it to the user** rather than assuming the ping landed — the role name is likely wrong (re-check `ls ~/.task-force/radio/sessions/`) or the worker tab died.
+
 - **After merging a PR**: run `gh pr merge <N> --squash --delete-branch` (or `--merge` / `--rebase` per project convention), **then**:
   ```bash
   radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"

@@ -903,16 +903,19 @@ cmd_send() {
 
   _log "send id=$id from=$from to=$to intent=$intent"
 
-  # Wake the recipient — only if zellij is running, the recipient is registered,
-  # idle, and has a tab name. Any other case is a silent no-op (logged).
-  if [[ -z "${ZELLIJ:-}" ]]; then
-    _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
-    return 0
-  fi
+  # Report the delivery outcome on stdout so the sending agent knows what
+  # actually happened (#166). `radio send` prints nothing today, so a queued
+  # send behind a busy — or entirely absent — recipient looks identical to a
+  # live wake. Four honest outcomes, all exit 0 (queuing is legitimate); usage
+  # errors above still exit 2.
+  #
+  # The session-file check comes first — "nobody is listening" is the most
+  # important signal, and it doesn't depend on the sender being inside zellij.
   local rs
   rs=$(_session_file "$to")
   if [[ ! -f "$rs" ]]; then
     _log "send: no session for $to — message queued (id=$id)"
+    printf 'radio: WARNING — no session for %s; message queued but nobody is listening. Verify the role name (ls ~/.task-force/radio/sessions/) or start the recipient.\n' "$to"
     return 0
   fi
   local rstate rtab
@@ -920,10 +923,20 @@ cmd_send() {
   rtab=$(_session_field "$rs" TAB || true)
   if [[ "$rstate" != "idle" ]]; then
     _log "send: $to is busy (state=$rstate) — queued (id=$id)"
+    printf 'radio: queued — %s is busy; it will drain on its next Stop\n' "$to"
+    return 0
+  fi
+  # Recipient is registered and idle from here on. Any failure to wake it is a
+  # transient wake miss, not a "nobody home" — the message surfaces on the
+  # recipient's next prompt-hook / register. Report the reason honestly.
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
+    printf 'radio: queued — %s is idle but wake failed (sender is not in a zellij session); message will surface on its next prompt/register\n' "$to"
     return 0
   fi
   if [[ -z "$rtab" ]]; then
     _log "send: $to has no TAB — queued (id=$id)"
+    printf 'radio: queued — %s is idle but wake failed (recipient has no tab); message will surface on its next prompt/register\n' "$to"
     return 0
   fi
   # Wake-up via per-pane targeting (#102): read the recipient's stable TAB_ID=
@@ -936,11 +949,13 @@ cmd_send() {
   rtab_id=$(_session_field "$rs" TAB_ID || true)
   if [[ -z "$rtab_id" ]]; then
     _log "send: $to has no TAB_ID (not zellij-registered?) — queued (id=$id)"
+    printf 'radio: queued — %s is idle but wake failed (not zellij-registered); message will surface on its next prompt/register\n' "$to"
     return 0
   fi
   rpane_id=$(_zellij_pane_in_tab "$rtab_id")
   if [[ -z "$rpane_id" ]]; then
     _log "send: no writable pane on tab_id=$rtab_id for $to — queued (id=$id)"
+    printf 'radio: queued — %s is idle but wake failed (no writable pane on its tab); message will surface on its next prompt/register\n' "$to"
     return 0
   fi
   # Only ever write the literal string "radio check<term>" — never the message
@@ -961,8 +976,11 @@ cmd_send() {
     wake_term=$'\r'
   fi
   zellij action write-chars --pane-id "$rpane_id" "radio check${wake_term}" >/dev/null 2>&1 || {
-    _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"; return 0; }
+    _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"
+    printf 'radio: queued — %s is idle but wake failed (write-chars failed); message will surface on its next prompt/register\n' "$to"
+    return 0; }
   _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (id=$id)"
+  printf 'radio: delivered — woke %s (tab_id=%s)\n' "$to" "$rtab_id"
 }
 
 cmd_check() {

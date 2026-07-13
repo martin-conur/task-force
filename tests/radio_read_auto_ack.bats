@@ -26,7 +26,9 @@ teardown() {
 _send_one() {
   local intent="${1:-review-requested}"
   local body="${2:-Body content}"
-  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent "$intent" --body "$body"
+  # Discard send's stdout — since #166 it prints a delivery-outcome line, and
+  # this helper's own stdout must be *only* the queued message id.
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent "$intent" --body "$body" >/dev/null
   basename "$(ls "$TASK_FORCE_HOME/radio/mailbox/pm/inbox/"*.md | head -1)" .md
 }
 

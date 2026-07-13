@@ -58,6 +58,7 @@ $ARGUMENTS
    # — or —
    radio send --to pm --intent review-complete-with-findings --pr <N> --body "<one-line summary>"
    ```
+   Check `radio send`'s stdout: if it prints `radio: WARNING — no session for pm`, the PM isn't running — say so to the user instead of assuming the verdict was delivered.
 9. Idle. The tab stays open so the user can scroll back through the analysis. They'll close the tab manually when done; `task-done --remove-worktree` cleans up the review worktree if they want.
 
 ### Authority boundaries

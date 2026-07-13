@@ -42,7 +42,7 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
   ```bash
   task-reviewer <pr-url-or-number> [<issue-url-or-number>]
   ```
-  in any spare tab. The reviewer runs with `--auto` (auto-permission) by default — the `/reviewer` prompt's authority list rules out anything destructive (no merge, no push, no Status edits), so hands-off dispatch is safe. Pass `--no-auto` if you want to babysit a specific review.
+  in any spare tab. The reviewer runs with `--auto` (auto-permission) by default — the `/reviewer` prompt's authority list rules out anything destructive (no merge, no push, no Status edits), so hands-off dispatch is safe. Pass `--no-auto` if you want to babysit a specific review. Add `Bash(task-reviewer *)` to your project's `.claude/settings.json` `permissions.allow` so you launch reviewers **without a permission prompt** — dispatch them hands-off, you don't need to ask the user first.
 
   Positional args:
   - **PR** (required): URL or bare number.
@@ -55,13 +55,15 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
     gh pr merge <N> --squash --delete-branch
     radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"
     ```
-  - **`review-complete-with-findings`** → reviewer posted blockers / nits to the PR. Forward to the original worker so they push fixes:
+  - **`review-complete-with-findings`** → reviewer posted blockers / nits to the PR. Read its verdict on your next `radio check`, then forward to the original worker so they push fixes:
     ```bash
     radio send --to <worker-role> --intent changes-requested --pr <N> --body "see PR comments (reviewer flagged findings)"
     ```
     The actual review content is in the PR comment the reviewer posted — `radio` just carries the routing ping.
 
-  You still own the merge decision — the reviewer never approves, merges, closes, or mutates Status. The reviewer tab stays open showing the analysis (the user can scroll back); `task-done --remove-worktree` from inside that worktree cleans it up when they're done.
+  **Tight-PR norm — minimize deferrals.** When you forward findings, default to "fix ALL of these in this PR" (blockers + nits), not "defer some to a follow-up." A tight PR that lands complete beats a thin one trailing a backlog of deferred nits. Only let something be deferred when it's genuinely out of the PR's scope — and in that case *you* groom it into a ticket during this PM session (don't leave it as a loose "later"). Fold in-scope cleanup into the same changes-requested round.
+
+  You still own the merge decision — the reviewer never approves, merges, closes, or mutates Status. The reviewer is **single-shot and self-cleaning**: right after it posts the PR comment + radios you, it runs `task-done --remove-worktree` and the tab closes itself. Its analysis lives in the PR comment, not the tab — so there's nothing to scroll back to and no manual cleanup for you to do.
 
 If arguments were provided after `/pm`, treat them as the first instruction:
 $ARGUMENTS

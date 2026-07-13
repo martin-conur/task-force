@@ -450,6 +450,19 @@ cmd_register() {
   local f
   f=$(_session_file "$role")
 
+  # Snapshot whether a session file already exists BEFORE we write one below —
+  # this is the offline→online gate for drain-on-register (#168, #174 review
+  # Finding 1). SessionStart re-fires on /compact, /clear, and resume, so
+  # cmd_register runs many times per session; only the FIRST (no session file
+  # yet) is a genuine offline→online transition where "queued while offline" is
+  # true. On re-register, messages in the inbox arrived while the role was
+  # *online* — printing "queued while this role was offline" would be false,
+  # and re-injected on every compaction. So we drain only when fresh=1. The
+  # /clear case (context wiped, re-surfacing genuinely useful) is safely
+  # backstopped by prompt-hook on the next user prompt.
+  local fresh=1
+  [[ -f "$f" ]] && fresh=0
+
   # Re-register protection (#117): `SessionStart` fires again on `/compact`,
   # `/clear`, `/resume`, or a fresh `claude` in the same tab — each time
   # passing the original $ZELLIJ_TAB (the bare slug captured at pane creation).
@@ -531,39 +544,43 @@ cmd_register() {
   # redelivery. Nothing else surfaces that backlog at startup: the stop-hook
   # flush needs a Stop event and the prompt-hook injection needs a user
   # prompt, but register runs from SessionStart — whose stdout IS injected
-  # into the model's context — so simply printing the backlog summary here
-  # puts it in front of the agent on its very first turn. This closes the
-  # offline→online gap, the companion to the stop-hook flush (busy case) and
-  # prompt-hook injection (idle case).
+  # into the model's context (claude loadouts only; Kiro's hook stdout isn't
+  # injected, so this beat no-ops there — same #146 divergence as the stop-
+  # and prompt-hook beats). Printing the backlog summary here puts it in front
+  # of the agent on its very first turn, closing the offline→online gap — the
+  # companion to the stop-hook flush (busy case) and prompt-hook injection
+  # (idle case).
   #
-  # Real register only: this lives in cmd_register, NOT _ensure_session_file's
-  # re-seed path, so a busy/ready self-heal mid-session never re-prints the
-  # summary (acceptance #3 — no spam). Empty inbox emits nothing (acceptance
-  # #2). The no-role SessionStart case never reaches here — the dispatcher
-  # exits 0 before calling cmd_register when $TASK_FORCE_ROLE is unset (#93).
+  # Guards:
+  #   - fresh=1 only: skip on re-register (#174 review Finding 1). Re-fires on
+  #     /compact/clear/resume land here with the role already online, where
+  #     "queued while offline" is false; the /clear context wipe is backstopped
+  #     by prompt-hook on the next prompt.
+  #   - Real register only: lives in cmd_register, NOT _ensure_session_file's
+  #     re-seed path, so a busy/ready self-heal never re-prints (acceptance #3).
+  #   - Empty inbox emits nothing (acceptance #2).
+  #   - No-role SessionStart never reaches here — the dispatcher exits 0 before
+  #     cmd_register when $TASK_FORCE_ROLE is unset (#93).
   local inbox
   inbox=$(_inbox_dir "$role")
-  if [[ -d "$inbox" ]]; then
+  if (( fresh == 1 )) && [[ -d "$inbox" ]]; then
     shopt -s nullglob
     local msgs=("$inbox"/*.md)
     shopt -u nullglob
     if (( ${#msgs[@]} > 0 )); then
-      local entries=() entry summary="" n=0
-      while IFS= read -r entry; do
-        entries+=("$entry")
-      done < <(_inbox_summary "${msgs[@]}")
-      n=${#entries[@]}   # a concurrent radio read may have consumed some
-      if (( n > 0 )); then
-        for entry in "${entries[@]}"; do
-          if [[ -n "$summary" ]]; then summary+=" | "; fi
-          summary+="$entry"
-        done
-        # The backticks are literal markdown for the agent reading the
-        # injected context, not command substitution.
+      _inbox_summary_joined "${msgs[@]}"   # sets INBOX_SUMMARY_N / INBOX_SUMMARY
+      if (( INBOX_SUMMARY_N > 0 )); then
+        # Recipe unified with prompt-hook's (#174 review Finding 2): `radio
+        # check` only LISTS, and since #131 `radio read <id>` IS the ack, so an
+        # agent told only to "process them" lists the backlog, treats it as
+        # done, and never acks — leaving prompt-hook to re-inject the same ids
+        # every turn. Naming `radio read <id>` is what actually drains the
+        # queue. The backticks are literal markdown for the reading agent, not
+        # command substitution.
         # shellcheck disable=SC2016
-        printf '[radio] %s message(s) were queued while this role was offline: %s. Run `radio check` and process them before taking new work.\n' \
-          "$n" "$summary"
-        _log "register: surfaced $n queued message(s) role=$role"
+        printf '[radio] %s message(s) queued while this role was offline: %s. Run `radio check`, then process each with `radio read <id>` before taking new work.\n' \
+          "$INBOX_SUMMARY_N" "$INBOX_SUMMARY"
+        _log "register: surfaced $INBOX_SUMMARY_N queued message(s) role=$role"
       fi
     fi
   fi
@@ -759,6 +776,35 @@ _inbox_summary() {
   return 0
 }
 
+# Join the per-message _inbox_summary lines for the given message files into a
+# single " | "-separated string, and recount to the survivors (a concurrent
+# `radio read` can consume a file between the caller's glob and this read).
+# Populates two globals — INBOX_SUMMARY_N (survivor count) and INBOX_SUMMARY
+# (joined string). Both model-facing consumers — cmd_prompt_hook's idle-turn
+# injection and cmd_register's drain-on-register (#168) — call this so the
+# recount + join grammar lives in ONE place; a format fix lands in both at
+# once instead of drifting between two verbatim copies (#174 review Finding 3;
+# the exact drift the #173 review predicted when it asked for _inbox_summary).
+# Never returns nonzero. Callers own only their printf template.
+INBOX_SUMMARY_N=0
+INBOX_SUMMARY=""
+_inbox_summary_joined() {
+  INBOX_SUMMARY_N=0
+  INBOX_SUMMARY=""
+  local entries=() entry
+  while IFS= read -r entry; do
+    entries+=("$entry")
+  done < <(_inbox_summary "$@")
+  INBOX_SUMMARY_N=${#entries[@]}
+  local summary=""
+  for entry in "${entries[@]}"; do
+    if [[ -n "$summary" ]]; then summary+=" | "; fi
+    summary+="$entry"
+  done
+  INBOX_SUMMARY="$summary"
+  return 0
+}
+
 # UserPromptSubmit-hook entrypoint (#164). Unlike Stop, a UserPromptSubmit
 # hook's stdout IS injected into the model's context — which makes it the
 # reliable delivery path for a backlog that queued while the recipient was
@@ -797,24 +843,17 @@ cmd_prompt_hook() {
     return 0
   fi
 
-  local entries=() entry summary=""
-  while IFS= read -r entry; do
-    entries+=("$entry")
-  done < <(_inbox_summary "${msgs[@]}")
-  n=${#entries[@]}   # a concurrent radio read may have consumed some
+  _inbox_summary_joined "${msgs[@]}"   # sets INBOX_SUMMARY_N / INBOX_SUMMARY
+  n=$INBOX_SUMMARY_N                    # a concurrent radio read may have consumed some
   if (( n == 0 )); then
     return 0
   fi
-  for entry in "${entries[@]}"; do
-    if [[ -n "$summary" ]]; then summary+=" | "; fi
-    summary+="$entry"
-  done
 
   # The backticks are literal markdown for the agent reading the injected
   # context, not command substitution.
   # shellcheck disable=SC2016
   printf '[radio] %s unread message(s): %s. Process with `radio check` / `radio read <id>` before or after the user'\''s request, as appropriate.\n' \
-    "$n" "$summary"
+    "$n" "$INBOX_SUMMARY"
   _log "prompt-hook: surfaced $n unread message(s) role=$TASK_FORCE_ROLE"
 }
 

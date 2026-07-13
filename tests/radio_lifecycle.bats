@@ -727,20 +727,34 @@ _queue_offline() {
 
 @test "register: prints backlog summary when the inbox has offline-queued messages (#168 acceptance #1)" {
   # Three reports queued before pm ever registers — the 'no session for pm'
-  # stranding the ticket describes.
+  # stranding the ticket describes. The per-message from=/intent=/pr=/issue=
+  # summary grammar is _inbox_summary_joined's, pinned exhaustively in
+  # radio_prompt_hook.bats (#174 review, optional item); here we assert only
+  # register-specific behavior: the offline framing, the corrected recipe, that
+  # the drain surfaces >1 message joined on one line, and the count.
   _queue_offline pm review-requested 41 "" worker-a
   _queue_offline pm review-requested 43 "" worker-b
   _queue_offline pm spec-ready "" 7 planner
   TASK_FORCE_ROLE=pm run "$RADIO" register --role pm --tab pm --agent claude
   assert_success
-  assert_output --partial "[radio] 3 message(s) were queued while this role was offline:"
-  assert_output --partial "intent=review-requested pr=41"
-  assert_output --partial "intent=review-requested pr=43"
-  assert_output --partial "intent=spec-ready issue=7"
-  assert_output --partial " | "
-  assert_output --partial 'Run `radio check` and process them before taking new work.'
+  assert_output --partial "[radio] 3 message(s) queued while this role was offline:"
+  assert_output --partial " | "   # >1 message joined into one summary line
+  # Recipe MUST name `radio read <id>` — `radio check` alone only lists; since
+  # #131 `read` is the ack (#174 review Finding 2).
+  assert_output --partial 'Run `radio check`, then process each with `radio read <id>` before taking new work.'
   # One compact injected line — the summary must not sprawl.
   [ "${#lines[@]}" -eq 1 ]
+}
+
+@test "register: drain surfaces the frontmatter pr=/issue= fields through the summary (#168)" {
+  # One targeted check that the drain wires message metadata through — not a
+  # re-pin of the full _inbox_summary grammar (that lives in prompt-hook tests).
+  _queue_offline pm review-requested 41 "" worker-a
+  _queue_offline pm spec-ready "" 7 planner
+  TASK_FORCE_ROLE=pm run "$RADIO" register --role pm --tab pm --agent claude
+  assert_success
+  assert_output --partial "intent=review-requested pr=41"
+  assert_output --partial "intent=spec-ready issue=7"
 }
 
 @test "register: backlog summary includes the message ids radio read expects (#168)" {
@@ -790,6 +804,28 @@ _queue_offline() {
   assert_output ""
   # And the session file came back (self-heal worked).
   assert [ -f "$sess" ]
+}
+
+@test "register: re-register with a populated inbox does NOT re-drain (#174 review Finding 1)" {
+  # SessionStart re-fires on /compact, /clear, resume — each re-runs cmd_register
+  # with the session file already present. Messages sitting in the inbox then
+  # arrived while the role was ONLINE, so re-printing "queued while offline"
+  # would be false, and re-injected on every compaction. The fresh-file gate
+  # must suppress the drain on the second register.
+  local sess="$TASK_FORCE_HOME/radio/sessions/pm.info"
+
+  # First register: empty inbox, and it must leave the session file behind.
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  assert [ -f "$sess" ]
+
+  # A message lands while pm is online, then SessionStart re-fires (/compact).
+  _queue_offline pm review-requested 41 "" worker-a
+  TASK_FORCE_ROLE=pm run "$RADIO" register --role pm --tab pm --agent claude
+  assert_success
+  assert_output ""   # re-register with an existing session file → no drain
+  # And the message is still queued for prompt-hook to surface on the next turn.
+  run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox'/*.md | wc -l | tr -d ' '"
+  assert_output "1"
 }
 
 @test "register: no-role SessionStart never reaches the drain (dispatcher exits 0 first, #93)" {

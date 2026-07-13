@@ -122,6 +122,16 @@ is injected into the agent's context alongside the prompt. That line is the
 canonical radio channel, not user-typed text — trust it and process the
 listed messages with `radio check` / `radio read <id>`.
 
+Finally, `SessionStart` fires `radio register`; on a *fresh* start (not the
+re-registers that `/compact`, `/clear`, and resume trigger) it also prints a
+summary of any inbox that queued while the role was offline — reports whose
+send-time wake found no session file and no-op'd. `SessionStart` stdout is
+injected into the model's context, so that backlog surfaces on the role's very
+first turn, not just after the next human prompt: the offline→online companion
+to the stop-hook flush (busy case) and prompt-hook injection (idle case). Empty
+inbox prints nothing. (claude loadouts only — Kiro's hook stdout isn't
+injected; see #146.)
+
 Full command form:
 
 ```bash

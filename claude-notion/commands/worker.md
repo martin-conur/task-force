@@ -15,6 +15,14 @@ Workflow:
 5. Write tests for new features or bug fixes.
 6. Run tests to verify.
 7. Commit with the task name as a prefix: `<Task name>: <short description>`.
+
+**Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (recurring review findings from PRs #172–#175):
+- **CHANGELOG**: add an entry under `## [Unreleased]`. Include the **"Upgrading: re-run `task-init <loadout>`"** note **iff** installer-written artifacts changed (hooks, copied commands/agents, `settings.json`); otherwise state **"No `task-init` re-run needed"** explicitly.
+- **Doc beat**: if model-facing or user-visible behavior changed, update the relevant README section, the `steering/*.example.md` templates, and the loadout workflow docs (`.claude/*-workflow.md`) — the #163/#164/#168 precedent.
+- **Reuse**: grep for an existing helper before writing scaffolding; if a second copy of ~10+ lines appears, extract and share it instead of re-implementing.
+- **Spec comments**: re-read the spec's *comments/notes* (on the issue or task) — implementation addenda often live there, not in the body.
+- **Green**: run the full suite + `tools/check-drift.sh` + `shellcheck -x` on changed shell files; after pushing, confirm `gh pr checks` rather than claiming green.
+
 8. Create a pull request first (before bumping Status), so a failed `gh pr create` doesn't strand the task in "In Review" with no PR:
    - Find the base branch by running:
      ```bash

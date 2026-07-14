@@ -39,6 +39,8 @@ source "$AW_ROOT/lib/detect-impl.sh"
 source "$AW_ROOT/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-create.sh
 source "$AW_ROOT/lib/worktree-create.sh"
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
 
 usage() {
   cat <<'EOF'
@@ -196,6 +198,11 @@ PR_NUMBER=$(parse_pr_number "$PR_INPUT") || {
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
+# Worktree-proof main-repo name for radio roles (#165 RC-2): task-reviewer runs
+# "from any spare tab" which may itself be a linked worktree, where
+# basename(REPO_ROOT) is the worktree slug. Derive the main repo name for the
+# reviewer role and the injected PM address.
+REPO_RADIO_NAME=$(aw_main_repo_name "$REPO_ROOT")
 
 # ---------------- PR validation + metadata ----------------
 # Validate PR exists. gh's built-in --jq flag avoids depending on a system
@@ -353,16 +360,16 @@ build_claude_cmd() {
 # Per-PR role so concurrent reviewers don't collide on the radio mailbox.
 # Sonnet by default for the orchestrator (preserves #134 cost win); a
 # pre-set ANTHROPIC_MODEL wins so the caller can pin Opus for a one-off.
-TASK_FORCE_ROLE_VALUE="reviewer-${REPO_NAME}-pr${PR_NUMBER}"
+TASK_FORCE_ROLE_VALUE="reviewer-${REPO_RADIO_NAME}-pr${PR_NUMBER}"
 RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
 RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
 RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
-# Repo-scoped PM address (#165): the reviewer radios its verdict with
-# `--to ${TASK_FORCE_PM_ROLE:-pm}`, so inject this repo's PM role as launch-time
-# identity (authoritative over radio's sender-role derivation shim).
-RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_NAME}") "
+# Repo-scoped PM address (#165): the reviewer radios its verdict with `--to pm`,
+# resolved by radio's shim; this injected value is the shim's registration-gated
+# launch-time identity so the verdict reaches THIS repo's PM (pm-<reponame>).
+RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
 [[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
 
 # ---------------- launch ----------------

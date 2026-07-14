@@ -8,6 +8,8 @@ AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$AW_ROOT_REAL/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-create.sh
 source "$AW_ROOT_REAL/lib/worktree-create.sh"
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT_REAL/lib/repo-name.sh"
 # endregion:lib-source-header
 
 usage() {
@@ -164,14 +166,19 @@ printf 'BASE_BRANCH=%s\nSLUG=%s\nJIRA_REF=%s\n' "$BASE_BRANCH" "$SLUG" "$JIRA_RE
 # SessionStart hook can register with the radio mailbox. The prefix is added
 # to the cmd string passed to aw_launch_tab; VAR=val syntax in front of a
 # command exports those vars to that command's environment only.
-TASK_FORCE_ROLE_VALUE="worker-${REPO_NAME}-${SLUG}"
+# Worktree-proof repo name for radio roles (#165 RC-2): basename(REPO_ROOT) is
+# the worktree slug when task-work runs from a linked worktree, so derive the
+# MAIN repo name via git-common-dir. Sanitized to the role charset (RC-6) so a
+# dotted repo name can't produce an invalid role. Used for both the worker role
+# and the injected PM address so the two stay symmetric across worktrees.
+REPO_RADIO_NAME=$(aw_main_repo_name "$REPO_ROOT")
+TASK_FORCE_ROLE_VALUE="worker-${REPO_RADIO_NAME}-${SLUG}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_TAB=$(printf %q "$SLUG") "
-# The repo-scoped PM address (#165): symmetric with the worker role above, so
-# the worker prompt's `radio send --to ${TASK_FORCE_PM_ROLE:-pm}` reaches this
-# repo's PM (pm-<reponame>) and never a different repo's PM tab. Injected here
-# as launch-time identity — the authoritative resolution for `--to pm`, ahead
-# of radio's sender-role derivation shim.
-RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_NAME}") "
+# The repo-scoped PM address (#165): `radio send --to pm` in the worker prompt
+# is resolved by radio's shim; this injected value is the shim's registration-
+# gated launch-time identity (step 1), so the ping reaches THIS repo's PM
+# (pm-<reponame>) and never a different repo's PM tab.
+RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
 # Opt --auto workers into radio's CR (auto-submit) wake-up so PM pings process
 # without a manual Enter (#128). PM and non-auto workers leave this unset, so
 # radio keeps using LF — preserves the human gate that protects a partially-

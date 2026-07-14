@@ -309,7 +309,12 @@ teardown() {
 @test "claude task-reviewer: sets per-PR radio role reviewer-<repo>-pr<N>" {
   AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
-  assert_stub_called zellij "TASK_FORCE_ROLE=reviewer-${REPO_NAME}-pr42"
+  # Role uses the sanitized main-repo name (#165 RC-2/6), not the raw basename
+  # (mktemp -d names carry a dot, which is stripped).
+  local rn
+  rn=$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+  assert_stub_called zellij "TASK_FORCE_ROLE=reviewer-${rn}-pr42"
+  assert_stub_called zellij "TASK_FORCE_PM_ROLE=pm-${rn}"
 }
 
 # ---------------------------------------------------------------------------

@@ -70,7 +70,7 @@ _inbox_count() {  # $1 = role
   TASK_FORCE_ROLE=worker-myrepo-issue-3 run "$RADIO" send \
     --to pm --intent review-requested --pr 3 --body "PR up"
   assert_success
-  refute_output --partial "radio: --to pm →"   # resolved to literal pm, no rewrite
+  assert_output --partial "radio: --to pm → pm (via literal pm"   # migration fallback, named
   assert_equal "$(_inbox_count pm)" "1"
   assert_equal "$(_inbox_count pm-myrepo)" "0"
 }
@@ -80,8 +80,8 @@ _inbox_count() {  # $1 = role
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send \
     --to pm --intent review-requested --pr 1 --body "PR up"
   assert_success
-  # No rewrite note — the recipient really is literal pm.
-  refute_output --partial "radio: --to pm →"
+  # Resolution line prints on every shim invocation (RC-7), naming literal pm.
+  assert_output --partial "radio: --to pm → pm (via literal pm"
   assert_equal "$(_inbox_count pm)" "1"
 }
 
@@ -177,4 +177,103 @@ _inbox_count() {  # $1 = role
   run "$RADIO" orphans
   assert_success
   refute_output --partial "pm-other"
+}
+
+# ----- RC-2: worktree-proof repo-name derivation ----------------------------
+
+@test "register persists REPO_NAME= as the MAIN repo, not the worktree slug (#165 RC-2)" {
+  local parent main wt
+  parent=$(mktemp -d)
+  main="$parent/mainrepo"
+  mkdir -p "$main"
+  git -C "$main" init -q -b main
+  git -C "$main" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  wt="$parent/mainrepo-worktrees/feat-x"
+  git -C "$main" worktree add -q "$wt" -b task/feat-x
+  # A worker registers from inside the worktree — REPO= is the worktree path.
+  "$RADIO" register --role worker-mainrepo-feat-x --tab feat-x --repo "$wt" --agent claude
+  run grep '^REPO_NAME=' "$TASK_FORCE_HOME/radio/sessions/worker-mainrepo-feat-x.info"
+  assert_output "REPO_NAME=mainrepo"
+  git -C "$main" worktree remove --force "$wt" 2>/dev/null || true
+  rm -rf "$parent"
+}
+
+@test "--to pm from a worktree worker resolves via persisted REPO_NAME (not the slug) (#165 RC-2)" {
+  local parent main wt
+  parent=$(mktemp -d)
+  main="$parent/mainrepo"
+  mkdir -p "$main"
+  git -C "$main" init -q -b main
+  git -C "$main" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  wt="$parent/mainrepo-worktrees/feat-y"
+  git -C "$main" worktree add -q "$wt" -b task/feat-y
+  "$RADIO" register --role pm-mainrepo --tab pm-mainrepo --agent claude
+  "$RADIO" register --role worker-mainrepo-feat-y --tab feat-y --repo "$wt" --agent claude
+  TASK_FORCE_ROLE=worker-mainrepo-feat-y run "$RADIO" send \
+    --to pm --intent review-requested --pr 9 --body "PR up"
+  assert_success
+  assert_output --partial "radio: --to pm → pm-mainrepo"
+  assert_equal "$(_inbox_count pm-mainrepo)" "1"
+  git -C "$main" worktree remove --force "$wt" 2>/dev/null || true
+  rm -rf "$parent"
+}
+
+# ----- RC-3: longest-match slug split ---------------------------------------
+
+@test "--to pm slug-split prefers the LONGEST registered pm-<name> (#165 RC-3)" {
+  # api and api-server both live; worker-api-server-fix-1 must reach pm-api-server,
+  # not pm-api (which glob order could otherwise pick).
+  "$RADIO" register --role pm-api        --tab pm-api        --agent claude
+  "$RADIO" register --role pm-api-server --tab pm-api-server --agent claude
+  TASK_FORCE_ROLE=worker-api-server-fix-1 run "$RADIO" send \
+    --to pm --intent review-requested --pr 1 --body "PR up"
+  assert_success
+  assert_output --partial "radio: --to pm → pm-api-server"
+  assert_equal "$(_inbox_count pm-api-server)" "1"
+  assert_equal "$(_inbox_count pm-api)" "0"
+}
+
+# ----- RC-4: alias lifecycle ------------------------------------------------
+
+@test "register-alias records the alias in the primary's sidecar and register re-seeds it (#165 RC-4a)" {
+  "$RADIO" register --role pm-primary --tab pm-primary --agent claude
+  "$RADIO" register-alias --role pm-other --alias pm-primary --repo /x/other
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/pm-primary.aliases" ]
+  # Simulate an erroneous sweep dropping the alias mid-session.
+  rm -f "$TASK_FORCE_HOME/radio/sessions/pm-other.info"
+  # A re-register (SessionStart on /compact) must re-seed it from the sidecar.
+  "$RADIO" register --role pm-primary --tab pm-primary --agent claude
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/pm-other.info" ]
+  run cat "$TASK_FORCE_HOME/radio/sessions/pm-other.info"
+  assert_output --partial "ALIAS=pm-primary"
+}
+
+@test "register-alias migrates a pre-existing inbox into the primary (#165 RC-4b)" {
+  # A worker pinged pm-other while no PM ran — the message sits in pm-other/inbox.
+  export ZELLIJ=fake-session
+  TASK_FORCE_ROLE=worker-other-1 "$RADIO" send --to pm-other --intent ping --body "early" >/dev/null
+  assert_equal "$(_inbox_count pm-other)" "1"
+  "$RADIO" register --role pm-primary --tab pm-primary --agent claude
+  "$RADIO" register-alias --role pm-other --alias pm-primary --repo /x/other
+  # The queued message is folded into the primary's inbox; the alias owns none.
+  assert_equal "$(_inbox_count pm-primary)" "1"
+  assert [ ! -d "$TASK_FORCE_HOME/radio/mailbox/pm-other/inbox" ]
+}
+
+@test "a real PM claiming an aliased address does not trip the collision warning (#165 RC-4c)" {
+  "$RADIO" register-alias --role pm-api --alias pm-primary --repo /alias/api
+  run "$RADIO" register --role pm-api --tab pm-api --repo /real/api --agent claude
+  assert_success
+  refute_output --partial "WARNING"
+  # It became a real (non-alias) session.
+  run cat "$TASK_FORCE_HOME/radio/sessions/pm-api.info"
+  refute_output --partial "ALIAS="
+}
+
+@test "re-pointing an alias at a different primary/repo warns (#165 RC-4d)" {
+  "$RADIO" register-alias --role pm-x --alias pm-a --repo /1/x
+  run "$RADIO" register-alias --role pm-x --alias pm-b --repo /2/x
+  assert_success
+  assert_output --partial "WARNING"
+  assert_output --partial "re-pointing"
 }

@@ -14,9 +14,9 @@ Workflow:
 4. Write the implementation spec into the Jira issue — either by editing the description or appending a comment, per the project's convention in `.claude/jira-workflow.md`.
 5. Hand off to PM via radio — this is the canonical handoff:
    ```bash
-   radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent spec-ready --issue <KEY-N> --body "spec written, ready to dispatch"
+   radio send --to pm --intent spec-ready --issue <KEY-N> --body "spec written, ready to dispatch"
    ```
-   Read `radio send`'s stdout: `delivered` / `queued — pm is busy` means the ping landed — done. But `queued — pm is idle but wake failed …` means it's unread with no auto-redelivery, and `WARNING — no session for pm` / `WARNING — pm looks dead …` means **PM isn't running** — in those cases tell the user instead of assuming the spec was picked up (check the role name via `ls ~/.task-force/radio/sessions/`).
+   Read `radio send`'s stdout: `delivered` / `queued — pm is busy` means the ping landed — done. But `queued — pm is idle but wake failed …` means it's unread with no auto-redelivery, and `WARNING — no session for pm-…` / `WARNING — pm-… looks dead …` means **PM isn't running** — in those cases tell the user instead of assuming the spec was picked up (check the role name via `ls ~/.task-force/radio/sessions/`).
 
 Spec template (use when applicable, skip sections that are N/A):
 

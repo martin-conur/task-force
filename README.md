@@ -366,15 +366,15 @@ These are the five transitions that make up a full PR cycle. Each one is a singl
 
 | From    | When                            | Command                                                                |
 |---------|---------------------------------|------------------------------------------------------------------------|
-| Planner | spec written into the issue     | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent spec-ready --issue <N>`                   |
-| Worker  | PR opened                       | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent review-requested --pr <N>`                |
-| Worker  | new commits pushed after review | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent re-review-requested --pr <N>`             |
+| Planner | spec written into the issue     | `radio send --to pm --intent spec-ready --issue <N>`                   |
+| Worker  | PR opened                       | `radio send --to pm --intent review-requested --pr <N>`                |
+| Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
 | PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
 | PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
 
 PR review *content* still lives in `gh pr comment` / `gh pr review` (or the equivalent on Jira / Notion / local); radio only carries the routing ping.
 
-Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (per-repo since #165, so two repos' PMs never collide), and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`. Workers address the PM via the injected `$TASK_FORCE_PM_ROLE` (`radio send --to ${TASK_FORCE_PM_ROLE:-pm} …`); a bare `--to pm` still resolves to the right `pm-<reponame>` through radio's compat shim. One PM can oversee several repos with `task-pm --also <repo>`, which aliases `pm-<other>` into its single inbox.
+Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (per-repo since #165, so two repos' PMs never collide), and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`. Workers always send `--to pm`; radio resolves it to the right `pm-<reponame>` using the injected `$TASK_FORCE_PM_ROLE` (or the sender's own identity). One PM can oversee several repos with `task-pm --also <repo>`, which aliases `pm-<other>` into its single inbox.
 
 ### Command surface
 
@@ -459,7 +459,7 @@ This creates a worktree, opens a new zellij tab, and launches the worker agent. 
 **3. Planner (optional).** If the issue needs a design pass first, the PM dispatches a planner instead (`task-work … --plan`). The planner reads the code, writes the spec into the issue body, and ends with:
 
 ```bash
-radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent spec-ready --issue 42
+radio send --to pm --intent spec-ready --issue 42
 ```
 
 PM's tab gets focused; on the next turn the PM picks it up and dispatches a worker for the same issue.
@@ -475,7 +475,7 @@ gh pr create --base main --head task/issue-42 --fill
 Then bumps the project Status field to `In Review` (or keeps it at `In Progress` if the project has no In Review column — the worker reads the mapping from `.claude/gh-workflow.md`), and pings the PM:
 
 ```bash
-radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent review-requested --pr 42
+radio send --to pm --intent review-requested --pr 42
 ```
 
 If PM is idle, its pane is woken with a `radio check`; if PM is mid-turn, the message queues and PM's `Stop` hook (`radio stop-hook`) forces it to drain the ping at the end of that turn.
@@ -499,7 +499,7 @@ radio send --to worker-task-force-issue-42 --intent changes-requested --pr 42
 The worker tab is focused, picks up the comments, pushes fixes, and pings back:
 
 ```bash
-radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent re-review-requested --pr 42
+radio send --to pm --intent re-review-requested --pr 42
 ```
 
 Loop until the PR is clean.

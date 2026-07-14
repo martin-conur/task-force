@@ -1,9 +1,10 @@
 #!/usr/bin/env bats
 # Tests for bin/task-pm: in-place PM-tab takeover (canonical file, #170).
-# Asserts:
-#   - rename-tab to "pm" via zellij (when $ZELLIJ is set)
-#   - exports TASK_FORCE_ROLE=pm and ZELLIJ_TAB=pm
+# Asserts (per-repo PM role, #165):
+#   - rename-tab to "pm-<reponame>" via zellij (when $ZELLIJ is set)
+#   - exports TASK_FORCE_ROLE / ZELLIJ_TAB = pm-<reponame>
 #   - exec's `claude /pm` (claude impls) / `kiro-cli chat --agent pm` (kiro)
+#   - --also aliases other repos onto this PM
 #   - errors out cleanly outside a git repo
 #
 # The loadout is pinned per-test via AW_IMPL (lib/detect-impl.sh resolution
@@ -19,6 +20,9 @@ setup() {
   setup_stubs
   cd "$MAIN_REPO"
   export ZELLIJ=fake-session
+  # task-pm derives the PM role from the sanitized main-repo name (#165 RC-2/6),
+  # not the raw basename — mktemp -d names contain a dot, which is stripped.
+  PM_REPO_NAME=$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
 }
 
 teardown() {
@@ -31,22 +35,19 @@ teardown() {
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
   # Tab rename is now repo-scoped (#165) — symmetric with worker-<reponame>-<slug>.
-  assert_stub_called zellij "action rename-tab pm-${REPO_NAME}"
+  assert_stub_called zellij "action rename-tab pm-${PM_REPO_NAME}"
   # Claude was invoked with /pm
   run stub_calls claude
   assert_output --partial "/pm"
 }
 
-@test "claude task-pm exports TASK_FORCE_ROLE=pm and ZELLIJ_TAB=pm" {
-  # The claude stub records its env via $STUB_CALLS_DIR/claude.env when invoked.
-  # We assert via a wrapper that exec's the script then dumps env.
-  run env -i HOME="$HOME" PATH="$PATH" ZELLIJ="$ZELLIJ" STUB_CALLS_DIR="$STUB_CALLS_DIR" \
-    AW_IMPL=claude-gh bash -c "'$TASK_PM' >/dev/null 2>&1; echo OK"
-  # We can't easily intercept env on macOS in a portable way; instead, verify
-  # the claude stub was invoked at all (which means task-pm reached its exec).
+@test "claude task-pm exports TASK_FORCE_ROLE=pm-<reponame> and ZELLIJ_TAB=pm-<reponame> (#165)" {
+  # The claude stub records the identity env it was exec'd with into claude.env.
+  AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
-  run stub_calls claude
-  assert_output --partial "/pm"
+  run cat "$STUB_CALLS_DIR/claude.env"
+  assert_output --partial "TASK_FORCE_ROLE=pm-${PM_REPO_NAME}"
+  assert_output --partial "ZELLIJ_TAB=pm-${PM_REPO_NAME}"
 }
 
 @test "claude task-pm: works without zellij (\$ZELLIJ unset → no rename)" {
@@ -74,7 +75,7 @@ teardown() {
 @test "kiro task-pm renames the current tab to pm-<reponame> and exec's kiro-cli pm agent (#165)" {
   AW_IMPL=kiro-gh run "$TASK_PM"
   assert_success
-  assert_stub_called zellij "action rename-tab pm-${REPO_NAME}"
+  assert_stub_called zellij "action rename-tab pm-${PM_REPO_NAME}"
   run stub_calls kiro-cli
   assert_output --partial "chat --agent pm"
 }
@@ -177,4 +178,42 @@ _clean_repo() {  # $1 = basename → prints the created repo path
   assert_success
   assert_output --partial "resolves to this PM's own repo"
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm-pmrepo.info" ]
+}
+
+@test "task-pm --also errors on a path that does not exist (#165 RC-7)" {
+  setup_task_force_home
+  local primary
+  primary=$(_clean_repo pmrepo)
+  cd "$primary"
+  AW_IMPL=claude-gh run "$TASK_PM" --also ./nope-not-here
+  assert_failure
+  assert_output --partial "not an existing directory"
+}
+
+# ----- RC-6 (charset) / RC-7 (unknown flags) --------------------------------
+
+@test "task-pm sanitizes a dotted repo name into a valid pm-<name> role (#165 RC-6)" {
+  # `pm-my.app` would fail radio's role validation; the derived name must be
+  # sanitized so the PM can register.
+  local parent repo
+  parent=$(mktemp -d)
+  repo="$parent/my.app"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  cd "$repo"
+  AW_IMPL=claude-gh run "$TASK_PM"
+  assert_success
+  assert_stub_called zellij "action rename-tab pm-myapp"
+  run cat "$STUB_CALLS_DIR/claude.env"
+  assert_output --partial "TASK_FORCE_ROLE=pm-myapp"
+  rm -rf "$parent"
+}
+
+@test "task-pm rejects an unknown flag instead of swallowing it (#165 RC-7)" {
+  AW_IMPL=claude-gh run "$TASK_PM" --alos /some/repo
+  assert_failure
+  assert_output --partial "unknown argument"
+  # And it must NOT have launched the PM after a typo.
+  run stub_calls claude
+  refute_output --partial "/pm"
 }

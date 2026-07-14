@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 # Stub for kiro-cli — records all invocations, silently succeeds.
 echo "kiro-cli $*" >> "${STUB_CALLS_DIR}/kiro-cli.calls"
+echo "TASK_FORCE_ROLE=${TASK_FORCE_ROLE:-} ZELLIJ_TAB=${ZELLIJ_TAB:-} TASK_FORCE_PM_ROLE=${TASK_FORCE_PM_ROLE:-}" >> "${STUB_CALLS_DIR}/kiro-cli.env"
 exit 0

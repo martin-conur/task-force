@@ -20,7 +20,7 @@ When showing the backlog, group by project and sort by priority.
 
 ### Radio handoffs (canonical)
 
-The worker pings you via `radio` at every transition. Reciprocate so the worker knows when to push more commits, when to clean up, or when to keep waiting. Your own PM role is `pm-<reponame>` (per-repo since #165, so PMs in two repos no longer clobber each other's mailbox); workers address it with `--to ${TASK_FORCE_PM_ROLE:-pm}`, and a bare `--to pm` from a pre-migration worker is auto-resolved to it by radio's compat shim. Worker role names follow `worker-<reponame>-<slug>`; discover the live ones via `ls ~/.task-force/radio/sessions/`.
+The worker pings you via `radio` at every transition. Reciprocate so the worker knows when to push more commits, when to clean up, or when to keep waiting. Your own PM role is `pm-<reponame>` (per-repo since #165, so PMs in two repos no longer clobber each other's mailbox); workers reach it by sending `--to pm`, which radio's compat shim resolves to this repo's `pm-<reponame>` via the injected `$TASK_FORCE_PM_ROLE` (or, for a pre-migration worker with no env, the sender's own identity). Worker role names follow `worker-<reponame>-<slug>`; discover the live ones via `ls ~/.task-force/radio/sessions/`.
 
 `radio send` reports the delivery outcome on stdout — read it before assuming the worker got the ping:
 - `delivered`, or `queued — <role> is busy` / `awaiting` → the ping landed (or drains on the worker's next Stop / prompt). Fine.

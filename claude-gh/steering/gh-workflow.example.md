@@ -87,13 +87,13 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 
 | From     | When                              | Command                                                                          |
 |----------|-----------------------------------|----------------------------------------------------------------------------------|
-| Planner  | spec written into the issue       | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent spec-ready --issue <N>`                             |
-| Worker   | PR opened                         | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent review-requested --pr <N>`                          |
-| Worker   | new commits pushed after review   | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent re-review-requested --pr <N>`                       |
+| Planner  | spec written into the issue       | `radio send --to pm --intent spec-ready --issue <N>`                             |
+| Worker   | PR opened                         | `radio send --to pm --intent review-requested --pr <N>`                          |
+| Worker   | new commits pushed after review   | `radio send --to pm --intent re-review-requested --pr <N>`                       |
 | PM       | review requested changes          | `radio send --to <worker-role> --intent changes-requested --pr <N>`              |
 | PM       | PR merged                         | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`            |
-| Reviewer | review done, no findings          | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent review-complete-clean --pr <N>`                     |
-| Reviewer | review done, blockers/nits posted | `radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent review-complete-with-findings --pr <N>`             |
+| Reviewer | review done, no findings          | `radio send --to pm --intent review-complete-clean --pr <N>`                     |
+| Reviewer | review done, blockers/nits posted | `radio send --to pm --intent review-complete-with-findings --pr <N>`             |
 
 When a worker's turn ends, the `Stop` hook runs `radio stop-hook`
 automatically: with an empty inbox it marks the role idle; if messages queued
@@ -132,8 +132,8 @@ To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm-<reponame>`, registers that repo-scoped role via
 the `SessionStart` hook, and starts the PM agent in-place. The per-repo role
 (#165) lets PMs in two repos coexist without clobbering each other's mailbox;
-workers reach it via the injected `$TASK_FORCE_PM_ROLE`, and a bare `--to pm`
-from a pre-migration worker is auto-resolved by radio's compat shim. To oversee
+workers reach it by sending `--to pm`, which radio resolves to this repo's
+`pm-<reponame>` via the injected `$TASK_FORCE_PM_ROLE` or the sender's own identity. To oversee
 several repos from one PM tab, pass `task-pm --also <other-repo>` (repeatable):
 it writes an alias radio session so `pm-<other>` routes into this one inbox.
 

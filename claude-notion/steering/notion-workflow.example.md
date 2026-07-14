@@ -135,8 +135,13 @@ follow `worker-<reponame>-<slug>`; discover the live one via
 `ls ~/.task-force/radio/sessions/`.
 
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
-the current zellij tab to `pm`, registers via the `SessionStart` hook, and
-starts the PM agent in-place.
+the current zellij tab to `pm-<reponame>`, registers that repo-scoped role via
+the `SessionStart` hook, and starts the PM agent in-place. The per-repo role
+(#165) lets PMs in two repos coexist without clobbering each other's mailbox;
+workers reach it by sending `--to pm`, which radio resolves to this repo's
+`pm-<reponame>` via the injected `$TASK_FORCE_PM_ROLE` or the sender's own identity. To oversee
+several repos from one PM tab, pass `task-pm --also <other-repo>` (repeatable):
+it writes an alias radio session so `pm-<other>` routes into this one inbox.
 
 If a worker tab dies unexpectedly (or Claude resumes a session without
 re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.

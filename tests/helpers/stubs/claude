@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 # Stub for claude CLI — records all invocations, silently succeeds.
 echo "claude $*" >> "${STUB_CALLS_DIR}/claude.calls"
+# Record identity env task-pm / task-work export just before exec (#165), so
+# tests can assert the resolved role/tab rather than only that claude ran.
+echo "TASK_FORCE_ROLE=${TASK_FORCE_ROLE:-} ZELLIJ_TAB=${ZELLIJ_TAB:-} TASK_FORCE_PM_ROLE=${TASK_FORCE_PM_ROLE:-}" >> "${STUB_CALLS_DIR}/claude.env"
 exit 0

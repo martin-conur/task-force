@@ -16,6 +16,9 @@ Usage:
   radio read   [--peek|--no-ack] <id>    print body; by default also move inbox/<id>.md -> processed/
   radio ack    <id>                      move message to processed/ (idempotent: no-op if already processed)
   radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
+  radio register-alias --role ROLE --alias TARGET [--repo PATH]
+                                         point ROLE's address at TARGET's inbox/tab
+                                         (task-pm --also; one PM oversees N repos)
   radio ready                            mark this role idle
   radio busy                             mark this role busy
   radio awaiting                         mark this role awaiting user input
@@ -157,6 +160,36 @@ _validate_role() {
     ""|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
     *[!a-zA-Z0-9_-]*) echo "radio: invalid role: $role" >&2; return 1 ;;
   esac
+}
+
+# Sanitize a string to radio's role-segment charset (#165 RC-6). Byte-identical
+# with lib/repo-name.sh::aw_sanitize_repo_name and task-work's sanitize_slug so a
+# repo name derived launcher-side matches one re-derived here at register time.
+_sanitize_role_segment() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g'
+}
+
+# Canonical MAIN worktree root for the git repo containing $1 (#165 RC-2/RC-7).
+# basename(worktree) is the slug and worktree paths differ across checkouts of
+# one repo — so we resolve --git-common-dir's parent, which is the same absolute
+# path for every worktree of a repo. Empty when git can't answer.
+_repo_root_of() {
+  local dir="$1" common
+  [[ -n "$dir" ]] || return 0
+  common=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || return 0
+  [[ -n "$common" ]] || return 0
+  case "$common" in /*) : ;; *) common="$dir/$common" ;; esac
+  (cd "$common/.." 2>/dev/null && pwd) || return 0
+}
+
+# Worktree-proof main-repo name (sanitized to the role charset) for $1 (#165
+# RC-2). Empty when git can't answer (the caller then falls back to whatever it
+# has). See lib/repo-name.sh for the rationale.
+_repo_name_of() {
+  local root
+  root=$(_repo_root_of "$1") || return 0
+  [[ -n "$root" ]] || return 0
+  _sanitize_role_segment "$(basename "$root")"
 }
 
 # Strip the idle/busy emoji prefix that `_rename_tab` paints onto TAB= so we
@@ -376,6 +409,15 @@ _agent_sidecar() {
   printf '%s/%s.agent' "$SESSIONS_DIR" "$1"
 }
 
+# Alias-list sidecar for a primary PM (#165 RC-4a). `task-pm --also` records
+# each alias here (one `pm-<other>|<repo>` per line) so cmd_register can re-seed
+# the alias session files on every SessionStart — self-heal parity with the
+# loadout/agent sidecars, so a /compact, restart, or an erroneous unregister
+# sweep (the #140 cascade) doesn't silently drop multi-repo routing mid-session.
+_aliases_sidecar() {
+  printf '%s/%s.aliases' "$SESSIONS_DIR" "$1"
+}
+
 _inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
 _processed_dir(){ printf '%s/%s/processed' "$MAILBOX_DIR" "$1"; }
 
@@ -443,12 +485,18 @@ _ensure_session_file() {
   agent=$(cat "$agent_sidecar" 2>/dev/null || true)
   [[ -n "$agent" ]] || agent="${TASK_FORCE_AGENT:-claude}"
 
-  local repo
+  local repo repo_name=""
   repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  # Persist REPO_NAME= on re-seed too (#165 RC-2), worktree-proof, so the shim's
+  # sender-derivation keeps working after a self-heal wiped the original .info.
+  if [[ -n "$repo" ]]; then
+    repo_name=$(_repo_name_of "$repo")
+    [[ -n "$repo_name" ]] || repo_name=$(_sanitize_role_segment "$(basename "$repo")")
+  fi
 
   {
-    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-      "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$zsession" "$repo" "$(_now)" \
+    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+      "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$zsession" "$repo" "$repo_name" "$(_now)" \
       "$agent" "$loadout"
     # Preserve the --auto opt-in across self-heal so cmd_send keeps using CR
     # for wake-up after an intra-session re-seed (#128). Use `if` rather than
@@ -596,6 +644,16 @@ cmd_register() {
     tab_id=$(_zellij_tab_id_by_name "$tab" || true)
   fi
 
+  # Worktree-proof repo name (#165 RC-2): derive the MAIN repo name from --repo
+  # (a linked worktree's path) via git-common-dir, so the shim reads a persisted
+  # REPO_NAME= instead of basename(REPO=) — which is the worktree slug. Fall back
+  # to the sanitized basename when --repo isn't a git repo (test / CI paths).
+  local repo_name=""
+  if [[ -n "$repo" ]]; then
+    repo_name=$(_repo_name_of "$repo")
+    [[ -n "$repo_name" ]] || repo_name=$(_sanitize_role_segment "$(basename "$repo")")
+  fi
+
   local f
   f=$(_session_file "$role")
 
@@ -609,8 +667,37 @@ cmd_register() {
   # and re-injected on every compaction. So we drain only when fresh=1. The
   # /clear case (context wiped, re-surfacing genuinely useful) is safely
   # backstopped by prompt-hook on the next user prompt.
+  # An ALIAS-only placeholder (task-pm --also) is not a real prior registration:
+  # treat it as absent for both the fresh gate (so a real PM claiming its own
+  # address still drains its backlog, #168 / RC-4c) and the collision check (an
+  # alias's REPO= is bookkeeping, not a rival PM). We overwrite it below.
+  local existing_alias=""
+  [[ -f "$f" ]] && existing_alias=$(_session_field "$f" ALIAS || true)
+
   local fresh=1
-  [[ -f "$f" ]] && fresh=0
+  [[ -f "$f" && -z "$existing_alias" ]] && fresh=0
+
+  # Basename-collision warning (#165): the repo basename IS the PM's identity
+  # (role = pm-<reponame>), so two different repos with the same basename
+  # (…/a/api and …/b/api) would silently share one pm-api mailbox and address.
+  # Compare canonical repo *roots* (RC-7), so worktrees of one repo — whose raw
+  # REPO= paths differ — don't false-alarm, while genuinely different repos that
+  # share a basename do. Warn loudly (log + stderr) but do NOT block: a moved or
+  # renamed checkout hits this too, and blocking would strand the PM. Skip when
+  # the prior file was an alias placeholder.
+  if [[ -f "$f" && -z "$existing_alias" && -n "$repo" ]]; then
+    local prev_repo prev_root new_root
+    prev_repo=$(_session_field "$f" REPO || true)
+    if [[ -n "$prev_repo" ]]; then
+      prev_root=$(_repo_root_of "$prev_repo"); [[ -n "$prev_root" ]] || prev_root="$prev_repo"
+      new_root=$(_repo_root_of "$repo");       [[ -n "$new_root"  ]] || new_root="$repo"
+      if [[ "$prev_root" != "$new_root" ]]; then
+        _log "register: WARNING basename collision role=$role existing_repo=$prev_repo new_repo=$repo"
+        printf 'radio: WARNING — role %s is already registered for a different repo (%s); now claiming it for %s. Two repos with the same basename share one PM mailbox — rename one to disambiguate.\n' \
+          "$role" "$prev_repo" "$repo" >&2
+      fi
+    fi
+  fi
 
   # Re-register protection (#117): `SessionStart` fires again on `/compact`,
   # `/clear`, `/resume`, or a fresh `claude` in the same tab — each time
@@ -668,8 +755,8 @@ cmd_register() {
   printf '%s' "$agent" | _atomic_write "$(_agent_sidecar "$role")"
 
   {
-    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-      "$role" "$tab" "$tab_id" "$zsession" "$repo" "$(_now)" "$agent" "$loadout"
+    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+      "$role" "$tab" "$tab_id" "$zsession" "$repo" "$repo_name" "$(_now)" "$agent" "$loadout"
     # Persist the --auto opt-in (#128). task-work --auto exports
     # TASK_FORCE_AUTO_SUBMIT=1 into the tab's env; cmd_send reads AUTO_SUBMIT
     # off the recipient's session file and flips wake-up from LF (manual) to
@@ -684,7 +771,17 @@ cmd_register() {
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
 
-  _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout"
+  # Re-seed alias sessions from this primary's sidecar (#165 RC-4a). `task-pm
+  # --also` recorded each alias here; SessionStart re-runs register on every
+  # /compact / resume / restart, so recreating the alias .info files here gives
+  # multi-repo routing the same self-heal the primary's own session enjoys — an
+  # erroneous unregister sweep (the #140 cascade) or a plain restart no longer
+  # silently drops it. Only a real primary (not an alias placeholder) re-seeds.
+  if [[ -z "$existing_alias" ]]; then
+    _reseed_aliases "$role"
+  fi
+
+  _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout repo_name=$repo_name"
 
   # First paint of the idle prefix without waiting for a Stop hook cycle (#95).
   # _rename_tab reads $TASK_FORCE_ROLE, which the SessionStart hook sets to the
@@ -738,6 +835,115 @@ cmd_register() {
       fi
     fi
   fi
+}
+
+# Register an alias session (#165): `task-pm --also <repo>` points a second
+# repo's PM address at one running PM. The alias file carries ALIAS=pm-<primary>
+# (+ REPO= for bookkeeping) and NO inbox — cmd_send follows the ALIAS= hop so a
+# `--to pm-<other>` lands in the primary's single inbox and wakes its tab. One
+# PM brain, one inbox, N repos.
+cmd_register_alias() {
+  local role="" target="" repo=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role)   role="$2";   shift 2 ;;
+      --alias)  target="$2"; shift 2 ;;
+      --repo)   repo="$2";   shift 2 ;;
+      *) echo "register-alias: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ -n "$role"   ]] || { echo "register-alias: --role required"  >&2; exit 2; }
+  [[ -n "$target" ]] || { echo "register-alias: --alias required" >&2; exit 2; }
+  _validate_role "$role"   || exit 2
+  _validate_role "$target" || exit 2
+  [[ "$role" != "$target" ]] || { echo "register-alias: an alias cannot point at itself ($role)" >&2; exit 2; }
+
+  local f
+  f=$(_session_file "$role")
+  # Warn (don't block) on any overwrite of an existing session (RC-4d): a
+  # non-alias session is a live PM/worker we'd hijack; an alias for a *different*
+  # primary/repo is two clients' same-named repos silently last-write-winning.
+  # Re-pointing the same alias at the same target/repo is idempotent (no warn).
+  if [[ -f "$f" ]]; then
+    local existing_alias existing_repo
+    existing_alias=$(_session_field "$f" ALIAS || true)
+    existing_repo=$(_session_field "$f" REPO || true)
+    if [[ -z "$existing_alias" ]]; then
+      _log "register-alias: WARNING overwriting non-alias session role=$role with alias -> $target"
+      printf 'radio: WARNING — %s already had a live (non-alias) session; overwriting it with an alias → %s.\n' "$role" "$target" >&2
+    elif [[ "$existing_alias" != "$target" || "$existing_repo" != "$repo" ]]; then
+      _log "register-alias: WARNING re-pointing alias role=$role from $existing_alias($existing_repo) to $target($repo)"
+      printf 'radio: WARNING — alias %s already pointed at %s (%s); re-pointing to %s (%s).\n' \
+        "$role" "$existing_alias" "$existing_repo" "$target" "$repo" >&2
+    fi
+  fi
+
+  {
+    printf 'ROLE=%s\nALIAS=%s\nREPO=%s\nLAST_HEARTBEAT=%s\n' \
+      "$role" "$target" "$repo" "$(_now)"
+  } | _atomic_write "$f"
+
+  # Migrate any inbox that queued at this address *before* it became an alias
+  # (RC-4b): a worker that pinged pm-<other> while no PM ran left messages in
+  # mailbox/pm-<other>/inbox; the alias owns no inbox, so nobody would ever
+  # drain them. Fold them into the primary's single inbox now so the very
+  # backlog the --also recovery flow exists to recover isn't stranded.
+  local src_inbox dst_inbox moved=0
+  src_inbox=$(_inbox_dir "$role")
+  dst_inbox=$(_inbox_dir "$target")
+  if [[ -d "$src_inbox" ]]; then
+    mkdir -p "$dst_inbox"
+    shopt -s nullglob
+    local m
+    for m in "$src_inbox"/*.md; do
+      # `if` (not `&&`) so a failed mv can't abort under set -e, and so a
+      # moved=0 arithmetic result below never exits 1 through the loop tail.
+      if mv -f "$m" "$dst_inbox/" 2>/dev/null; then moved=$((moved+1)); fi
+    done
+    shopt -u nullglob
+    rmdir "$src_inbox" 2>/dev/null || true
+    rmdir "$(dirname "$src_inbox")" 2>/dev/null || true
+    if (( moved > 0 )); then _log "register-alias: migrated $moved queued message(s) $role -> $target"; fi
+  fi
+
+  # Record in the primary's alias sidecar so its register re-seeds this alias
+  # across /compact / restart (RC-4a). Rewrite (not skip-if-present) any existing
+  # entry for this role so a re-point with a different --repo updates the line
+  # the re-seed will replay — else the sidecar would resurrect the stale repo.
+  local sc line
+  sc=$(_aliases_sidecar "$target")
+  {
+    if [[ -f "$sc" ]]; then
+      while IFS= read -r line; do
+        [[ "$line" == "${role}|"* ]] && continue   # drop the old entry for this role
+        printf '%s\n' "$line"
+      done < "$sc"
+    fi
+    printf '%s|%s\n' "$role" "$repo"
+  } | _atomic_write "$sc"
+
+  _log "register-alias role=$role -> $target repo=$repo"
+}
+
+# Re-create a primary's alias sessions from its sidecar (#165 RC-4a). Called
+# from cmd_register. Skips an address that a real (non-alias) session has since
+# claimed, and an alias already pointing at us (idempotent).
+_reseed_aliases() {
+  local primary="$1" sc arole arepo
+  sc=$(_aliases_sidecar "$primary")
+  [[ -f "$sc" ]] || return 0
+  while IFS='|' read -r arole arepo; do
+    [[ -n "$arole" ]] || continue
+    _validate_role "$arole" 2>/dev/null || continue
+    local af cur
+    af=$(_session_file "$arole")
+    if [[ -f "$af" ]]; then
+      cur=$(_session_field "$af" ALIAS || true)
+      [[ "$cur" == "$primary" ]] || continue   # real session or foreign alias — leave it
+    fi
+    { printf 'ROLE=%s\nALIAS=%s\nREPO=%s\nLAST_HEARTBEAT=%s\n' "$arole" "$primary" "$arepo" "$(_now)"; } \
+      | _atomic_write "$af"
+  done < "$sc"
 }
 
 cmd_unregister() {
@@ -808,6 +1014,26 @@ cmd_unregister() {
   # whose tab has really exited and been re-used (#140, #151).
   rm -f "$(_loadout_sidecar "$TASK_FORCE_ROLE")"
   rm -f "$(_agent_sidecar "$TASK_FORCE_ROLE")"
+
+  # Sweep alias files pointing at this role (#165): `task-pm --also` created
+  # pm-<other>.info with ALIAS=<this role>; they must not outlive their primary
+  # (they'd dangle, routing sends into a dead inbox). Match on ALIAS= value. This
+  # runs only on real exit / manual unregister — the intra-session cascade cases
+  # returned early above — and the alias sidecar is re-seeded at the next
+  # register, so an erroneous sweep self-heals (RC-4a). On a real exit we also
+  # drop the sidecar so a later clean restart doesn't resurrect stale aliases.
+  shopt -s nullglob
+  local af at
+  for af in "$SESSIONS_DIR"/*.info; do
+    at=$(_session_field "$af" ALIAS || true)
+    if [[ "$at" == "$TASK_FORCE_ROLE" ]]; then
+      rm -f "$af"
+      _log "unregister: swept alias $(basename "$af" .info) -> $TASK_FORCE_ROLE"
+    fi
+  done
+  shopt -u nullglob
+  rm -f "$(_aliases_sidecar "$TASK_FORCE_ROLE")"
+
   _log "unregister role=$TASK_FORCE_ROLE"
 }
 
@@ -1013,8 +1239,10 @@ cmd_prompt_hook() {
 
 # Emit the "queued — idle but wake failed" outcome line (#166). Every wake miss
 # after the recipient is confirmed idle funnels through here so the five reasons
-# (no zellij, no tab, no TAB_ID, no pane, write-chars failed) share one wording
-# — and so #165's "via alias …" suffix is a one-site edit, not five.
+# (no zellij, no tab, no TAB_ID, no pane, write-chars failed) share one wording.
+# The #165 recipient-resolution note (`radio: --to pm → … (via …)`) is a separate
+# line printed once in cmd_send, so the outcome lines here name the already-
+# resolved role without needing a suffix of their own.
 #
 # The redelivery promise is agent-specific: claude has a prompt-hook + register
 # drain, so a missed wake resurfaces on the recipient's next prompt/register;
@@ -1026,6 +1254,143 @@ _send_outcome_wake_failed() {
   [[ "$agent" == "kiro" ]] && surface="check/register"
   printf 'radio: queued — %s is idle but wake failed (%s); message will surface on its next %s\n' \
     "$to" "$reason" "$surface"
+}
+
+# Resolve a `--to pm` send to the repo-scoped PM role (#165). `pm` is the stable
+# wire format — every prompt sends `--to pm` (never the expanded env var), so a
+# single resolution path here covers every sender: new workers, pre-migration
+# workers, reviewers, and env-less agents alike (#165 RC-1). The env var is a
+# hint consumed *here*, registration-gated like every other step, so the injected
+# path can't strand a message at an unregistered address while a live PM waits.
+#
+# Resolution order — each step wins only when its target is actually registered:
+#   1. $TASK_FORCE_PM_ROLE          — launch-time identity, if that role is live
+#   2. derive from the sender's identity (worker-<repo>-… / reviewer-<repo>-…):
+#        a. the sender session's persisted REPO_NAME= (worktree-proof, RC-2),
+#           falling back to basename(REPO=) for pre-RC-2 sessions
+#        b. the longest registered `pm-<name>` whose <name> prefixes the sender's
+#           slug (RC-3: longest-match, warn+queue on genuine ambiguity)
+#   3. literal `pm` if a `pm.info` session still exists (pre-migration PM)
+#   4. nothing registered — queue at the best *future* address (the env/derived
+#      candidate) so the no-session WARNING names where a PM should register;
+#      else literal `pm`.
+# Records the resolved role in $_PM_RESOLVE_RESULT and the winning method in
+# $_PM_RESOLVE_VIA (globals rather than stdout so cmd_send can read both without
+# a command-substitution subshell — which would drop the _VIA assignment).
+_PM_RESOLVE_RESULT=""
+_PM_RESOLVE_VIA=""
+_resolve_pm_target() {
+  _PM_RESOLVE_RESULT="pm"
+  _PM_RESOLVE_VIA=""
+  local candidate=""
+
+  # 1. launch-time identity — registration-gated (RC-1). A hand-exported,
+  #    malformed $TASK_FORCE_PM_ROLE must not become the resolved target: it
+  #    would trip cmd_send's post-shim `_validate_role || exit 2` (a hard fail
+  #    the old wire format never had). Validate here and, on failure, ignore the
+  #    env entirely — the send degrades to the same literal-`pm` queue as any
+  #    other unresolvable case. The env value is otherwise the best *future*
+  #    address, so remember it for the step-4 queue target.
+  if [[ -n "${TASK_FORCE_PM_ROLE:-}" ]]; then
+    if _validate_role "$TASK_FORCE_PM_ROLE" 2>/dev/null; then
+      candidate="$TASK_FORCE_PM_ROLE"
+      if [[ -f "$(_session_file "$candidate")" ]]; then
+        _PM_RESOLVE_RESULT="$candidate"
+        # shellcheck disable=SC2016  # literal label for the feedback line, not an expansion
+        _PM_RESOLVE_VIA='$TASK_FORCE_PM_ROLE (registered)'
+        return 0
+      fi
+    else
+      _log "send: ignoring malformed \$TASK_FORCE_PM_ROLE=$TASK_FORCE_PM_ROLE"
+    fi
+  fi
+
+  # 2. derive from the sender's own identity — also registration-gated.
+  local sender="${TASK_FORCE_ROLE:-}"
+  case "$sender" in
+    worker-*|reviewer-*)
+      # 2a. sender session persisted REPO_NAME= (worktree-proof), else legacy
+      #     basename(REPO=) for sessions written before RC-2.
+      local sf rn="" repo
+      sf=$(_session_file "$sender")
+      if [[ -f "$sf" ]]; then
+        rn=$(_session_field "$sf" REPO_NAME || true)
+        if [[ -z "$rn" ]]; then
+          repo=$(_session_field "$sf" REPO || true)
+          [[ -n "$repo" ]] && rn=$(_sanitize_role_segment "$(basename "$repo")")
+        fi
+      fi
+      if [[ -n "$rn" ]]; then
+        [[ -z "$candidate" ]] && candidate="pm-${rn}"
+        if [[ -f "$(_session_file "pm-${rn}")" ]]; then
+          _PM_RESOLVE_RESULT="pm-${rn}"
+          _PM_RESOLVE_VIA="sender REPO_NAME=${rn}"
+          return 0
+        fi
+      fi
+      # 2b. longest registered pm-<name> whose <name> prefixes the sender slug.
+      if _resolve_pm_by_slug_split "$sender"; then
+        return 0
+      fi
+      ;;
+  esac
+
+  # 3. pre-migration literal pm (only reachable because no derived role was live)
+  if [[ -f "$(_session_file pm)" ]]; then
+    _PM_RESOLVE_RESULT="pm"
+    _PM_RESOLVE_VIA="literal pm (pre-migration session)"
+    return 0
+  fi
+  # 4. nothing registered — prefer the env/derived candidate as the queue target
+  #    (correct future address; the no-session WARNING names it), else literal pm.
+  if [[ -n "$candidate" ]]; then
+    _PM_RESOLVE_RESULT="$candidate"
+    _PM_RESOLVE_VIA="unregistered (${candidate})"
+    return 0
+  fi
+  _PM_RESOLVE_RESULT="pm"
+  _PM_RESOLVE_VIA="unresolved (literal pm fallback)"
+  return 0
+}
+
+# RC-3: match the sender's slug against live pm-<name> sessions, preferring the
+# LONGEST matching name so `api` and `api-server` both live don't let LC_COLLATE
+# glob order silently decide which PM gets `worker-api-server-fix-1`'s reports.
+# Two matches where neither name is a prefix of the other is genuine ambiguity:
+# warn (log + stderr) and return non-zero so resolution falls through rather than
+# guessing. Sets $_PM_RESOLVE_RESULT / $_PM_RESOLVE_VIA and returns 0 on a
+# unique match; returns 1 otherwise.
+_resolve_pm_by_slug_split() {
+  local sender="$1"
+  local rest="${sender#worker-}"; rest="${rest#reviewer-}"
+  local pf name best="" ambiguous=0
+  shopt -s nullglob
+  for pf in "$SESSIONS_DIR"/pm-*.info; do
+    name=$(basename "$pf" .info); name="${name#pm-}"
+    [[ -n "$name" ]] || continue
+    [[ "$rest" == "$name" || "$rest" == "$name-"* ]] || continue
+    if [[ -z "$best" ]]; then
+      best="$name"
+    elif (( ${#name} > ${#best} )); then
+      case "$name" in "$best"-*|"$best") best="$name" ;; *) ambiguous=1 ;; esac
+    elif (( ${#name} < ${#best} )); then
+      case "$best" in "$name"-*|"$name") : ;; *) ambiguous=1 ;; esac
+    fi
+  done
+  shopt -u nullglob
+  [[ -n "$best" ]] || return 1
+  # Defensive net: two names that both prefix-match one slug are always nested
+  # (the shorter is a prefix of the longer), so `ambiguous` is provably
+  # unreachable under hyphen-boundary matching — longest-match alone decides.
+  # Kept in case the match condition ever loosens.
+  if (( ambiguous )); then
+    _log "send: --to pm ambiguous for $sender — multiple non-nested pm-<name> matches; falling through"
+    printf 'radio: WARNING — --to pm is ambiguous for %s (two overlapping pm-<name> sessions); not guessing. Send with an explicit --to pm-<name>.\n' "$sender" >&2
+    return 1
+  fi
+  _PM_RESOLVE_RESULT="pm-${best}"
+  _PM_RESOLVE_VIA="sender-role split (longest) → pm-${best}"
+  return 0
 }
 
 cmd_send() {
@@ -1045,6 +1410,43 @@ cmd_send() {
   [[ -n "$to"     ]] || { echo "send: --to required"     >&2; exit 2; }
   [[ -n "$intent" ]] || { echo "send: --intent required" >&2; exit 2; }
   _validate_role "$to" || exit 2
+
+  # --to pm compat shim (#165): resolve `pm` to the repo-scoped pm-<reponame>
+  # role. `pm` is the stable wire format (RC-1), so this runs on every PM-bound
+  # send. No-op for any explicitly-scoped target (pm-foo / worker-… / reviewer-…).
+  local to_orig="$to" route_desc=""
+  if [[ "$to" == "pm" ]]; then
+    _resolve_pm_target
+    to="$_PM_RESOLVE_RESULT"
+    _validate_role "$to" || exit 2
+    _log "send: --to pm resolved to $to (via ${_PM_RESOLVE_VIA})"
+    route_desc="via ${_PM_RESOLVE_VIA}"
+  fi
+  # Alias hop (#165): an alias session file (written by `task-pm --also`)
+  # carries ALIAS=pm-<primary> and owns no inbox — a message addressed to it
+  # lands in the primary's single inbox and wakes the primary's tab. Follow
+  # exactly one hop; a second hop is a misconfiguration, not a chain.
+  local _alias_target
+  _alias_target=$(_session_field "$(_session_file "$to")" ALIAS 2>/dev/null || true)
+  if [[ -n "$_alias_target" ]]; then
+    _validate_role "$_alias_target" || exit 2
+    local _alias_hop2
+    _alias_hop2=$(_session_field "$(_session_file "$_alias_target")" ALIAS 2>/dev/null || true)
+    if [[ -n "$_alias_hop2" ]]; then
+      echo "send: alias chain too deep ($to → $_alias_target → $_alias_hop2); refusing to route" >&2
+      exit 2
+    fi
+    _log "send: alias hop $to -> $_alias_target"
+    route_desc="${route_desc:+$route_desc, }via alias ${to}"
+    to="$_alias_target"
+  fi
+  # Observability handshake with the #166 delivery feedback (RC-7): name the
+  # resolved recipient and how we got there on EVERY shim invocation — including
+  # the literal-pm and migration-fallback paths a postmortem needs — so the
+  # sender is never left guessing where its ping actually went.
+  if [[ -n "$route_desc" ]]; then
+    printf 'radio: --to %s → %s (%s)\n' "$to_orig" "$to" "$route_desc"
+  fi
 
   local from="${TASK_FORCE_ROLE:-unknown}"
   local id
@@ -1281,9 +1683,19 @@ cmd_orphans() {
   now_epoch=$(date -u +%s)
   shopt -s nullglob
   for f in "$SESSIONS_DIR"/*.info; do
-    local hb hb_epoch role age
-    hb=$(_session_field "$f" LAST_HEARTBEAT || true)
+    local hb hb_epoch role age alias_target
     role=$(_session_field "$f" ROLE || basename "$f" .info)
+    # Alias sessions (#165) carry no heartbeat of their own — they're stale
+    # exactly when their target session has gone away (a normal primary
+    # unregister sweeps them, so a dangling alias means an unclean exit).
+    alias_target=$(_session_field "$f" ALIAS || true)
+    if [[ -n "$alias_target" ]]; then
+      if [[ ! -f "$(_session_file "$alias_target")" ]]; then
+        printf '%s\t(alias → %s: target session missing)\n' "$role" "$alias_target"
+      fi
+      continue
+    fi
+    hb=$(_session_field "$f" LAST_HEARTBEAT || true)
     if [[ -z "$hb" ]]; then
       printf '%s\t(no LAST_HEARTBEAT)\n' "$role"
       continue
@@ -1317,6 +1729,7 @@ case "$sub" in
   # loud `register: --role required` / `--agent required` errors in cmd_register
   # if they forget a flag — typo protection preserved.
   register)    [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0; cmd_register "$@" ;;
+  register-alias) cmd_register_alias "$@" ;;
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
   awaiting)    cmd_awaiting ;;

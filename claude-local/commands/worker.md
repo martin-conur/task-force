@@ -82,7 +82,7 @@ Workflow:
     Read `radio send`'s stdout — it reports what actually happened:
     - `delivered`, or `queued — pm is busy` / `awaiting` → the ping landed (or drains when PM next stops / is prompted). Idle as planned.
     - `queued — pm is idle but wake failed …` → the message is sitting unread with **no automatic redelivery until someone prompts PM**. Don't just idle: say so in your handoff report so the user can nudge PM.
-    - `WARNING — no session for pm`, or `WARNING — pm looks dead …` → **PM isn't running.** Do NOT idle silently — tell the user (re-check the role name via `ls ~/.task-force/radio/sessions/`, or start/restart PM).
+    - `WARNING — no session for pm-…`, or `WARNING — pm-… looks dead …` → **PM isn't running.** Do NOT idle silently — tell the user (re-check the role name via `ls ~/.task-force/radio/sessions/`, or start/restart PM).
 
 11. **Idle** — do NOT run `task-done` yet. Wait for one of:
     - **`changes-requested`** from PM: read the PR comments (`gh pr view <N> --comments`),

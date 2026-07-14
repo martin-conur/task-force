@@ -16,7 +16,7 @@ Workflow:
    ```bash
    radio send --to pm --intent spec-ready --issue <KEY-N> --body "spec written, ready to dispatch"
    ```
-   Read `radio send`'s stdout: `delivered` / `queued — pm is busy` means the ping landed — done. But `queued — pm is idle but wake failed …` means it's unread with no auto-redelivery, and `WARNING — no session for pm` / `WARNING — pm looks dead …` means **PM isn't running** — in those cases tell the user instead of assuming the spec was picked up (check the role name via `ls ~/.task-force/radio/sessions/`).
+   Read `radio send`'s stdout: `delivered` / `queued — pm is busy` means the ping landed — done. But `queued — pm is idle but wake failed …` means it's unread with no auto-redelivery, and `WARNING — no session for pm-…` / `WARNING — pm-… looks dead …` means **PM isn't running** — in those cases tell the user instead of assuming the spec was picked up (check the role name via `ls ~/.task-force/radio/sessions/`).
 
 Spec template (use when applicable, skip sections that are N/A):
 

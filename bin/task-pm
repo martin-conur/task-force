@@ -7,8 +7,9 @@ set -euo pipefail
 # agent (claude vs kiro). The agent is the impl-name prefix resolved via
 # lib/detect-impl.sh. Override with --impl <name> or AW_IMPL=<name>.
 #
-# Renames the current zellij tab to "pm" and exec's the agent's PM entrypoint
-# so the project's session-start hook registers the PM mailbox.
+# Renames the current zellij tab to "pm-<reponame>" (per-repo role, #165) and
+# exec's the agent's PM entrypoint so the project's session-start hook registers
+# the PM mailbox. --also <repo> aliases other repos' PM addresses onto this tab.
 
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -21,20 +22,51 @@ AW_ROOT=$(dirname "$BIN_DIR")
 
 # shellcheck source=lib/detect-impl.sh
 source "$AW_ROOT/lib/detect-impl.sh"
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 
-for arg in ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}; do
-  case "$arg" in
+# --also <repo> collects extra repos this PM should also answer for (#165):
+# each becomes an alias session pointing at this tab's primary pm-<reponame>.
+# Repeatable. Accepts a repo path (resolved to absolute against the invocation
+# cwd, before the later `cd`) or a bare repo name. Unknown flags are rejected —
+# task-pm takes no positional args, so a swallowed `--alos` typo would launch a
+# PM with no alias and leave phantom-routing debugging later (#165 RC-7).
+ALSO_REPOS=()
+if ((${#AW_REMAINING_ARGS[@]})); then
+  set -- "${AW_REMAINING_ARGS[@]}"
+else
+  set --
+fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     -h|--help)
       cat <<'EOF'
-Usage: task-pm [--impl <name>]
+Usage: task-pm [--impl <name>] [--also <repo-path-or-name> ...]
 
-Rename the current zellij tab to "pm" and launch the PM agent in-place
-(claude /pm on claude loadouts, kiro-cli chat --agent pm on kiro loadouts).
-Run from inside a task-force-initialized git repo.
+Rename the current zellij tab to "pm-<reponame>" and launch the PM agent
+in-place (claude /pm on claude loadouts, kiro-cli chat --agent pm on kiro
+loadouts). Run from inside a task-force-initialized git repo.
+
+--also <repo>   Also answer this repo's PM address from this one tab. Writes an
+                alias radio session (pm-<other> → pm-<reponame>); repeatable.
+                One PM brain, one inbox, N repos. Zero-config alternative: run
+                one task-pm per repo in separate tabs.
 EOF
       exit 0 ;;
+    --also)
+      [[ -n "${2:-}" ]] || { echo "Error: --also needs a repo path or name" >&2; exit 1; }
+      _a="$2"
+      # A value that looks like a path (contains '/' or already exists) must be
+      # an existing directory, resolved to absolute NOW against the invocation
+      # cwd — before the `cd "$REPO_ROOT"` below would change what it means.
+      if [[ "$_a" == */* || -e "$_a" ]]; then
+        [[ -d "$_a" ]] || { echo "Error: --also path '$_a' is not an existing directory" >&2; exit 1; }
+        _a=$(cd "$_a" && pwd)
+      fi
+      ALSO_REPOS+=("$_a"); shift 2 ;;
+    *) echo "Error: unknown argument '$1' (see task-pm --help)" >&2; exit 1 ;;
   esac
 done
 
@@ -46,14 +78,57 @@ if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "       so the session-start hook can register the PM mailbox)" >&2
   exit 1
 fi
-cd "$(git rev-parse --show-toplevel)"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# Per-repo PM identity (#165), symmetric with worker-<reponame>-<slug> and
+# reviewer-<reponame>-prN. A second `task-pm` in another repo no longer clobbers
+# this one's session — each PM owns pm-<reponame>. Worktree-proof + sanitized
+# (RC-2/RC-6): basename(REPO_ROOT) is the worktree slug when run from a linked
+# worktree, and a dotted repo name would yield an unregisterable role.
+REPO_NAME=$(aw_main_repo_name "$REPO_ROOT")
+PM_ROLE="pm-${REPO_NAME}"
+# Fail fast BEFORE touching the tab or launching (#165 RC-6): a PM that renames
+# its tab and then dies on `radio register` (invalid role) runs sessionless.
+case "$REPO_NAME" in
+  ""|*[!a-z0-9-]*)
+    echo "Error: repo name '$REPO_NAME' (from $REPO_ROOT) is not a valid radio role segment;" >&2
+    echo "       rename the repository directory to [a-z0-9-] so the PM can register." >&2
+    exit 1 ;;
+esac
+cd "$REPO_ROOT"
 
 if [[ -n "${ZELLIJ:-}" ]]; then
-  zellij action rename-tab "pm" >/dev/null 2>&1 || true
+  zellij action rename-tab "$PM_ROLE" >/dev/null 2>&1 || true
 fi
 
-export TASK_FORCE_ROLE=pm
-export ZELLIJ_TAB=pm
+# Write alias sessions for any --also repos so this one PM answers their
+# addresses too. Done before the exec (which never returns) so the aliases
+# exist the moment a worker in an --also repo sends. `radio` lives beside us.
+# Guard each call: `set -e` must not abort the launch (after the tab rename) on
+# one bad alias (#165 RC-7) — warn and continue.
+for _also in ${ALSO_REPOS[@]+"${ALSO_REPOS[@]}"}; do
+  if [[ -d "$_also" ]]; then
+    _also_name=$(aw_main_repo_name "$_also")
+  else
+    _also_name=$(aw_sanitize_repo_name "$_also")
+  fi
+  if [[ -z "$_also_name" ]]; then
+    echo "Warning: --also '$_also' yields an empty repo name; skipping" >&2
+    continue
+  fi
+  if [[ "$_also_name" == "$REPO_NAME" ]]; then
+    echo "Warning: --also '$_also' resolves to this PM's own repo ($REPO_NAME); skipping" >&2
+    continue
+  fi
+  if "$BIN_DIR/radio" register-alias --role "pm-${_also_name}" --alias "$PM_ROLE" --repo "$_also"; then
+    echo "Aliased pm-${_also_name} → ${PM_ROLE}"
+  else
+    echo "Warning: could not register alias pm-${_also_name} → ${PM_ROLE}; continuing" >&2
+  fi
+done
+
+export TASK_FORCE_ROLE="$PM_ROLE"
+export ZELLIJ_TAB="$PM_ROLE"
 case "$AGENT" in
   claude) exec claude "/pm" ;;
   kiro)   exec kiro-cli chat --agent pm ;;

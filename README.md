@@ -374,7 +374,7 @@ These are the five transitions that make up a full PR cycle. Each one is a singl
 
 PR review *content* still lives in `gh pr comment` / `gh pr review` (or the equivalent on Jira / Notion / local); radio only carries the routing ping.
 
-Role names are addressable strings, not free-form: the PM is `pm`, and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`.
+Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (per-repo since #165, so two repos' PMs never collide), and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`. Workers always send `--to pm`; radio resolves it to the right `pm-<reponame>` using the injected `$TASK_FORCE_PM_ROLE` (or the sender's own identity). One PM can oversee several repos with `task-pm --also <repo>`, which aliases `pm-<other>` into its single inbox.
 
 ### Command surface
 

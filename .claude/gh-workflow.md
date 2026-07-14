@@ -54,6 +54,26 @@ The worker reads these three values and updates the project item's Status field 
 
 Use the issue title as prefix: `<Issue title>: <short description>`
 
+### Pre-PR checklist (this repo)
+
+The `/worker` pre-PR checklist is deliberately repo-generic (it ships downstream
+verbatim via `task-init`). In **this** repo it resolves to:
+
+- **Changelog** — add an entry under `## [Unreleased]` in `CHANGELOG.md`
+  ([Keep a Changelog](https://keepachangelog.com) format). Include the
+  **"Upgrading: re-run `task-init <loadout>`"** note whenever installer-written
+  artifacts change (radio hooks, the copied `commands/*.md`, `settings.json`);
+  say so explicitly when no re-run is needed.
+- **Docs** — a model-facing or user-visible change also updates the README
+  section, the four `steering/*.example.md` templates, and the loadout workflow
+  docs (`.claude/*-workflow.md`). See PRs #172–#175 for the findings this
+  checklist encodes; #163 / #164 / #168 for the doc-beat precedent.
+- **Reuse / drift** — logic shared across loadouts lives behind `# region:`
+  sentinels guarded by `tools/check-drift.sh`; extract rather than copy a second
+  time, and add a sentinel + manifest entry when you do.
+- **Green** — run `./run_tests.sh`, `tools/check-drift.sh`, and `shellcheck -x`
+  on changed shell files; confirm `gh pr checks` after pushing.
+
 ### Shell Commands
 
 `task-work <slug> [gh-url] [options]` — create worktree + zellij tab + worker session

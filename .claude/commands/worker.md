@@ -16,12 +16,12 @@ Workflow:
 6. Run tests to verify.
 7. Commit with the issue title as a prefix: `<Issue title>: <short description>`.
 
-**Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (recurring review findings from PRs #172–#175):
-- **CHANGELOG**: add an entry under `## [Unreleased]`. Include the **"Upgrading: re-run `task-init <loadout>`"** note **iff** installer-written artifacts changed (hooks, copied commands/agents, `settings.json`); otherwise state **"No `task-init` re-run needed"** explicitly.
-- **Doc beat**: if model-facing or user-visible behavior changed, update the relevant README section, the `steering/*.example.md` templates, and the loadout workflow docs (`.claude/*-workflow.md`) — the #163/#164/#168 precedent.
+**Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (see the workflow doc for this repo's specifics):
+- **Changelog**: if the repo keeps a changelog, add an entry for this change — and note any upgrade/migration step it requires.
+- **Docs**: if model-facing or user-visible behavior changed, update the docs that describe it (README section, workflow/steering docs, etc.).
 - **Reuse**: grep for an existing helper before writing scaffolding; if a second copy of ~10+ lines appears, extract and share it instead of re-implementing.
-- **Spec comments**: re-read the spec's *comments/notes* (on the issue or task) — implementation addenda often live there, not in the body.
-- **Green**: run the full suite + `tools/check-drift.sh` + `shellcheck -x` on changed shell files; after pushing, confirm `gh pr checks` rather than claiming green.
+- **Spec comments**: re-read the spec in full, including any comments or notes added after the original body — implementation addenda often live there.
+- **Green**: run the repo's test suite, linters, and any consistency/drift checks; after pushing, confirm `gh pr checks` rather than claiming green.
 
 8. Create a pull request first (before bumping Status), so a failed `gh pr create` doesn't strand the issue in "In Review" with no PR:
    - Find the base branch by running:

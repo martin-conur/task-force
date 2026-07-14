@@ -60,6 +60,21 @@ _inbox_count() {  # $1 = role
   assert_equal "$(_inbox_count pm-myrepo)" "1"
 }
 
+@test "--to pm falls back to literal pm when the derived role isn't registered but pm is (migration window) (#165)" {
+  # The running PM predates the rename (role `pm`); the sender can derive
+  # pm-myrepo from its REPO=, but that session doesn't exist yet — so the ping
+  # must reach the live `pm`, not strand in an unregistered pm-myrepo inbox.
+  "$RADIO" register --role pm --tab pm --agent claude
+  "$RADIO" register --role worker-myrepo-issue-3 --tab issue-3 \
+    --repo /somewhere/myrepo --agent claude
+  TASK_FORCE_ROLE=worker-myrepo-issue-3 run "$RADIO" send \
+    --to pm --intent review-requested --pr 3 --body "PR up"
+  assert_success
+  refute_output --partial "radio: --to pm →"   # resolved to literal pm, no rewrite
+  assert_equal "$(_inbox_count pm)" "1"
+  assert_equal "$(_inbox_count pm-myrepo)" "0"
+}
+
 @test "--to pm falls back to literal pm when a pre-migration pm session exists (#165)" {
   "$RADIO" register --role pm --tab pm --agent claude
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send \

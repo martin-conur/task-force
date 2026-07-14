@@ -1138,7 +1138,13 @@ _resolve_pm_target() {
     _PM_RESOLVE_VIA='$TASK_FORCE_PM_ROLE'
     return 0
   fi
-  # 2. derive from the sender's own identity
+  # 2. derive from the sender's own identity. A derived role only *wins* when it
+  #    is actually registered — otherwise we fall through to a live literal `pm`
+  #    (the migration window: the running PM predates the rename and no
+  #    pm-<reponame> exists yet). Without this, step 3 would be dead code, since
+  #    every real worker has a derivable identity. If nothing is registered at
+  #    all, the derived candidate is still the best queue target (step 4).
+  local candidate=""
   local sender="${TASK_FORCE_ROLE:-}"
   case "$sender" in
     worker-*|reviewer-*)
@@ -1150,11 +1156,15 @@ _resolve_pm_target() {
         [[ -n "$repo" ]] && reponame=$(basename "$repo")
       fi
       if [[ -n "$reponame" ]]; then
-        _PM_RESOLVE_RESULT="pm-${reponame}"
-        _PM_RESOLVE_VIA="sender REPO= (${sender})"
-        return 0
+        candidate="pm-${reponame}"
+        if [[ -f "$(_session_file "$candidate")" ]]; then
+          _PM_RESOLVE_RESULT="$candidate"
+          _PM_RESOLVE_VIA="sender REPO= (${sender})"
+          return 0
+        fi
       fi
-      # 2b. split the sender's slug against live pm-<name> sessions
+      # 2b. split the sender's slug against live pm-<name> sessions (these are,
+      #     by construction, registered — so a match always wins)
       local rest="${sender#worker-}"; rest="${rest#reviewer-}"
       local pf name
       shopt -s nullglob
@@ -1170,13 +1180,19 @@ _resolve_pm_target() {
       shopt -u nullglob
       ;;
   esac
-  # 3. pre-migration literal pm
+  # 3. pre-migration literal pm (only reachable because no derived role was live)
   if [[ -f "$(_session_file pm)" ]]; then
     _PM_RESOLVE_RESULT="pm"
     _PM_RESOLVE_VIA="literal pm (pre-migration session)"
     return 0
   fi
-  # 4. unresolved — hand back literal pm; the no-session WARNING is the signal
+  # 4. nothing registered — prefer the derived candidate as the queue target
+  #    (correct future address; the no-session WARNING names it), else literal pm.
+  if [[ -n "$candidate" ]]; then
+    _PM_RESOLVE_RESULT="$candidate"
+    _PM_RESOLVE_VIA="derived, unregistered (${candidate})"
+    return 0
+  fi
   _PM_RESOLVE_RESULT="pm"
   _PM_RESOLVE_VIA="unresolved (literal pm fallback)"
   return 0

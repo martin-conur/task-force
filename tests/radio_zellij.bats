@@ -14,6 +14,12 @@ setup() {
   setup_task_force_home
   setup_stubs
   export ZELLIJ=fake-session-name
+  # Pin the live zellij session name (#167) so the identity check has a stable
+  # baseline instead of inheriting whatever session the suite runs inside.
+  # recorded==live here, so the guard verifies tab-name-at-id (the seeded tabs
+  # all resolve) and legacy wake paths behave deterministically. Tests that
+  # simulate a restart override ZELLIJ_SESSION_NAME per-invocation.
+  export ZELLIJ_SESSION_NAME=live-server
   # Bypass the no-role dispatcher gate on `register` (#93); tests still set
   # TASK_FORCE_ROLE per-invocation where the value matters.
   export TASK_FORCE_ROLE=test-runner
@@ -142,36 +148,48 @@ teardown() {
   assert_stub_called zellij "action write-chars --pane-id 700 radio check"
 }
 
-# ----- stale zellij session across a restart (#167) -------------------------
+# ----- stale TAB_ID across a zellij restart (#167, verify-name-at-id reframe) --
 
-@test "send refuses a stale TAB_ID and queues when the recorded zellij session is gone (#167)" {
-  # pm registers under one zellij server; its .info records TAB_ID=7 bound to
-  # ZELLIJ_SESSION=old-server. zellij then restarts (crash/reboot) — the sender
-  # is now in a fresh server and pm's tab no longer exists under any name. The
-  # stale id 7 may now belong to an unrelated tab, so wake-up must NOT write to
-  # it; it queues with the stale-session outcome instead.
-  export ZELLIJ_SESSION_NAME=old-server
+@test "send verifies tab-name-at-id and wakes by id when it still matches (#167)" {
+  # No restart: the tab at recorded TAB_ID=7 still bears pm's bare name, so the
+  # identity check passes and the fast id path stands.
   "$RADIO" register --role pm --tab pm --agent claude
-  export ZELLIJ_SESSION_NAME=new-server
-  export STUB_ZELLIJ_TABS_JSON='[]'
-  export STUB_ZELLIJ_PANES_JSON='[]'
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ping --body "hi"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=7)"
+  run stub_calls zellij
+  assert_output --partial "action write-chars --pane-id 700 radio check"
+}
+
+@test "send refuses a stale TAB_ID when the tab at that id no longer bears pm's name (#167)" {
+  # Same-named-session restart — the case a session-name compare would MISS:
+  # recorded ZELLIJ_SESSION == live (both 'live-server', as with `attach -c`),
+  # but after the restart id 7 now hosts an unrelated tab. The identity check
+  # (name-at-id) catches it; with pm's tab gone by name too, wake-up queues and
+  # never writes into the tab that inherited id 7.
+  "$RADIO" register --role pm --tab pm --agent claude
+  # id 7 now belongs to someone else's tab; pm's tab is gone.
+  export STUB_ZELLIJ_TABS_JSON='[{"name": "some-other-tab", "tab_id": 7}]'
+  export STUB_ZELLIJ_PANES_JSON='[{"id": 700, "is_plugin": false, "is_focused": true, "tab_id": 7}]'
   : > "$STUB_CALLS_DIR/zellij.calls"
 
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
   assert_success
-  assert_output --partial "radio: queued — pm is idle but wake failed (stale zellij session)"
+  assert_output --partial "radio: queued — pm is idle but wake failed (stale or unreachable tab)"
 
   run stub_calls zellij
-  # The whole point: never write-chars into the tab that now owns the stale id.
+  # The whole point: never write-chars into the tab that inherited the stale id.
   refute_output --partial "write-chars"
   run cat "$TASK_FORCE_HOME/radio/log"
-  assert_output --partial "stale zellij session — id wake refused"
+  assert_output --partial "tab id unresolved"
 }
 
 @test "send recovers by name and repairs the session file after a zellij restart (#167)" {
-  # Same restart, but pm's tab genuinely came back — under a fresh id 42 in the
-  # new server. Wake-up must resolve pm by name, write to id 42's pane (never
-  # the stale 7), and repair the .info so the next send is id-driven again.
+  # Restart, and pm's tab genuinely came back — under a fresh id 42. The id-7
+  # verification fails (nothing at 7), name recovery finds 42, wake-up writes to
+  # 42's pane (never the stale 7), and the .info is repaired to be id-driven.
   export ZELLIJ_SESSION_NAME=old-server
   "$RADIO" register --role pm --tab pm --agent claude
   export ZELLIJ_SESSION_NAME=new-server
@@ -200,27 +218,63 @@ teardown() {
   assert_output "ZELLIJ_SESSION=new-server"
 }
 
-@test "send wakes by id when the recorded zellij session matches the live server (#167)" {
-  # No restart: recorded ZELLIJ_SESSION == live $ZELLIJ_SESSION_NAME, so the
-  # stale guard is a no-op and the fast id path stands.
-  export ZELLIJ_SESSION_NAME=main
-  "$RADIO" register --role pm --tab pm --agent claude
+@test "send queues (never misdelivers) when pm's recorded session is alive in another server (#167 review #2)" {
+  # Concurrency, not restart: pm.info was registered by a DIFFERENT, still-live
+  # zellij server ('other-server'). This server happens to have its own tab 7
+  # named 'pm' — a look-alike. Delivering by id here would write into the wrong
+  # session's pm; repairing would rewrite the live owner's file (ping-pong). The
+  # liveness guard must queue instead, touching neither.
+  export ZELLIJ_SESSION_NAME=other-server
+  "$RADIO" register --role pm --tab pm --agent claude   # pm.info: session=other-server, id=7
+  export ZELLIJ_SESSION_NAME=this-server
+  # other-server is still listed as a live (non-EXITED) session.
+  export STUB_ZELLIJ_SESSIONS='other-server [Created 1h ago]
+this-server [Created 5m ago] (current)'
   : > "$STUB_CALLS_DIR/zellij.calls"
 
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ping --body "hi"
   assert_success
-  assert_output --partial "radio: delivered — woke pm (tab_id=7)"
+  assert_output --partial "radio: queued — pm is idle but wake failed (stale or unreachable tab)"
+
   run stub_calls zellij
-  assert_output --partial "action write-chars --pane-id 700 radio check"
+  refute_output --partial "write-chars"
+  # The live owner's file is untouched — still bound to other-server.
+  run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "ZELLIJ_SESSION=other-server"
 }
 
-@test "send treats an empty recorded ZELLIJ_SESSION as non-stale (#167)" {
-  # Recipient registered outside zellij / before #167: ZELLIJ_SESSION= empty.
-  # A live sender in a named session must NOT trip the stale guard — empty means
-  # "unknown", so the id path stays available and non-zellij paths are unchanged.
+@test "recovery repair does not blank ZELLIJ_SESSION when the live session name is empty (#167 review #8)" {
+  # If the current server name is unknown (ZELLIJ set, ZELLIJ_SESSION_NAME
+  # empty), a name-recovery repair must restamp only TAB_ID — not overwrite
+  # ZELLIJ_SESSION with "" and drop the file into the unguarded class.
+  export ZELLIJ_SESSION_NAME=old-server
+  "$RADIO" register --role pm --tab pm --agent claude   # id 7, session old-server
   unset ZELLIJ_SESSION_NAME
+  export STUB_ZELLIJ_TABS_JSON='[
+    {"name": "pm", "tab_id": 42},
+    {"name": "⏸️ pm", "tab_id": 42},
+    {"name": "▶️ pm", "tab_id": 42}
+  ]'
+  export STUB_ZELLIJ_PANES_JSON='[{"id": 4200, "is_plugin": false, "is_focused": true, "tab_id": 42}]'
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ping --body "hi"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=42)"
+  # TAB_ID repaired to the fresh id, ZELLIJ_SESSION left intact (not blanked).
+  run grep "^TAB_ID=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB_ID=42"
+  run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "ZELLIJ_SESSION=old-server"
+}
+
+@test "send treats a legacy session file with no ZELLIJ_SESSION line via the identity check (#167)" {
+  # A pre-#167 session file has TAB_ID set and NO ZELLIJ_SESSION line at all.
+  # Grandfathering (empty == never-stale) would keep the bug; instead it takes
+  # the ordinary identity path — the tab at id 7 still bears pm's name, so it
+  # wakes by id and works, no special-casing.
   "$RADIO" register --role pm --tab pm --agent claude
-  export ZELLIJ_SESSION_NAME=some-server
+  sed -i.bak '/^ZELLIJ_SESSION=/d' "$TASK_FORCE_HOME/radio/sessions/pm.info"
   : > "$STUB_CALLS_DIR/zellij.calls"
 
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ping --body "hi"

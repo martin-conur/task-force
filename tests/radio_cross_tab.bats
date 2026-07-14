@@ -27,6 +27,10 @@ setup() {
   setup_task_force_home
   setup_stubs
   export ZELLIJ=fake-session
+  # Pin the live zellij session name (#167) so the identity check has a stable
+  # baseline rather than inheriting the suite's own session; restart/concurrency
+  # tests override it per-invocation.
+  export ZELLIJ_SESSION_NAME=live-server
   export TASK_FORCE_ROLE=test-runner
   # Don't let the dev shell's $ZELLIJ_TAB fire the _rename_tab safeguard
   # during the initial registers; the bug-1 test re-sets it per-call to
@@ -100,22 +104,26 @@ teardown() {
 
 # ----- TAB_ID= invariants (#102 review feedback) ----------------------------
 
-@test "send wakes recipient via TAB_ID= even when its TAB= name has drifted" {
-  # Scenario: pm registered, TAB_ID=7 captured. Then something rewrites pm's
-  # TAB= (e.g., a partial state flip wrote the new name but the next-step
-  # rename hasn't happened yet, or a debugger edited the file). The visible
-  # name in zellij is unchanged. Wake-up must still find pm's pane via the
-  # stable id, not by trying to look up the now-mismatched name.
-  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
-  # Rewrite TAB= to a name that has no match in zellij's list-tabs output.
-  awk '/^TAB=/ { print "TAB=stale-not-in-zellij"; next } { print }' \
-    "$TASK_FORCE_HOME/radio/sessions/pm.info" > "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp"
-  mv "$TASK_FORCE_HOME/radio/sessions/pm.info.tmp" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+@test "send wakes by id despite an emoji-prefix drift between TAB= and the live name (#167)" {
+  # The realistic TAB= drift: it lags the live tab name by an idle↔busy emoji
+  # flip (a partial state change). Under the #167 identity check both sides are
+  # stripped of emoji before comparison, so a pure prefix difference still
+  # verifies and id-wake stands — only a genuine *bare*-name change triggers
+  # recovery. (This supersedes the pre-#167 "trust the id regardless of TAB="
+  # contract: the id is trusted precisely because name-at-id still matches.)
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude   # TAB_ID=7, TAB="⏸️ pm"
+  # Live tab at id 7 now reads busy; pm.info TAB= still says idle — bare "pm"
+  # on both sides.
+  export STUB_ZELLIJ_TABS_JSON='[
+    {"name": "▶️ pm", "tab_id": 7},
+    {"name": "pm", "tab_id": 7},
+    {"name": "⏸️ pm", "tab_id": 7}
+  ]'
   : > "$STUB_CALLS_DIR/zellij.calls"
 
   TASK_FORCE_ROLE=worker-a "$RADIO" send --to pm --intent ping --body "still here?"
 
-  # Despite the stale TAB= name, the write lands on pm's pane (700) via TAB_ID=7.
+  # The write lands on pm's pane (700) via the verified TAB_ID=7.
   assert_stub_called zellij "action write-chars --pane-id 700 radio check"
 }
 
@@ -174,6 +182,23 @@ teardown() {
   ZELLIJ_SESSION_NAME=main TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
   run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
   assert_output "ZELLIJ_SESSION=main"
+}
+
+@test "register's #117 preserve path keeps the recorded session, not the current one (#167 review #3)" {
+  # First register under old-server captures TAB_ID=7 / ZELLIJ_SESSION=old-server.
+  # A re-register whose list-tabs lookup misses (the #117 emoji-repaint case,
+  # simulated by an empty fixture) must preserve BOTH the old id and its old
+  # session — stamping the *current* name onto the *old* id would launder the
+  # stale binding (recorded==current forever), defeating the very check meant
+  # to catch it.
+  ZELLIJ_SESSION_NAME=old-server TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  export STUB_ZELLIJ_TABS_JSON='[]'
+  ZELLIJ_SESSION_NAME=new-server TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+
+  run grep "^TAB_ID=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB_ID=7"
+  run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "ZELLIJ_SESSION=old-server"
 }
 
 @test "_rename_tab refuses a stale TAB_ID and re-resolves the role's tab by name (#167)" {

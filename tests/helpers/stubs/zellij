@@ -14,6 +14,14 @@ case "$*" in
   "action list-panes --json --tab")
     [[ -n "${STUB_ZELLIJ_PANES_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_PANES_JSON"
     ;;
+  "list-sessions --no-formatting")
+    # The #167 concurrency guard (_zellij_session_alive) reads this to decide
+    # whether a recipient's recorded session is still live in another server.
+    # Tests opt in via $STUB_ZELLIJ_SESSIONS (one "<name> [Created …] (…)" line
+    # per session); unset → empty → "no live sessions" (the common single-server
+    # case, where recorded==current so the guard is never consulted anyway).
+    [[ -n "${STUB_ZELLIJ_SESSIONS:-}" ]] && printf '%s\n' "$STUB_ZELLIJ_SESSIONS"
+    ;;
   "action go-to-tab "*)
     # Lets tests pin the contract that aw_launch_tab's `|| true` swallows
     # a non-zero go-to-tab without aborting the worker spawn.

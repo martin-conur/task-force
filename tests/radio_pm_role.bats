@@ -60,6 +60,29 @@ _inbox_count() {  # $1 = role
   assert_equal "$(_inbox_count pm-myrepo)" "1"
 }
 
+@test "--to pm with \$TASK_FORCE_PM_ROLE set-but-unregistered + literal pm live resolves to pm (#165)" {
+  # The env names a future PM address that isn't up yet; a live literal pm is.
+  # Registration-gated step 1 must fall through to the migration fallback.
+  export TASK_FORCE_PM_ROLE=pm-notyet
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send \
+    --to pm --intent review-requested --pr 2 --body "PR up"
+  assert_success
+  assert_output --partial "radio: --to pm → pm (via literal pm"
+  assert_equal "$(_inbox_count pm)" "1"
+  assert_equal "$(_inbox_count pm-notyet)" "0"
+}
+
+@test "--to pm ignores a malformed \$TASK_FORCE_PM_ROLE instead of hard-failing the send (#165)" {
+  # A hand-exported bad value must degrade to the literal-pm queue, not trip
+  # cmd_send's post-shim _validate_role || exit 2.
+  export TASK_FORCE_PM_ROLE='pm-My.App'
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send \
+    --to pm --intent review-requested --pr 2 --body "PR up"
+  assert_success   # NOT exit 2
+  assert_equal "$(_inbox_count pm)" "1"
+}
+
 @test "--to pm falls back to literal pm when the derived role isn't registered but pm is (migration window) (#165)" {
   # The running PM predates the rename (role `pm`); the sender can derive
   # pm-myrepo from its REPO=, but that session doesn't exist yet — so the ping
@@ -276,4 +299,21 @@ _inbox_count() {  # $1 = role
   assert_success
   assert_output --partial "WARNING"
   assert_output --partial "re-pointing"
+}
+
+@test "re-pointing an alias's repo rewrites the sidecar (re-seed replays the new repo, not the stale one) (#165)" {
+  "$RADIO" register --role pm-primary --tab pm-primary --agent claude
+  "$RADIO" register-alias --role pm-other --alias pm-primary --repo /old/other
+  "$RADIO" register-alias --role pm-other --alias pm-primary --repo /new/other
+  # Sidecar holds exactly one pm-other line, with the new repo.
+  run bash -c "grep -c '^pm-other|' '$TASK_FORCE_HOME/radio/sessions/pm-primary.aliases'"
+  assert_output "1"
+  run cat "$TASK_FORCE_HOME/radio/sessions/pm-primary.aliases"
+  assert_output --partial "pm-other|/new/other"
+  refute_output --partial "/old/other"
+  # A re-seed (drop the .info, re-register the primary) replays the NEW repo.
+  rm -f "$TASK_FORCE_HOME/radio/sessions/pm-other.info"
+  "$RADIO" register --role pm-primary --tab pm-primary --agent claude
+  run cat "$TASK_FORCE_HOME/radio/sessions/pm-other.info"
+  assert_output --partial "REPO=/new/other"
 }

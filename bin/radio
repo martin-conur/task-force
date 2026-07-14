@@ -907,13 +907,20 @@ cmd_register_alias() {
   fi
 
   # Record in the primary's alias sidecar so its register re-seeds this alias
-  # across /compact / restart (RC-4a). Idempotent append.
-  local sc line found=0
+  # across /compact / restart (RC-4a). Rewrite (not skip-if-present) any existing
+  # entry for this role so a re-point with a different --repo updates the line
+  # the re-seed will replay — else the sidecar would resurrect the stale repo.
+  local sc line
   sc=$(_aliases_sidecar "$target")
-  if [[ -f "$sc" ]]; then
-    while IFS= read -r line; do [[ "$line" == "${role}|"* ]] && found=1; done < "$sc"
-  fi
-  (( found == 1 )) || printf '%s|%s\n' "$role" "$repo" >> "$sc"
+  {
+    if [[ -f "$sc" ]]; then
+      while IFS= read -r line; do
+        [[ "$line" == "${role}|"* ]] && continue   # drop the old entry for this role
+        printf '%s\n' "$line"
+      done < "$sc"
+    fi
+    printf '%s|%s\n' "$role" "$repo"
+  } | _atomic_write "$sc"
 
   _log "register-alias role=$role -> $target repo=$repo"
 }
@@ -1277,16 +1284,24 @@ _resolve_pm_target() {
   _PM_RESOLVE_VIA=""
   local candidate=""
 
-  # 1. launch-time identity — registration-gated (RC-1). The env value is still
-  #    the best *future* address, so remember it for the step-4 queue target even
-  #    when its session isn't live yet.
+  # 1. launch-time identity — registration-gated (RC-1). A hand-exported,
+  #    malformed $TASK_FORCE_PM_ROLE must not become the resolved target: it
+  #    would trip cmd_send's post-shim `_validate_role || exit 2` (a hard fail
+  #    the old wire format never had). Validate here and, on failure, ignore the
+  #    env entirely — the send degrades to the same literal-`pm` queue as any
+  #    other unresolvable case. The env value is otherwise the best *future*
+  #    address, so remember it for the step-4 queue target.
   if [[ -n "${TASK_FORCE_PM_ROLE:-}" ]]; then
-    candidate="$TASK_FORCE_PM_ROLE"
-    if [[ -f "$(_session_file "$candidate")" ]]; then
-      _PM_RESOLVE_RESULT="$candidate"
-      # shellcheck disable=SC2016  # literal label for the feedback line, not an expansion
-      _PM_RESOLVE_VIA='$TASK_FORCE_PM_ROLE (registered)'
-      return 0
+    if _validate_role "$TASK_FORCE_PM_ROLE" 2>/dev/null; then
+      candidate="$TASK_FORCE_PM_ROLE"
+      if [[ -f "$(_session_file "$candidate")" ]]; then
+        _PM_RESOLVE_RESULT="$candidate"
+        # shellcheck disable=SC2016  # literal label for the feedback line, not an expansion
+        _PM_RESOLVE_VIA='$TASK_FORCE_PM_ROLE (registered)'
+        return 0
+      fi
+    else
+      _log "send: ignoring malformed \$TASK_FORCE_PM_ROLE=$TASK_FORCE_PM_ROLE"
     fi
   fi
 
@@ -1364,6 +1379,10 @@ _resolve_pm_by_slug_split() {
   done
   shopt -u nullglob
   [[ -n "$best" ]] || return 1
+  # Defensive net: two names that both prefix-match one slug are always nested
+  # (the shorter is a prefix of the longer), so `ambiguous` is provably
+  # unreachable under hyphen-boundary matching — longest-match alone decides.
+  # Kept in case the match condition ever loosens.
   if (( ambiguous )); then
     _log "send: --to pm ambiguous for $sender — multiple non-nested pm-<name> matches; falling through"
     printf 'radio: WARNING — --to pm is ambiguous for %s (two overlapping pm-<name> sessions); not guessing. Send with an explicit --to pm-<name>.\n' "$sender" >&2

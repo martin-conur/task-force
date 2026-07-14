@@ -359,6 +359,10 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
 RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
 RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
+# Repo-scoped PM address (#165): the reviewer radios its verdict with
+# `--to ${TASK_FORCE_PM_ROLE:-pm}`, so inject this repo's PM role as launch-time
+# identity (authoritative over radio's sender-role derivation shim).
+RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_NAME}") "
 [[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
 
 # ---------------- launch ----------------

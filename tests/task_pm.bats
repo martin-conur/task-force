@@ -27,11 +27,11 @@ teardown() {
 
 # ----- claude launch line ---------------------------------------------------
 
-@test "claude task-pm renames the current tab to pm and exec's claude /pm" {
+@test "claude task-pm renames the current tab to pm-<reponame> and exec's claude /pm (#165)" {
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
-  # Tab rename
-  assert_stub_called zellij "action rename-tab pm"
+  # Tab rename is now repo-scoped (#165) — symmetric with worker-<reponame>-<slug>.
+  assert_stub_called zellij "action rename-tab pm-${REPO_NAME}"
   # Claude was invoked with /pm
   run stub_calls claude
   assert_output --partial "/pm"
@@ -71,10 +71,10 @@ teardown() {
 
 # ----- kiro launch line -----------------------------------------------------
 
-@test "kiro task-pm renames the current tab to pm and exec's kiro-cli pm agent" {
+@test "kiro task-pm renames the current tab to pm-<reponame> and exec's kiro-cli pm agent (#165)" {
   AW_IMPL=kiro-gh run "$TASK_PM"
   assert_success
-  assert_stub_called zellij "action rename-tab pm"
+  assert_stub_called zellij "action rename-tab pm-${REPO_NAME}"
   run stub_calls kiro-cli
   assert_output --partial "chat --agent pm"
 }
@@ -126,5 +126,55 @@ teardown() {
   run "$TASK_PM" --help
   assert_success
   assert_output --partial "Usage: task-pm"
+  assert_output --partial "--also"
   rm -rf "$outside"
+}
+
+# ----- --also alias sessions (#165) -----------------------------------------
+
+# radio role names allow only [a-zA-Z0-9_-] (repo basenames with dots are a
+# pre-existing framework limitation), and mktemp -d basenames contain a dot —
+# so these tests build clean-named repos to exercise the alias path.
+_clean_repo() {  # $1 = basename → prints the created repo path
+  local parent name path
+  parent=$(mktemp -d)
+  name="$1"
+  path="$parent/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  printf '%s' "$path"
+}
+
+@test "task-pm --also writes an alias session pointing pm-<other> at this PM (#165)" {
+  setup_task_force_home
+  local primary other
+  primary=$(_clean_repo pmrepo)
+  other=$(_clean_repo otherrepo)
+  cd "$primary"
+
+  AW_IMPL=claude-gh run "$TASK_PM" --also "$other"
+  assert_success
+  assert_output --partial "Aliased pm-otherrepo → pm-pmrepo"
+
+  local alias_file="$TASK_FORCE_HOME/radio/sessions/pm-otherrepo.info"
+  assert [ -f "$alias_file" ]
+  run cat "$alias_file"
+  assert_output --partial "ALIAS=pm-pmrepo"
+  # Alias sessions own no inbox.
+  assert [ ! -d "$TASK_FORCE_HOME/radio/mailbox/pm-otherrepo/inbox" ]
+
+  # PM still launches normally.
+  run stub_calls claude
+  assert_output --partial "/pm"
+}
+
+@test "task-pm --also skips a repo that resolves to this PM's own repo (#165)" {
+  setup_task_force_home
+  local primary
+  primary=$(_clean_repo pmrepo)
+  cd "$primary"
+  AW_IMPL=claude-gh run "$TASK_PM" --also "$primary"
+  assert_success
+  assert_output --partial "resolves to this PM's own repo"
+  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm-pmrepo.info" ]
 }

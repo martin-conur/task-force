@@ -237,6 +237,12 @@ fi
 # command exports those vars to that command's environment only.
 TASK_FORCE_ROLE_VALUE="worker-${REPO_NAME}-${SLUG}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_TAB=$(printf %q "$SLUG") "
+# The repo-scoped PM address (#165): symmetric with the worker role above, so
+# the worker prompt's `radio send --to ${TASK_FORCE_PM_ROLE:-pm}` reaches this
+# repo's PM (pm-<reponame>) and never a different repo's PM tab. Injected here
+# as launch-time identity — the authoritative resolution for `--to pm`, ahead
+# of radio's sender-role derivation shim.
+RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_NAME}") "
 # Opt --auto workers into radio's CR (auto-submit) wake-up so PM pings process
 # without a manual Enter (#128). PM and non-auto workers leave this unset, so
 # radio keeps using LF — preserves the human gate that protects a partially-

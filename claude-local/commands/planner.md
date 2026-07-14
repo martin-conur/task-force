@@ -19,7 +19,7 @@ Workflow:
 5. Hand off to PM via radio — this is the canonical handoff. Use the task id
    (the `NNN` from the filename) as the `--issue` value:
    ```bash
-   radio send --to pm --intent spec-ready --issue <NNN> --body "spec written into tasks/NNN-slug.md, ready to dispatch"
+   radio send --to ${TASK_FORCE_PM_ROLE:-pm} --intent spec-ready --issue <NNN> --body "spec written into tasks/NNN-slug.md, ready to dispatch"
    ```
    Read `radio send`'s stdout: `delivered` / `queued — pm is busy` means the ping landed — done. But `queued — pm is idle but wake failed …` means it's unread with no auto-redelivery, and `WARNING — no session for pm` / `WARNING — pm looks dead …` means **PM isn't running** — in those cases tell the user instead of assuming the spec was picked up (check the role name via `ls ~/.task-force/radio/sessions/`).
 

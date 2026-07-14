@@ -213,6 +213,142 @@ _zellij_pane_in_tab() {
       ' 2>/dev/null
 }
 
+# Resolve the visible name of the zellij tab that currently holds a given
+# tab_id. Empty stdout means "no tab with that id" (id gone after a restart, or
+# zellij/jq unreachable). This is the read half of the #167 identity check: a
+# TAB_ID is only trustworthy if the tab still AT that id still bears the name we
+# recorded — a recycled id after a restart bears a different tab's name, or none.
+_zellij_tab_name_by_id() {
+  local target="$1"
+  case "$target" in *[!0-9]*|"") return 0 ;; esac
+  command -v jq >/dev/null 2>&1 || return 0
+  zellij action list-tabs --json 2>/dev/null \
+    | jq -r --argjson t "$target" \
+        '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
+}
+
+# True (exit 0) when a zellij session of this exact name is currently live (not
+# EXITED) in this host's zellij server list (#167 review #2). Used to detect the
+# *concurrent-session* case: if a recipient's recorded ZELLIJ_SESSION names a
+# different but still-running server, its real tab lives somewhere we cannot
+# write to — so we must NOT deliver into this server's same-named look-alike tab
+# nor repair the live owner's file. `zellij list-sessions --no-formatting`
+# prints "<name> [Created …] (…)" one per line; $1 is the session name and the
+# "(EXITED …)" marker rules out a resurrectable-but-dead session. On any failure
+# (flag unsupported, zellij down) this returns non-zero → "not alive" → callers
+# fall through to the name-at-id verification, which still blocks same-server
+# misdelivery; only the rarer cross-server concurrent case degrades.
+_zellij_session_alive() {
+  local name="$1"
+  [[ -n "$name" ]] || return 1
+  [[ -n "${ZELLIJ:-}" ]] || return 1
+  command -v zellij >/dev/null 2>&1 || return 1
+  zellij list-sessions --no-formatting 2>/dev/null \
+    | awk -v n="$name" '!/EXITED/ && $1 == n { f = 1 } END { exit(f ? 0 : 1) }'
+}
+
+# The load-bearing #167 check, shared by cmd_send and _rename_tab. Given a
+# session file and the role's bare tab slug, return the tab_id it is safe to
+# drive a zellij action against — verifying identity rather than trusting the
+# environment, because a session *name* is not a server-instance token
+# (`zellij attach -c main` after a reboot yields recorded == live with every id
+# stale). Protocol via exit code + stdout:
+#   rc 0 + id  : recorded TAB_ID verified (the tab still at that id still bears
+#                the recorded bare name) — use as-is, no repair.
+#   rc 3 + id  : recorded id was stale/gone; recovered a fresh id by name —
+#                use it AND repair the file so the next op is id-driven again.
+#   rc 1 + ""  : unresolvable (owner alive in another server, or the tab is
+#                gone and no name match) — caller queues (send) / skips (rename).
+_live_tab_id() {
+  local f="$1" bare="$2"
+  local rec_id rec_session curr_session
+  rec_id=$(_session_field "$f" TAB_ID || true)
+  rec_session=$(_session_field "$f" ZELLIJ_SESSION || true)
+  curr_session="${ZELLIJ_SESSION_NAME:-}"
+
+  # Concurrency guard (#167 review #2): the recorded owner is a *different*,
+  # still-running server → its tab is unreachable from here and its file must
+  # not be repaired to point at our look-alike. Queue instead of misdelivering.
+  if [[ -n "$rec_session" && "$rec_session" != "$curr_session" ]] \
+       && _zellij_session_alive "$rec_session"; then
+    return 1
+  fi
+
+  # Verify the recorded id against reality: the tab still at that id must still
+  # bear the recorded bare name (emoji prefix stripped from both). Restart-proof,
+  # rename-proof, and collision-proof (we check the name AT the id, so a
+  # first-match impostor at a different id can't slip through). #167 review #1.
+  if [[ -n "$rec_id" ]]; then
+    local name_at_id
+    name_at_id=$(_zellij_tab_name_by_id "$rec_id")
+    if [[ -n "$name_at_id" && "$(_strip_tab_prefix "$name_at_id")" == "$bare" ]]; then
+      printf '%s' "$rec_id"
+      return 0
+    fi
+  fi
+
+  # Stale or gone: re-resolve the role's tab by its bare name. A hit is a fresh
+  # id the caller repairs into the file (rc 3); a miss is unresolvable (rc 1).
+  local recovered
+  recovered=$(_zellij_tab_id_by_name "$bare" || true)
+  if [[ -n "$recovered" ]]; then
+    printf '%s' "$recovered"
+    return 3
+  fi
+  return 1
+}
+
+# Replace-or-append one or more KEY=VALUE fields in a session file, in place and
+# TOCTOU-safe. Snapshots the file first so a concurrent unregister (the #140/#151
+# cascade) that unlinks it mid-call is a no-op rather than resurrecting a stale
+# or empty file (#164 crash class). This is the single home for the awk
+# replace-or-append grammar that _update_state, _rename_tab's TAB= repaint, and
+# the #167 tab-binding repair had each grown a copy of (#167 review #5).
+_session_set_fields() {
+  local f="$1"; shift
+  local content
+  content=$(cat "$f" 2>/dev/null || true)
+  [[ -n "$content" ]] || return 0
+  # Pass the KEY=VAL pairs through the environment, not `-v`: BSD/macOS awk
+  # rejects a literal newline in a `-v` value ("newline in string"), and values
+  # like the emoji-painted TAB= are safest untouched by -v backslash handling.
+  # ENVIRON[] is POSIX and newline-clean.
+  local pairs="" kv
+  for kv in "$@"; do
+    pairs+="${kv}"$'\n'
+  done
+  printf '%s\n' "$content" | RADIO_SET_PAIRS="$pairs" awk '
+    BEGIN {
+      n = split(ENVIRON["RADIO_SET_PAIRS"], arr, "\n")
+      for (i = 1; i <= n; i++) {
+        if (arr[i] == "") continue
+        eq = index(arr[i], "=")
+        want[substr(arr[i], 1, eq - 1)] = substr(arr[i], eq + 1)
+      }
+    }
+    {
+      eq = index($0, "=")
+      k = (eq > 0) ? substr($0, 1, eq - 1) : ""
+      if (k != "" && (k in want)) { print k "=" want[k]; done[k] = 1; next }
+      print
+    }
+    END { for (k in want) if (!(k in done)) print k "=" want[k] }
+  ' | _atomic_write "$f"
+}
+
+# Restamp a session file's tab binding after a #167 name recovery: the fresh
+# TAB_ID plus the current ZELLIJ_SESSION so the next op is id-driven again. Skip
+# the session restamp when the live name is empty (ZELLIJ_SESSION= is advisory
+# and must not self-destruct into the unguarded class — #167 review #8).
+_repair_tab_binding() {
+  local f="$1" id="$2" curr="${ZELLIJ_SESSION_NAME:-}"
+  if [[ -n "$curr" ]]; then
+    _session_set_fields "$f" "TAB_ID=$id" "ZELLIJ_SESSION=$curr"
+  else
+    _session_set_fields "$f" "TAB_ID=$id"
+  fi
+}
+
 _session_file() {
   printf '%s/%s.info' "$SESSIONS_DIR" "$1"
 }
@@ -264,6 +400,11 @@ _ensure_session_file() {
     tab_id=$(_zellij_tab_id_by_name "$ZELLIJ_TAB" || true)
   fi
 
+  # Bind the re-seeded TAB_ID to this zellij server instance (#167) so a later
+  # send/rename can detect a TAB_ID that outlived its server. Same value the
+  # real register captures; empty outside zellij.
+  local zsession="${ZELLIJ_SESSION_NAME:-}"
+
   # LOADOUT recovery (#140 Bug C): the hook subshell doesn't inherit
   # $TASK_FORCE_LOADOUT, so the previous fallback to "${TASK_FORCE_LOADOUT:-unknown}"
   # wrote the literal string "unknown" on every re-seed. Read from the
@@ -306,8 +447,8 @@ _ensure_session_file() {
   repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
   {
-    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-      "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$repo" "$(_now)" \
+    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+      "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$zsession" "$repo" "$(_now)" \
       "$agent" "$loadout"
     # Preserve the --auto opt-in across self-heal so cmd_send keeps using CR
     # for wake-up after an intra-session re-seed (#128). Use `if` rather than
@@ -344,17 +485,8 @@ _update_state() {
   content=$(cat "$f" 2>/dev/null || true)
   [[ -n "$content" ]] || { _log "update_state: session file vanished for $TASK_FORCE_ROLE — skipping"; return 0; }
 
-  # Re-emit the file with STATE/LAST_HEARTBEAT replaced; preserve everything else.
-  printf '%s\n' "$content" | awk -v st="$new_state" -v hb="$(_now)" '
-    BEGIN { OFS="=" }
-    /^STATE=/         { print "STATE=" st;        seen_state=1; next }
-    /^LAST_HEARTBEAT=/{ print "LAST_HEARTBEAT=" hb; seen_hb=1;  next }
-    { print }
-    END {
-      if (!seen_state) print "STATE=" st
-      if (!seen_hb)    print "LAST_HEARTBEAT=" hb
-    }
-  ' | _atomic_write "$f"
+  # Replace STATE/LAST_HEARTBEAT, preserve everything else (shared grammar #167 review #5).
+  _session_set_fields "$f" "STATE=$new_state" "LAST_HEARTBEAT=$(_now)"
 
   _rename_tab "$new_state"
 }
@@ -403,28 +535,29 @@ _rename_tab() {
   esac
   new_name="${prefix}${bare}"
 
-  # Drive the rename by the stable tab_id captured at register time. Falling
-  # back to a name lookup only when TAB_ID= is empty (e.g. zellij was not
-  # running at register) keeps non-zellij CI paths working without making the
-  # name the canonical handle — which would re-open the stale-TAB= /
-  # duplicate-name failure modes (#102 review).
-  local tab_id
-  tab_id=$(_session_field "$f" TAB_ID || true)
-  if [[ -z "$tab_id" ]]; then
-    tab_id=$(_zellij_tab_id_by_name "$current")
+  # Resolve the tab_id to rename via the shared #167 identity check: trust the
+  # recorded TAB_ID only when the tab still at that id still bears this role's
+  # bare name, else recover by name (and repair). rc 1 → the tab is gone /
+  # owned by a live sibling server → skip rather than rename an unrelated tab.
+  # `rc=0; …|| rc=$?` rather than `…; rc=$?` because `set -e` treats a command
+  # substitution assignment whose command exits non-zero (rc 1/3 here) as a
+  # failed simple command and aborts before the next line runs.
+  local tab_id rc=0
+  tab_id=$(_live_tab_id "$f" "$bare") || rc=$?
+  if [[ "$rc" -eq 1 || -z "$tab_id" ]]; then
+    _log "_rename_tab: no live tab_id for role $TASK_FORCE_ROLE — skipping"
+    return 0
   fi
-  [[ -n "$tab_id" ]] || { _log "_rename_tab: no tab_id for role $TASK_FORCE_ROLE — skipping"; return 0; }
 
   zellij action rename-tab-by-id "$tab_id" "$new_name" >/dev/null 2>&1 || return 0
 
-  # Repaint TAB= so a human inspecting the session file can see what name is
-  # currently displayed. Purely cosmetic — TAB_ID= is what cmd_send and the
-  # next _rename_tab use to address the tab (#102 review).
-  awk -v t="$new_name" '
-    /^TAB=/ { print "TAB=" t; seen=1; next }
-    { print }
-    END { if (!seen) print "TAB=" t }
-  ' "$f" | _atomic_write "$f"
+  # Recovered a fresh id by name (recorded id was stale/gone) — restamp the
+  # binding so the next op is id-driven again (#167).
+  [[ "$rc" -eq 3 ]] && _repair_tab_binding "$f" "$tab_id"
+
+  # Repaint TAB= so a human inspecting the session file sees the current name.
+  # Purely cosmetic — the id is the address. TOCTOU-safe via the shared setter.
+  _session_set_fields "$f" "TAB=$new_name"
 }
 
 # ----- subcommands ----------------------------------------------------------
@@ -454,7 +587,11 @@ cmd_register() {
   # running, jq absent, --tab name not found) we leave TAB_ID= empty and log
   # it — non-zellij / CI paths keep working, and _rename_tab can still fall
   # back to a name lookup the next time it runs.
-  local tab_id=""
+  # Bind the captured TAB_ID to this zellij server instance (#167). tab ids are
+  # only unique within one server lifetime; persisting the session name lets a
+  # later send/rename detect a TAB_ID that outlived a restart via the identity
+  # check in _live_tab_id. Empty outside zellij / when unresolved.
+  local tab_id="" zsession="${ZELLIJ_SESSION_NAME:-}"
   if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
     tab_id=$(_zellij_tab_id_by_name "$tab" || true)
   fi
@@ -491,7 +628,12 @@ cmd_register() {
     fi
     if [[ -n "$existing_tab_id" ]]; then
       tab_id="$existing_tab_id"
-      _log "register: zellij list-tabs miss for tab=$tab — preserving existing TAB_ID=$tab_id role=$role"
+      # Preserve the recorded ZELLIJ_SESSION too, not just the id (#167 review
+      # #3). Stamping the *current* session name onto a *preserved* (old) id
+      # would launder the stale binding — recorded==current forever, defeating
+      # the identity check for exactly the stale id it exists to catch.
+      zsession=$(_session_field "$f" ZELLIJ_SESSION || true)
+      _log "register: zellij list-tabs miss for tab=$tab — preserving existing TAB_ID=$tab_id session=$zsession role=$role"
     else
       _log "register: could not resolve tab_id for tab=$tab (zellij list-tabs returned no match)"
     fi
@@ -526,8 +668,8 @@ cmd_register() {
   printf '%s' "$agent" | _atomic_write "$(_agent_sidecar "$role")"
 
   {
-    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
-      "$role" "$tab" "$tab_id" "$repo" "$(_now)" "$agent" "$loadout"
+    printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
+      "$role" "$tab" "$tab_id" "$zsession" "$repo" "$(_now)" "$agent" "$loadout"
     # Persist the --auto opt-in (#128). task-work --auto exports
     # TASK_FORCE_AUTO_SUBMIT=1 into the tab's env; cmd_send reads AUTO_SUBMIT
     # off the recipient's session file and flips wake-up from LF (manual) to
@@ -993,18 +1135,33 @@ cmd_send() {
     _send_outcome_wake_failed "$to" "recipient has no tab" "$ragent"
     return 0
   fi
-  # Wake-up via per-pane targeting (#102): read the recipient's stable TAB_ID=
-  # straight from its session file and write to a pane on that tab. We do NOT
-  # fall back to a name lookup here — name-based resolution is exactly what
-  # this fix is closing out (stale TAB= mid-flip, duplicate names, user-driven
-  # rename). If TAB_ID= is empty the recipient registered in a non-zellij
-  # context; no zellij to wake, so we queue the message and move on.
-  local rtab_id rpane_id
+  # Wake-up via per-pane targeting (#102): write to a pane on the recipient's
+  # own tab, never the focused tab. The tab address comes from _live_tab_id
+  # (#167), which trusts the recorded TAB_ID only when the tab still at that id
+  # still bears the recipient's bare name — so a TAB_ID that outlived a zellij
+  # restart, or belongs to a sibling server, can't misdeliver "radio check"
+  # into an unrelated pane. An empty recorded TAB_ID means the recipient
+  # registered in a non-zellij context — nothing to wake, queue and move on.
+  local rtab_id rpane_id rc
   rtab_id=$(_session_field "$rs" TAB_ID || true)
   if [[ -z "$rtab_id" ]]; then
     _log "send: $to has no TAB_ID (not zellij-registered?) — queued (id=$id)"
     _send_outcome_wake_failed "$to" "not zellij-registered" "$ragent"
     return 0
+  fi
+  # rc capture guarded against set -e (non-zero rc 1/3 from _live_tab_id).
+  rc=0
+  rtab_id=$(_live_tab_id "$rs" "$(_strip_tab_prefix "$rtab")") || rc=$?
+  if [[ "$rc" -eq 1 || -z "$rtab_id" ]]; then
+    _log "send: $to tab id unresolved — stale/gone or owner alive in another zellij server — queued (id=$id)"
+    _send_outcome_wake_failed "$to" "stale or unreachable tab" "$ragent"
+    return 0
+  fi
+  # Recovered a fresh id by name (recorded id was stale/gone) — repair the file
+  # so subsequent sends are id-driven again (#167).
+  if [[ "$rc" -eq 3 ]]; then
+    _repair_tab_binding "$rs" "$rtab_id"
+    _log "send: $to recovered stale tab id by name → tab_id=$rtab_id (id=$id)"
   fi
   rpane_id=$(_zellij_pane_in_tab "$rtab_id")
   if [[ -z "$rpane_id" ]]; then

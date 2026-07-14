@@ -24,6 +24,9 @@ setup() {
   setup_task_force_home
   setup_stubs
   export ZELLIJ=fake-session
+  # Pin the live zellij session name (#167) so _rename_tab's identity check has
+  # a stable baseline instead of inheriting the suite's own session.
+  export ZELLIJ_SESSION_NAME=live-server
   # Bypass the no-role dispatcher gate on `register` (#93); per-test overrides
   # set TASK_FORCE_ROLE where the value matters.
   export TASK_FORCE_ROLE=test-runner
@@ -70,18 +73,29 @@ teardown() {
   refute_output --partial "rename-tab"
 }
 
-@test "busy/ready: rename still works when list-tabs would now be empty (TAB_ID= drives it)" {
-  # With TAB_ID= captured at register, subsequent flips no longer need to
-  # query list-tabs at all — they use the persisted id directly. This is
-  # the key invariant from the #102 review: stale or missing list-tabs
-  # output must not break wake-ups on a tab that still exists.
+@test "busy/ready: flip drives by the persisted tab_id when list-tabs verifies name-at-id (#167)" {
+  # The persisted TAB_ID= still drives the rename — but #167 first verifies the
+  # tab AT that id still bears pm's bare name (one list-tabs call), rather than
+  # trusting the id blindly. With the tab present, both the register first-paint
+  # and the busy flip rename tab_id=7.
+  TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  run bash -c "grep -c 'action rename-tab-by-id 7' '$STUB_CALLS_DIR/zellij.calls'"
+  assert_output "2"
+}
+
+@test "busy/ready: flip refuses to rename by a stale id it can't verify (#167)" {
+  # #167 supersedes the pre-#102 "id drives it even with empty list-tabs"
+  # guarantee: if list-tabs can't confirm the tab at TAB_ID=7 still bears pm's
+  # name (empty here — after a restart id 7 may host an unrelated tab, or the
+  # tab is gone), the flip must NOT blindly rename by id. With no name match to
+  # recover to either, the busy flip skips — only the register first-paint
+  # (still-seeded) rename remains.
   TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
   export STUB_ZELLIJ_TABS_JSON='[]'
   TASK_FORCE_ROLE=pm "$RADIO" busy
-  # Two rename-tab-by-id calls landed on the same persisted tab_id=7
-  # (one at register first-paint, one for the busy flip).
   run bash -c "grep -c 'action rename-tab-by-id 7' '$STUB_CALLS_DIR/zellij.calls'"
-  assert_output "2"
+  assert_output "1"
 }
 
 # ----- first paint at register ---------------------------------------------

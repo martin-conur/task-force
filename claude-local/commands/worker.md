@@ -48,6 +48,13 @@ Workflow:
 
 7. **Commit** with the task title as prefix: `<Task title>: <short description>`.
 
+**Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (see the workflow doc for this repo's specifics):
+- **Changelog**: if the repo keeps a changelog, add an entry for this change — and note any upgrade/migration step it requires.
+- **Docs**: if model-facing or user-visible behavior changed, update the docs that describe it (README section, workflow/steering docs, etc.).
+- **Reuse**: grep for an existing helper before writing scaffolding; if a second copy of ~10+ lines appears, extract and share it instead of re-implementing.
+- **Spec notes**: re-read the full task file, including any notes below the frontmatter — implementation addenda often live there.
+- **Green**: run the repo's test suite, linters, and any consistency/drift checks; after pushing, confirm `gh pr checks` rather than claiming green.
+
 8. **Open a pull request first** (before bumping status), so a failed
    `gh pr create` doesn't strand the task at `in-review` with no PR.
    - Find the base branch:

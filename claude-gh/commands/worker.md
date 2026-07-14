@@ -15,6 +15,14 @@ Workflow:
 5. Write tests for new features or bug fixes.
 6. Run tests to verify.
 7. Commit with the issue title as a prefix: `<Issue title>: <short description>`.
+
+**Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (see the workflow doc for this repo's specifics):
+- **Changelog**: if the repo keeps a changelog, add an entry for this change — and note any upgrade/migration step it requires.
+- **Docs**: if model-facing or user-visible behavior changed, update the docs that describe it (README section, workflow/steering docs, etc.).
+- **Reuse**: grep for an existing helper before writing scaffolding; if a second copy of ~10+ lines appears, extract and share it instead of re-implementing.
+- **Spec comments**: re-read the spec in full, including any comments or notes added after the original body — implementation addenda often live there.
+- **Green**: run the repo's test suite, linters, and any consistency/drift checks; after pushing, confirm `gh pr checks` rather than claiming green.
+
 8. Create a pull request first (before bumping Status), so a failed `gh pr create` doesn't strand the issue in "In Review" with no PR:
    - Find the base branch by running:
      ```bash

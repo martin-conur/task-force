@@ -166,6 +166,42 @@ teardown() {
   assert_output "TAB_ID="
 }
 
+# ----- stale zellij session across a restart (#167) -------------------------
+
+@test "register persists ZELLIJ_SESSION= alongside TAB_ID= (#167)" {
+  # The contract that lets the stale-session guard work: register binds the
+  # captured TAB_ID to the zellij server instance it came from.
+  ZELLIJ_SESSION_NAME=main TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "ZELLIJ_SESSION=main"
+}
+
+@test "_rename_tab refuses a stale TAB_ID and re-resolves the role's tab by name (#167)" {
+  # pm registered under old-server (TAB_ID=7). zellij restarts; pm's tab returns
+  # under a fresh id 42 in new-server. A state flip must rename tab 42 (found by
+  # name), never the stale id 7 that some unrelated tab may now own — then
+  # repair the .info so subsequent renames/wakes are id-driven again.
+  ZELLIJ_SESSION_NAME=old-server TASK_FORCE_ROLE=pm "$RADIO" register --role pm --tab pm --agent claude
+  export STUB_ZELLIJ_TABS_JSON='[
+    {"name": "pm", "tab_id": 42},
+    {"name": "⏸️ pm", "tab_id": 42},
+    {"name": "▶️ pm", "tab_id": 42}
+  ]'
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  ZELLIJ_TAB=pm ZELLIJ_SESSION_NAME=new-server TASK_FORCE_ROLE=pm "$RADIO" busy
+
+  run stub_calls zellij
+  assert_output --partial "action rename-tab-by-id 42 ${PLAY}pm"
+  refute_output --partial "rename-tab-by-id 7"
+
+  # Session file repaired: id + session now reflect the live server.
+  run grep "^TAB_ID=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB_ID=42"
+  run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "ZELLIJ_SESSION=new-server"
+}
+
 @test "send still no-ops to a busy recipient even with multiple workers focused (#102 bug 2)" {
   TASK_FORCE_ROLE=pm        "$RADIO" register --role pm        --tab pm        --agent claude
   TASK_FORCE_ROLE=pm        "$RADIO" busy

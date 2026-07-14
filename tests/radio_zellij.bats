@@ -141,3 +141,89 @@ teardown() {
   # The write was attempted (reached the pane) before failing.
   assert_stub_called zellij "action write-chars --pane-id 700 radio check"
 }
+
+# ----- stale zellij session across a restart (#167) -------------------------
+
+@test "send refuses a stale TAB_ID and queues when the recorded zellij session is gone (#167)" {
+  # pm registers under one zellij server; its .info records TAB_ID=7 bound to
+  # ZELLIJ_SESSION=old-server. zellij then restarts (crash/reboot) — the sender
+  # is now in a fresh server and pm's tab no longer exists under any name. The
+  # stale id 7 may now belong to an unrelated tab, so wake-up must NOT write to
+  # it; it queues with the stale-session outcome instead.
+  export ZELLIJ_SESSION_NAME=old-server
+  "$RADIO" register --role pm --tab pm --agent claude
+  export ZELLIJ_SESSION_NAME=new-server
+  export STUB_ZELLIJ_TABS_JSON='[]'
+  export STUB_ZELLIJ_PANES_JSON='[]'
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is idle but wake failed (stale zellij session)"
+
+  run stub_calls zellij
+  # The whole point: never write-chars into the tab that now owns the stale id.
+  refute_output --partial "write-chars"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "stale zellij session — id wake refused"
+}
+
+@test "send recovers by name and repairs the session file after a zellij restart (#167)" {
+  # Same restart, but pm's tab genuinely came back — under a fresh id 42 in the
+  # new server. Wake-up must resolve pm by name, write to id 42's pane (never
+  # the stale 7), and repair the .info so the next send is id-driven again.
+  export ZELLIJ_SESSION_NAME=old-server
+  "$RADIO" register --role pm --tab pm --agent claude
+  export ZELLIJ_SESSION_NAME=new-server
+  export STUB_ZELLIJ_TABS_JSON='[
+    {"name": "pm", "tab_id": 42},
+    {"name": "⏸️ pm", "tab_id": 42},
+    {"name": "▶️ pm", "tab_id": 42}
+  ]'
+  export STUB_ZELLIJ_PANES_JSON='[
+    {"id": 4200, "is_plugin": false, "is_focused": true, "tab_id": 42}
+  ]'
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=42)"
+
+  run stub_calls zellij
+  assert_output --partial "action write-chars --pane-id 4200 radio check"
+  refute_output --partial "--pane-id 700"
+
+  # The session file is repaired: id + session now reflect the live server.
+  run grep "^TAB_ID=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "TAB_ID=42"
+  run grep "^ZELLIJ_SESSION=" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "ZELLIJ_SESSION=new-server"
+}
+
+@test "send wakes by id when the recorded zellij session matches the live server (#167)" {
+  # No restart: recorded ZELLIJ_SESSION == live $ZELLIJ_SESSION_NAME, so the
+  # stale guard is a no-op and the fast id path stands.
+  export ZELLIJ_SESSION_NAME=main
+  "$RADIO" register --role pm --tab pm --agent claude
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ping --body "hi"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=7)"
+  run stub_calls zellij
+  assert_output --partial "action write-chars --pane-id 700 radio check"
+}
+
+@test "send treats an empty recorded ZELLIJ_SESSION as non-stale (#167)" {
+  # Recipient registered outside zellij / before #167: ZELLIJ_SESSION= empty.
+  # A live sender in a named session must NOT trip the stale guard — empty means
+  # "unknown", so the id path stays available and non-zellij paths are unchanged.
+  unset ZELLIJ_SESSION_NAME
+  "$RADIO" register --role pm --tab pm --agent claude
+  export ZELLIJ_SESSION_NAME=some-server
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ping --body "hi"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=7)"
+}

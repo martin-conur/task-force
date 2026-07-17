@@ -157,3 +157,10 @@ re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.
 Run `radio orphans` to list any session whose heartbeat is older than 1 hour —
 those entries are safe to delete (`rm ~/.task-force/radio/sessions/<role>.info`)
 or leave for the next legitimate `radio register` to overwrite.
+
+The mailbox and log self-prune (#169): a fresh `SessionStart` register runs a
+quiet `radio gc` (14-day default) that deletes dead roles' mailboxes (no session
+file + newest inbox/processed entry older than the cutoff), expires old
+`processed/` messages on live roles, and rotates the top-level `log` once it
+passes ~1MB — so no cron is needed. Preview a sweep with `radio gc --dry-run`,
+or force one with a custom window via `radio gc --max-age-days N`. `task-done --remove-worktree` also sweeps its own role's mailbox on cleanup.

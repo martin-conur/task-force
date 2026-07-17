@@ -618,3 +618,42 @@ assert_ambient_pr_number_does_not_force_delete() {
   assert_success
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
+
+# ---------------------------------------------------------------------------
+# Radio mailbox sweep on cleanup (#169)
+# ---------------------------------------------------------------------------
+
+@test "claude-gh: --remove-worktree sweeps its own radio mailbox" {
+  setup_task_force_home
+  export TASK_FORCE_ROLE="worker-task-force-$SLUG"
+  local mbx="$TASK_FORCE_HOME/radio/mailbox/$TASK_FORCE_ROLE"
+  mkdir -p "$mbx/inbox" "$mbx/processed"
+  printf 'stranded approved-and-merged\n' > "$mbx/inbox/msg.md"
+
+  run bash -c "echo y | $CLAUDE_GH_TASK_DONE --force --remove-worktree"
+  assert_success
+  assert [ ! -d "$mbx" ]
+}
+
+@test "claude-local: --remove-worktree sweeps its own radio mailbox" {
+  setup_task_force_home
+  export TASK_FORCE_ROLE="worker-task-force-$SLUG"
+  local mbx="$TASK_FORCE_HOME/radio/mailbox/$TASK_FORCE_ROLE"
+  mkdir -p "$mbx/inbox" "$mbx/processed"
+  printf 'x\n' > "$mbx/processed/old.md"
+
+  run bash -c "echo y | $CLAUDE_LOCAL_TASK_DONE --force --remove-worktree"
+  assert_success
+  assert [ ! -d "$mbx" ]
+}
+
+@test "claude-gh: mailbox sweep is a no-op (keeps mailbox root) when role is unset" {
+  setup_task_force_home
+  unset TASK_FORCE_ROLE
+  mkdir -p "$TASK_FORCE_HOME/radio/mailbox/some-other-role"
+
+  run bash -c "echo y | $CLAUDE_GH_TASK_DONE --force --remove-worktree"
+  assert_success
+  # An empty/unsafe role must never rm -rf the whole mailbox root.
+  assert [ -d "$TASK_FORCE_HOME/radio/mailbox/some-other-role" ]
+}

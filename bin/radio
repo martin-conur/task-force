@@ -30,6 +30,8 @@ Usage:
                                          (injected into the model's context by Claude Code)
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
+  radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
+                                         messages (default N=14) and rotate the log
 
 Self-identification: every command except `register` reads $TASK_FORCE_ROLE.
 Override the mailbox root with $TASK_FORCE_HOME (defaults to ~/.task-force).
@@ -64,6 +66,98 @@ _rand_id() {
   # 32 bytes of /dev/urandom is plenty for 6 alphanumeric chars after `tr`
   # filtering — the previous 256-byte read was wasteful, not wrong.
   LC_ALL=C head -c 32 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 6
+}
+
+# Portable file mtime / size. GNU `stat` wants `-c`, BSD/macOS `stat` wants `-f`.
+# GNU MUST be tried first: on GNU, `-f` means `--file-system` (takes no format
+# arg) and `stat -f %m file` *partially succeeds* — it prints filesystem info and
+# exits 0, so a BSD-first probe never falls through and returns garbage. `-c` on
+# BSD is a clean "illegal option" (exit 1), so GNU-first degrades correctly on
+# both. `_file_mtime` prints NOTHING on failure (missing/unreadable file) — a
+# destructive-safety contract (#184 review #2): its callers must treat an absent
+# mtime as "protect", never as epoch-0/ancient which would sweep a live file on a
+# transient stat hiccup. `_file_size` keeps its 0-on-failure default — 0 means
+# "small, don't rotate", already the safe direction.
+_file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+_file_size()  { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
+
+# Newest mtime (epoch) of any message under a role's inbox/ + processed/, given
+# $now_epoch as the protect-sentinel. When the role has no messages, fall back to
+# the mailbox dir's own mtime — so a just-created empty mailbox (recent dir mtime)
+# is protected from the gc sweep even if its session file hasn't been written yet,
+# while a genuinely aged empty residue dir still ages out. Any unreadable mtime
+# collapses the result to $now_epoch (protect — #184 review #2): a stat hiccup on
+# a member file must never let the whole dir look ancient. The `[[ -f ]]` guard
+# makes this nullglob-independent (unmatched globs stay literal and skip).
+_newest_mtime_in() {
+  local dir="$1" now_epoch="$2" newest=0 m f
+  for f in "$dir"/inbox/* "$dir"/processed/*; do
+    [[ -f "$f" ]] || continue
+    m=$(_file_mtime "$f") || true
+    if [[ -z "$m" ]]; then printf '%s' "$now_epoch"; return 0; fi
+    (( m > newest )) && newest=$m
+  done
+  if (( newest == 0 )); then
+    m=$(_file_mtime "$dir") || true
+    newest=${m:-$now_epoch}
+  fi
+  printf '%s' "$newest"
+}
+
+# True (0) when $1's mailbox has no unread mail — i.e. inbox/ holds no *.md.
+# Gates gc's whole-dir reclaim so a dead role still sitting on undelivered
+# messages (the ~64-message legacy `pm` backlog #182 is deferred to adopt) is
+# never `rm -rf`'d out from under it; such a role falls through to the
+# processed-only sweep, which never touches inbox. Absent inbox dir = empty.
+_inbox_empty() {
+  local d f
+  d=$(_inbox_dir "$1")
+  [[ -d "$d" ]] || return 0
+  for f in "$d"/*.md; do
+    [[ -e "$f" ]] && return 1
+  done
+  return 0
+}
+
+# True (0) when $1's role is "dead" for gc-reclaim purposes, given $now_epoch:
+# no session file at all, OR a primary session whose LAST_HEARTBEAT is >1h stale
+# — the same threshold `radio orphans` and cmd_send's dead-session guard use, and
+# the effectively-idle notion #127 is chartered to self-heal. Reclaiming a
+# crashed worker's lingering-.info mailbox is the single biggest accumulation
+# source gc exists to fix; keying only on file *existence* would deem it immortal.
+# Alias sessions (#165) carry no heartbeat of their own (their liveness tracks the
+# primary), so they are never judged dead here. A missing/unparseable heartbeat is
+# treated as alive (conservative — never infer death from a parse failure). Always
+# paired with `_inbox_empty` before any whole-dir removal, so a dead-by-heartbeat
+# role still holding unread mail keeps its inbox.
+_session_dead() {
+  local role="$1" now_epoch="$2" sf hb hb_epoch
+  sf=$(_session_file "$role")
+  [[ -f "$sf" ]] || return 0
+  [[ -n "$(_session_field "$sf" ALIAS || true)" ]] && return 1
+  hb=$(_session_field "$sf" LAST_HEARTBEAT || true)
+  hb_epoch=$(_iso_to_epoch "$hb")
+  [[ -n "$hb_epoch" ]] || return 1
+  (( now_epoch - hb_epoch > 3600 ))
+}
+
+# Truncate $LOG_FILE to its last ~512KB once it grows past ~1MB (#169). `tail
+# -c` may clip a partial first line — acceptable for an append-only debug log.
+# No-op when the file is small or absent. Known race (#184 review #5): a
+# concurrent `_log` `>>` append landing between the `tail` read and the `mv` is
+# lost. It's a best-effort debug log, not mail, and rotation only fires on the
+# rare >1MB crossing (now gated behind the once-hourly register throttle), so the
+# window is negligible; we accept it rather than add locking on the hot path.
+_rotate_log() {
+  [[ -f "$LOG_FILE" ]] || return 0
+  local size max keep
+  size=$(_file_size "$LOG_FILE")
+  max=$(( 1024 * 1024 )); keep=$(( 512 * 1024 ))
+  if (( size > max )); then
+    tail -c "$keep" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null \
+      && mv "$LOG_FILE.tmp" "$LOG_FILE"
+    _log "gc: rotated log (was $size bytes, kept last $keep)"
+  fi
 }
 
 _require_role() {
@@ -157,7 +251,12 @@ _session_field() {
 _validate_role() {
   local role="$1"
   case "$role" in
-    ""|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
+    # Leading `-` is rejected (#169): a role starting with a dash gets swallowed
+    # as a flag by every `radio <cmd> --role/--to "$role"` call site, which is how
+    # the historical `--tab` mailbox got created (a malformed register, pre-#93
+    # guard). No legitimate role (`pm`, `pm-<repo>`, `worker-<repo>-<slug>`) starts
+    # with a dash, so this is a pure footgun-killer.
+    ""|-*|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
     *[!a-zA-Z0-9_-]*) echo "radio: invalid role: $role" >&2; return 1 ;;
   esac
 }
@@ -782,6 +881,33 @@ cmd_register() {
   fi
 
   _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout repo_name=$repo_name"
+
+  # Amortized gc piggyback (#169): a fresh primary register runs a quiet
+  # 14-day sweep so dead mailboxes / expired processed messages / an oversized
+  # log never accumulate unbounded — no cron. Gated on fresh=1 so /compact /
+  # resume re-registers don't re-sweep, and on an empty $existing_alias so an
+  # alias placeholder doesn't. Our own mailbox + session file already exist
+  # (written above), so this role is never its own target. Run in a subshell
+  # with output suppressed: gc's stdout must not pollute the SessionStart
+  # context injection (the drain summary below is the only thing that should),
+  # and any nonzero exit inside gc must not abort register.
+  #
+  # Throttled to once per hour via a `.gc-last` sentinel (#184 review #4): gc
+  # walks the ENTIRE global $MAILBOX_DIR (every repo, hundreds of dirs), and a
+  # fleet of --auto workers fires SessionStart re-registers within seconds of
+  # each other — so without the throttle each boot re-walks the whole tree. The
+  # sentinel makes it genuinely amortized rather than per-register. A benign race
+  # (two registers both seeing a stale sentinel) just runs gc twice; gc is
+  # idempotent, so that's harmless.
+  if (( fresh == 1 )) && [[ -z "$existing_alias" ]]; then
+    local gc_sentinel="$RADIO_HOME/.gc-last" gc_last gc_now
+    gc_now=$(date -u +%s)
+    gc_last=$(_file_mtime "$gc_sentinel") || true
+    if [[ -z "$gc_last" ]] || (( gc_now - gc_last >= 3600 )); then
+      ( cmd_gc --max-age-days 14 ) >/dev/null 2>&1 || true
+      : > "$gc_sentinel" 2>/dev/null || true
+    fi
+  fi
 
   # First paint of the idle prefix without waiting for a Stop hook cycle (#95).
   # _rename_tab reads $TASK_FORCE_ROLE, which the SessionStart hook sets to the
@@ -1710,6 +1836,85 @@ cmd_orphans() {
   shopt -u nullglob
 }
 
+# Garbage-collect the radio home (#169): drop expired processed messages, reclaim
+# whole mailbox dirs for roles that are dead (no session file OR >1h-stale
+# heartbeat) AND hold no unread mail AND are quiescent (newest entry older than
+# the cutoff), and rotate the log. The empty-inbox gate is load-bearing: it keeps
+# gc from destroying undelivered mail — notably the legacy `pm` backlog #182 is
+# deferred to adopt (post-#165 nothing registers as literal `pm`, so its inbox is
+# write-only until then). Amortized via a throttled piggyback on cmd_register — no
+# cron needed. `--dry-run` reports without touching anything; `--max-age-days N`
+# (default 14) sets the cutoff.
+cmd_gc() {
+  local dry_run=0 max_age_days=14
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)      dry_run=1; shift ;;
+      --max-age-days) max_age_days="$2"; shift 2 ;;
+      *) echo "gc: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  case "$max_age_days" in
+    ''|*[!0-9]*) echo "gc: --max-age-days must be a non-negative integer" >&2; exit 2 ;;
+  esac
+
+  local now_epoch cutoff pfx=""
+  now_epoch=$(date -u +%s)
+  cutoff=$(( now_epoch - max_age_days * 86400 ))
+  (( dry_run )) && pfx="[dry-run] "
+
+  local removed_dirs=0 removed_msgs=0
+
+  if [[ -d "$MAILBOX_DIR" ]]; then
+    shopt -s nullglob
+    local roledir role newest f m
+    for roledir in "$MAILBOX_DIR"/*/; do
+      roledir="${roledir%/}"
+      role=$(basename "$roledir")
+      # Whole-dir reclaim, all three conditions required: the role is dead
+      # (no session file OR >1h-stale heartbeat, per _session_dead), its inbox
+      # holds NO unread mail (_inbox_empty — the #182 backlog guard), and its
+      # newest surviving entry has aged past the cutoff. Any one failing drops us
+      # to the processed-only sweep below, which never touches inbox.
+      if _session_dead "$role" "$now_epoch" && _inbox_empty "$role"; then
+        newest=$(_newest_mtime_in "$roledir" "$now_epoch")
+        if (( newest <= cutoff )); then
+          echo "${pfx}remove dead mailbox: $role"
+          if (( ! dry_run )); then
+            rm -rf "$roledir"
+            _log "gc: removed dead mailbox role=$role"
+          fi
+          removed_dirs=$(( removed_dirs + 1 ))
+          continue
+        fi
+      fi
+      # Live role, or a dead role still holding unread/fresh mail: expire only its
+      # processed/ messages older than the cutoff. Inbox is never touched — unread
+      # mail outlives gc. An unreadable mtime (empty from _file_mtime) is kept, not
+      # swept (#184 review #2: a stat hiccup must not delete mail).
+      for f in "$roledir"/processed/*; do
+        [[ -f "$f" ]] || continue
+        m=$(_file_mtime "$f") || true
+        [[ -n "$m" ]] || continue
+        if (( m <= cutoff )); then
+          echo "${pfx}remove old processed: $role/$(basename "$f")"
+          if (( ! dry_run )); then
+            rm -f "$f"
+            _log "gc: removed processed role=$role msg=$(basename "$f")"
+          fi
+          removed_msgs=$(( removed_msgs + 1 ))
+        fi
+      done
+    done
+    shopt -u nullglob
+  fi
+
+  # Rotate the log on a real run only — --dry-run touches nothing on disk.
+  (( dry_run )) || _rotate_log
+
+  echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s) (max-age ${max_age_days}d)"
+}
+
 # ----- dispatch -------------------------------------------------------------
 
 mkdir -p "$SESSIONS_DIR" "$MAILBOX_DIR"
@@ -1737,6 +1942,7 @@ case "$sub" in
   prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
+  gc)          cmd_gc "$@" ;;
   -h|--help)   usage 0 ;;
   *) echo "radio: unknown subcommand '$sub'" >&2; usage 1 ;;
 esac

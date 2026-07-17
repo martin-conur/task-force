@@ -33,10 +33,18 @@ seed_mailbox() {
   mkdir -p "$MAILBOX/$role/inbox" "$MAILBOX/$role/processed"
 }
 
-# Write a dummy session file so a role counts as "live".
+# Write a session file with a FRESH heartbeat so a role counts as live.
 seed_session() {
   local role="$1"
-  printf 'ROLE=%s\nSTATE=idle\n' "$role" > "$SESSIONS/$role.info"
+  printf 'ROLE=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\n' \
+    "$role" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SESSIONS/$role.info"
+}
+
+# Write a session file whose heartbeat is ancient (>1h stale → dead per _session_dead).
+seed_stale_session() {
+  local role="$1"
+  printf 'ROLE=%s\nSTATE=busy\nLAST_HEARTBEAT=2020-01-01T00:00:00Z\n' \
+    "$role" > "$SESSIONS/$role.info"
 }
 
 # Drop a message file and age it (default: OLD_TS).
@@ -73,6 +81,57 @@ put_msg() {
   run "$RADIO" gc
   assert_success
   assert [ -d "$MAILBOX/freshdead" ]
+}
+
+@test "gc preserves a dead role's UNREAD inbox even when aged (the #182 backlog guard)" {
+  # No session file, but the inbox still holds undelivered mail (aged). The
+  # whole-dir reclaim must NOT fire — this is exactly the legacy pm backlog case.
+  seed_mailbox legacypm
+  put_msg "$MAILBOX/legacypm/inbox/old.md" "$OLD_TS"
+  run "$RADIO" gc
+  assert_success
+  assert [ -d "$MAILBOX/legacypm" ]
+  assert [ -f "$MAILBOX/legacypm/inbox/old.md" ]
+}
+
+@test "gc reclaims a role whose heartbeat is >1h stale (empty inbox, aged)" {
+  seed_mailbox crashed
+  seed_stale_session crashed
+  put_msg "$MAILBOX/crashed/processed/old.md" "$OLD_TS"
+  run "$RADIO" gc
+  assert_success
+  assert [ ! -d "$MAILBOX/crashed" ]
+}
+
+@test "gc preserves a stale-heartbeat role that still holds unread mail" {
+  seed_mailbox crashed2
+  seed_stale_session crashed2
+  put_msg "$MAILBOX/crashed2/inbox/pending.md" "$OLD_TS"   # unread + aged
+  run "$RADIO" gc
+  assert_success
+  assert [ -d "$MAILBOX/crashed2" ]
+  assert [ -f "$MAILBOX/crashed2/inbox/pending.md" ]
+}
+
+@test "gc keeps a role with a fresh heartbeat (not dead), aged mail notwithstanding" {
+  seed_mailbox liveworker
+  seed_session liveworker   # fresh heartbeat
+  put_msg "$MAILBOX/liveworker/inbox/old.md" "$OLD_TS"
+  run "$RADIO" gc
+  assert_success
+  assert [ -d "$MAILBOX/liveworker" ]
+}
+
+@test "gc never touches session files (the #127 boundary)" {
+  seed_session liveworker
+  seed_mailbox liveworker
+  seed_stale_session crashed        # gc reclaims its mailbox but not its .info
+  seed_mailbox crashed
+  put_msg "$MAILBOX/crashed/processed/old.md" "$OLD_TS"
+  run "$RADIO" gc
+  assert_success
+  assert [ -f "$SESSIONS/liveworker.info" ]
+  assert [ -f "$SESSIONS/crashed.info" ]
 }
 
 @test "gc keeps a freshly-created empty dead dir (dir mtime is recent)" {
@@ -184,4 +243,28 @@ put_msg() {
   TASK_FORCE_ROLE="-tab" run "$RADIO" check
   assert_failure
   assert_output --partial "invalid role"
+}
+
+# --- register-time piggyback + throttle (#169 item 5 / #184 review #4) -------
+
+@test "a fresh register runs gc and writes the .gc-last sentinel" {
+  seed_mailbox deadworker
+  put_msg "$MAILBOX/deadworker/processed/old.md" "$OLD_TS"
+  run "$RADIO" register --role pm-thisrepo --tab pm --agent claude
+  assert_success
+  assert [ ! -d "$MAILBOX/deadworker" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/.gc-last" ]
+}
+
+@test "the register gc piggyback is throttled to once per hour" {
+  seed_mailbox dead1
+  put_msg "$MAILBOX/dead1/processed/old.md" "$OLD_TS"
+  "$RADIO" register --role pm-a --tab a --agent claude >/dev/null
+  assert [ ! -d "$MAILBOX/dead1" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/.gc-last" ]
+  # A second fresh register within the hour must NOT re-sweep (sentinel is fresh).
+  seed_mailbox dead2
+  put_msg "$MAILBOX/dead2/processed/old.md" "$OLD_TS"
+  "$RADIO" register --role pm-b --tab b --agent claude >/dev/null
+  assert [ -d "$MAILBOX/dead2" ]
 }

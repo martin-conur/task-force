@@ -390,6 +390,7 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 | `radio stop-hook`                   | Stop-hook entrypoint: empty inbox → mark idle; unread messages → mark busy and emit Stop-hook block JSON so the agent continues and drains them |
 | `radio prompt-hook`                 | UserPromptSubmit-hook entrypoint: mark busy; if the inbox has unread messages, print a one-line summary that Claude Code injects into the model's context |
 | `radio orphans`                     | List session files whose heartbeat is >1h stale |
+| `radio gc [--dry-run] [--max-age-days N]` | Prune the radio home: drop dead roles' mailboxes (no session file + newest entry older than N days, default 14), expire old `processed/` messages, and rotate an oversized `log`. Runs automatically (quietly) on a fresh `register`, so it usually needs no manual invocation; `--dry-run` reports without deleting |
 
 ### How wake-up works
 

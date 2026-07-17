@@ -142,6 +142,20 @@ fi
 # task-done cleanup, which must always proceed with the unregister.
 radio unregister </dev/null 2>/dev/null || true
 
+# Sweep this worker's radio mailbox (#169). Once the worktree and tab are gone
+# the role is dead by definition, so its inbox/processed dirs are pure residue —
+# e.g. an `approved-and-merged` ping that landed after the tab closed. Guard the
+# role name against empty / traversal so a stray env value can't turn this into
+# an `rm -rf` of the whole mailbox root.
+_ROLE="${TASK_FORCE_ROLE:-}"
+case "$_ROLE" in
+  ""|-*|*/*|*..*|*[!a-zA-Z0-9_-]*) : ;;   # unset or unsafe — skip
+  *)
+    _MAILBOX_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/mailbox/$_ROLE"
+    [[ -d "$_MAILBOX_DIR" ]] && rm -rf "$_MAILBOX_DIR"
+    ;;
+esac
+
 # Move out of worktree before removing it
 cd "$MAIN_WORKTREE"
 

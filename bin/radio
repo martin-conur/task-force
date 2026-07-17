@@ -30,6 +30,8 @@ Usage:
                                          (injected into the model's context by Claude Code)
   radio unregister                       remove this role's session file
   radio orphans                          list session files with stale (>1h) heartbeat
+  radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
+                                         messages (default N=14) and rotate the log
 
 Self-identification: every command except `register` reads $TASK_FORCE_ROLE.
 Override the mailbox root with $TASK_FORCE_HOME (defaults to ~/.task-force).
@@ -64,6 +66,44 @@ _rand_id() {
   # 32 bytes of /dev/urandom is plenty for 6 alphanumeric chars after `tr`
   # filtering — the previous 256-byte read was wasteful, not wrong.
   LC_ALL=C head -c 32 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 6
+}
+
+# Portable file mtime / size in epoch seconds / bytes. BSD/macOS `stat` wants
+# `-f`, GNU `stat` wants `-c`. Print 0 on any failure (missing file, etc.) so
+# `cmd_gc`'s arithmetic never chokes. Shared by the gc sweep below.
+_file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+_file_size()  { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null || echo 0; }
+
+# Newest mtime (epoch) of any message under a role's inbox/ + processed/. When
+# the role has no messages at all, fall back to the mailbox dir's own mtime —
+# so a just-created empty mailbox (recent dir mtime) is protected from the gc
+# sweep even if its session file hasn't been written yet, while a genuinely
+# aged empty residue dir still ages out. The `[[ -f ]]` guard makes this
+# nullglob-independent (unmatched globs stay literal and skip).
+_newest_mtime_in() {
+  local dir="$1" newest=0 m f
+  for f in "$dir"/inbox/* "$dir"/processed/*; do
+    [[ -f "$f" ]] || continue
+    m=$(_file_mtime "$f")
+    (( m > newest )) && newest=$m
+  done
+  (( newest == 0 )) && newest=$(_file_mtime "$dir")
+  printf '%s' "$newest"
+}
+
+# Truncate $LOG_FILE to its last ~512KB once it grows past ~1MB (#169). `tail
+# -c` may clip a partial first line — acceptable for an append-only debug log.
+# No-op when the file is small or absent.
+_rotate_log() {
+  [[ -f "$LOG_FILE" ]] || return 0
+  local size max keep
+  size=$(_file_size "$LOG_FILE")
+  max=$(( 1024 * 1024 )); keep=$(( 512 * 1024 ))
+  if (( size > max )); then
+    tail -c "$keep" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null \
+      && mv "$LOG_FILE.tmp" "$LOG_FILE"
+    _log "gc: rotated log (was $size bytes, kept last $keep)"
+  fi
 }
 
 _require_role() {
@@ -157,7 +197,12 @@ _session_field() {
 _validate_role() {
   local role="$1"
   case "$role" in
-    ""|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
+    # Leading `-` is rejected (#169): a role starting with a dash gets swallowed
+    # as a flag by every `radio <cmd> --role/--to "$role"` call site, which is how
+    # the historical `--tab` mailbox got created (a malformed register, pre-#93
+    # guard). No legitimate role (`pm`, `pm-<repo>`, `worker-<repo>-<slug>`) starts
+    # with a dash, so this is a pure footgun-killer.
+    ""|-*|*..*|*/*) echo "radio: invalid role: $role" >&2; return 1 ;;
     *[!a-zA-Z0-9_-]*) echo "radio: invalid role: $role" >&2; return 1 ;;
   esac
 }
@@ -782,6 +827,19 @@ cmd_register() {
   fi
 
   _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout repo_name=$repo_name"
+
+  # Amortized gc piggyback (#169): a fresh primary register runs a quiet
+  # 14-day sweep so dead mailboxes / expired processed messages / an oversized
+  # log never accumulate unbounded — no cron. Gated on fresh=1 so /compact /
+  # resume re-registers don't re-sweep, and on an empty $existing_alias so an
+  # alias placeholder doesn't. Our own mailbox + session file already exist
+  # (written above), so this role is never its own target. Run in a subshell
+  # with output suppressed: gc's stdout must not pollute the SessionStart
+  # context injection (the drain summary below is the only thing that should),
+  # and any nonzero exit inside gc must not abort register.
+  if (( fresh == 1 )) && [[ -z "$existing_alias" ]]; then
+    ( cmd_gc --max-age-days 14 ) >/dev/null 2>&1 || true
+  fi
 
   # First paint of the idle prefix without waiting for a Stop hook cycle (#95).
   # _rename_tab reads $TASK_FORCE_ROLE, which the SessionStart hook sets to the
@@ -1710,6 +1768,76 @@ cmd_orphans() {
   shopt -u nullglob
 }
 
+# Garbage-collect the radio home (#169): drop expired processed messages, sweep
+# whole mailbox dirs for roles that are dead (no session file) and quiescent
+# (newest entry older than the cutoff), and rotate the log. Amortized via a
+# cheap piggyback on cmd_register — no cron needed. `--dry-run` reports without
+# touching anything; `--max-age-days N` (default 14) sets the cutoff.
+cmd_gc() {
+  local dry_run=0 max_age_days=14
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)      dry_run=1; shift ;;
+      --max-age-days) max_age_days="$2"; shift 2 ;;
+      *) echo "gc: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  case "$max_age_days" in
+    ''|*[!0-9]*) echo "gc: --max-age-days must be a non-negative integer" >&2; exit 2 ;;
+  esac
+
+  local now_epoch cutoff pfx=""
+  now_epoch=$(date -u +%s)
+  cutoff=$(( now_epoch - max_age_days * 86400 ))
+  (( dry_run )) && pfx="[dry-run] "
+
+  local removed_dirs=0 removed_msgs=0
+
+  if [[ -d "$MAILBOX_DIR" ]]; then
+    shopt -s nullglob
+    local roledir role newest f m
+    for roledir in "$MAILBOX_DIR"/*/; do
+      roledir="${roledir%/}"
+      role=$(basename "$roledir")
+      # Dead role (no session file) whose newest entry has aged past the cutoff:
+      # the whole dir is residue — remove it and skip the per-message sweep.
+      if [[ ! -f "$(_session_file "$role")" ]]; then
+        newest=$(_newest_mtime_in "$roledir")
+        if (( newest <= cutoff )); then
+          echo "${pfx}remove dead mailbox: $role"
+          if (( ! dry_run )); then
+            rm -rf "$roledir"
+            _log "gc: removed dead mailbox role=$role"
+          fi
+          removed_dirs=$(( removed_dirs + 1 ))
+          continue
+        fi
+      fi
+      # Live role, or a dead role still holding fresh mail: expire only its
+      # processed/ messages older than the cutoff. Inbox is never touched —
+      # unread mail outlives gc.
+      for f in "$roledir"/processed/*; do
+        [[ -f "$f" ]] || continue
+        m=$(_file_mtime "$f")
+        if (( m <= cutoff )); then
+          echo "${pfx}remove old processed: $role/$(basename "$f")"
+          if (( ! dry_run )); then
+            rm -f "$f"
+            _log "gc: removed processed role=$role msg=$(basename "$f")"
+          fi
+          removed_msgs=$(( removed_msgs + 1 ))
+        fi
+      done
+    done
+    shopt -u nullglob
+  fi
+
+  # Rotate the log on a real run only — --dry-run touches nothing on disk.
+  (( dry_run )) || _rotate_log
+
+  echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s) (max-age ${max_age_days}d)"
+}
+
 # ----- dispatch -------------------------------------------------------------
 
 mkdir -p "$SESSIONS_DIR" "$MAILBOX_DIR"
@@ -1737,6 +1865,7 @@ case "$sub" in
   prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister ;;
   orphans)     cmd_orphans ;;
+  gc)          cmd_gc "$@" ;;
   -h|--help)   usage 0 ;;
   *) echo "radio: unknown subcommand '$sub'" >&2; usage 1 ;;
 esac

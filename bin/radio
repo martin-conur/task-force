@@ -68,11 +68,15 @@ _rand_id() {
   LC_ALL=C head -c 32 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 6
 }
 
-# Portable file mtime / size in epoch seconds / bytes. BSD/macOS `stat` wants
-# `-f`, GNU `stat` wants `-c`. Print 0 on any failure (missing file, etc.) so
-# `cmd_gc`'s arithmetic never chokes. Shared by the gc sweep below.
-_file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
-_file_size()  { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null || echo 0; }
+# Portable file mtime / size in epoch seconds / bytes. GNU `stat` wants `-c`,
+# BSD/macOS `stat` wants `-f`. GNU MUST be tried first: on GNU, `-f` means
+# `--file-system` (takes no format arg) and `stat -f %m file` *partially
+# succeeds* — it prints filesystem info and exits 0, so a BSD-first probe never
+# falls through and returns garbage. `-c` on BSD is a clean "illegal option"
+# (exit 1), so GNU-first degrades correctly on both. Print 0 on any failure
+# (missing file, etc.) so `cmd_gc`'s arithmetic never chokes.
+_file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+_file_size()  { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
 
 # Newest mtime (epoch) of any message under a role's inbox/ + processed/. When
 # the role has no messages at all, fall back to the mailbox dir's own mtime —

@@ -242,6 +242,19 @@ _session_field() {
   printf '%s' "${line#*=}"
 }
 
+# Read one frontmatter field (`key: value`) from a message file — the message
+# analogue of _session_field (which reads a KEY=VALUE session file). Scans only
+# the first `---`…`---` fence so a body line can't spoof a field, mirroring
+# _inbox_summary's parser. Empty on absent field / malformed file / missing file.
+_msg_field() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
+  awk -v k="$key" '
+    /^---$/    { fence++; if (fence >= 2) exit; next }
+    fence == 1 && index($0, k ": ") == 1 { print substr($0, length(k) + 3); exit }
+  ' "$file" 2>/dev/null || true
+}
+
 # Reject role names that could let a caller escape $SESSIONS_DIR / $MAILBOX_DIR
 # via `..` or `/`. Today roles come from task-work / task-pm (`worker-<basename>-<slug>`
 # and `pm`), so the values are already safe — but `_session_file` / `_inbox_dir`
@@ -707,6 +720,147 @@ _rename_tab() {
   _session_set_fields "$f" "TAB=$new_name"
 }
 
+# Legacy `pm` inbox adoption (#182). Post-#165 no role ever registers as the
+# literal `pm` again, so `mailbox/pm/inbox` is write-only: the pre-migration
+# backlog (the July "no session for pm" strandings) plus any env-less step-4
+# `--to pm` fallback sends land there with no consumer. When a repo-scoped
+# pm-<reponame> role registers FRESH (the #168 offline→online gate) and that
+# legacy inbox is non-empty with no live literal-`pm` session, migrate the
+# messages destined for THIS repo into this role's inbox, stamping an
+# `adopted-from:` provenance line into the frontmatter so the reading agent (and
+# any postmortem) sees where it came from. The caller's existing drain-on-register
+# summary (#168) then surfaces them alongside this role's own backlog — no
+# separate print path.
+#
+# One-time backfill by construction: once moved, each message acks normally via
+# `radio read <id>`, and its slot in the legacy inbox goes empty, closing the
+# write-only fallback path for good. Coordinated with gc (#169): gc's whole-dir
+# reclaim is gated behind `_inbox_empty`, so it can never race us — it only
+# becomes able to reap the dead `pm` mailbox AFTER adoption has emptied it.
+#
+# $3 = this role's reponame (cmd_register's $repo_name), used for repo routing.
+# Sets ADOPTED_LEGACY_N to the number migrated (0 when nothing to do). Never
+# returns nonzero — a migration hiccup must not abort register.
+ADOPTED_LEGACY_N=0
+_adopt_legacy_pm_inbox() {
+  ADOPTED_LEGACY_N=0
+  local role="$1" now_epoch="$2" my_repo="${3:-}"
+  # Only repo-scoped PMs adopt. The literal `pm` never registers post-#165, but
+  # guard anyway so a hand-run `register --role pm` can't adopt its own inbox.
+  [[ "$role" == pm-* ]] || return 0
+  # A live literal-`pm` session (heartbeat fresh) still owns its inbox — don't
+  # steal from it. _session_dead is true (0) when there is no `pm` session file
+  # at all (the normal post-#165 state) or its heartbeat is >1h stale.
+  _session_dead pm "$now_epoch" || return 0
+
+  local src
+  src=$(_inbox_dir pm)
+  [[ -d "$src" ]] || return 0
+
+  # Cheap pre-check before touching the lock (the common case is an empty legacy
+  # inbox — every fresh pm-* register would otherwise churn the lock dir).
+  shopt -s nullglob
+  local legacy=("$src"/*.md)
+  shopt -u nullglob
+  (( ${#legacy[@]} > 0 )) || return 0
+
+  # Single-winner lock (#182 review #3): several pm-* registering in the same
+  # sub-second all glob this one inbox; without a lock each would migrate the
+  # same files into its own inbox (duplicate delivery). mkdir is atomic, so
+  # exactly one register wins; the losers skip and find the inbox drained (or
+  # their share already gone) on a later pass. The lock lives OUTSIDE mailbox/pm/
+  # so gc reclaiming the emptied dir can't delete it mid-hold.
+  local lock="$RADIO_HOME/.adopt-pm.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    # Stale-lock recovery: the holder keeps the lock only for the handful of file
+    # moves in one migration, so a lock older than the 1h liveness threshold
+    # means the holder was SIGKILLed mid-migration (no graceful cleanup ran).
+    # Reclaim it rather than wedge adoption forever — the messages sit safe in
+    # pm/inbox meanwhile (gc's _inbox_empty gate keeps them), but "never adopted"
+    # is the exact stranding #182 exists to kill.
+    local lock_mtime
+    lock_mtime=$(_file_mtime "$lock") || true
+    if [[ -n "$lock_mtime" ]] && (( now_epoch - lock_mtime > 3600 )); then
+      _log "adopt: reclaiming stale migration lock (age $(( now_epoch - lock_mtime ))s) role=$role"
+      rmdir "$lock" 2>/dev/null || true
+      mkdir "$lock" 2>/dev/null || { _log "adopt: lock still contended after reclaim — skipping role=$role"; return 0; }
+    else
+      _log "adopt: migration lock held — skipping role=$role"
+      return 0
+    fi
+  fi
+
+  # Re-glob under the lock — authoritative; a winner that started just before us
+  # may have drained some entries between the pre-check and the lock acquisition.
+  shopt -s nullglob
+  legacy=("$src"/*.md)
+  shopt -u nullglob
+
+  local dst
+  dst=$(_inbox_dir "$role")
+  mkdir -p "$dst"
+
+  local f base target tmp n=0 skipped=0 stamp msg_repo msg_repo_name
+  stamp=$(_now)
+  for f in "${legacy[@]}"; do
+    # Repo routing (#182 review #2): a message tagged `repo:` (cmd_send writes it
+    # from --repo) belongs to that repo's PM. Adopt it only when its repo
+    # basename matches THIS PM's reponame, or it carries no repo: field — a
+    # repo-less message is a genuinely global backlog entry (the pre-#165 `--to
+    # pm` sends that never set --repo), so first-come is correct. Leave a
+    # foreign-repo message for its own PM rather than misrouting it to whoever
+    # booted first. Skip the filter when this PM has no reponame (test/CI paths
+    # with no --repo): fall back to adopting everything, the pre-repo behavior.
+    if [[ -n "$my_repo" ]]; then
+      msg_repo=$(_msg_field "$f" repo)
+      if [[ -n "$msg_repo" ]]; then
+        msg_repo_name=$(_sanitize_role_segment "$(basename "$msg_repo")")
+        if [[ "$msg_repo_name" != "$my_repo" ]]; then
+          skipped=$(( skipped + 1 ))
+          continue
+        fi
+      fi
+    fi
+
+    base="${f##*/}"
+    target="$dst/$base"
+    # Collision-safe move (#182 review #4): a bare skip on collision would strand
+    # the message in pm/inbox forever — keeping _inbox_empty false (so gc can
+    # never reap the dir) and re-hitting the same collision on every register.
+    # Near-impossible given timestamp+rand ids, but the tail outcome is exactly
+    # the "stranded forever" state #182 exists to kill, so on collision suffix a
+    # fresh id and migrate anyway — the message always leaves the legacy inbox.
+    [[ -e "$target" ]] && target="$dst/${base%.md}.dup-$(_rand_id).md"
+
+    # Inject the provenance line right after the opening `---` fence, preserving
+    # the rest verbatim. It stays inside the frontmatter (fence==1) so
+    # _inbox_summary's parser still reads from/intent/pr/issue, and `adopted-from:`
+    # matches none of its anchored field patterns, so the summary line is
+    # unchanged. Stage to a sibling temp then rename (atomic within the dir) so a
+    # crash mid-write never leaves a half-file in the inbox, and only unlink the
+    # source once the target is safely in place.
+    tmp="$dst/.adopt.$$.$RANDOM"
+    if awk -v r="$role" -v ts="$stamp" '
+        NR==1 && $0=="---" { print; print "adopted-from: pm (legacy inbox, backfilled by " r " at " ts ")"; next }
+        { print }
+      ' "$f" > "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$target"
+      rm -f "$f"
+      n=$(( n + 1 ))
+    else
+      rm -f "$tmp" 2>/dev/null || true
+      _log "adopt: failed to migrate $base role=$role"
+    fi
+  done
+
+  rmdir "$lock" 2>/dev/null || true
+
+  ADOPTED_LEGACY_N=$n
+  (( n > 0 ))       && _log "adopt: migrated $n legacy pm message(s) into role=$role"
+  (( skipped > 0 )) && _log "adopt: left $skipped foreign-repo message(s) for their own PM role=$role"
+  return 0
+}
+
 # ----- subcommands ----------------------------------------------------------
 
 cmd_register() {
@@ -882,6 +1036,21 @@ cmd_register() {
 
   _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout repo_name=$repo_name"
 
+  # Legacy `pm` inbox adoption (#182): before the drain summary below, a fresh
+  # pm-<reponame> register migrates any orphaned literal-`pm` backlog into this
+  # role's inbox so the same drain that follows surfaces it. Runs BEFORE the gc
+  # piggyback so that once we empty the legacy inbox, gc becomes free to reap the
+  # dead `pm` mailbox (its _inbox_empty gate had been protecting it, #169). Gated
+  # on the same fresh=1 / non-alias conditions as the drain: /compact/resume
+  # re-registers and alias placeholders never adopt. now_epoch feeds the
+  # "no live pm session" check inside the helper. `|| true` mirrors the gc
+  # piggyback below: calling the helper in a `||` context disables set -e for its
+  # whole body, so a stray mv/mkdir failure mid-migration can never abort register
+  # (the drain summary still runs, just without the adopted messages).
+  if (( fresh == 1 )) && [[ -z "$existing_alias" ]]; then
+    _adopt_legacy_pm_inbox "$role" "$(date -u +%s)" "$repo_name" || true
+  fi
+
   # Amortized gc piggyback (#169): a fresh primary register runs a quiet
   # 14-day sweep so dead mailboxes / expired processed messages / an oversized
   # log never accumulate unbounded — no cron. Gated on fresh=1 so /compact /
@@ -957,6 +1126,14 @@ cmd_register() {
         # shellcheck disable=SC2016
         printf '[radio] %s message(s) queued while this role was offline: %s. Run `radio check`, then process each with `radio read <id>` before taking new work.\n' \
           "$INBOX_SUMMARY_N" "$INBOX_SUMMARY"
+        # Flag the legacy backfill (#182) so the reading PM knows some of these
+        # were adopted from the orphaned literal-`pm` inbox (their header carries
+        # an `adopted-from:` provenance line), not sent directly to this role.
+        if (( ADOPTED_LEGACY_N > 0 )); then
+          # shellcheck disable=SC2016
+          printf '[radio] (%s of the above were adopted from the legacy `pm` inbox — see each message'\''s `adopted-from:` header.)\n' \
+            "$ADOPTED_LEGACY_N"
+        fi
         _log "register: surfaced $INBOX_SUMMARY_N queued message(s) role=$role"
       fi
     fi

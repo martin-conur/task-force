@@ -413,7 +413,7 @@ Because `radio send` now writes to stdout, anything **capturing** its output mus
 
 | Hook              | Command                       | Why                                            |
 |-------------------|-------------------------------|------------------------------------------------|
-| `SessionStart`    | `radio register`              | Claims the role's session file — and on a *fresh* start injects a summary of any inbox that queued while the role was offline (its stdout is injected into context, like `UserPromptSubmit`; claude loadouts only) |
+| `SessionStart`    | `radio register`              | Claims the role's session file — and on a *fresh* start injects a summary of any inbox that queued while the role was offline (its stdout is injected into context, like `UserPromptSubmit`; claude loadouts only). A fresh `pm-<repo>` register also adopts any orphaned literal-`pm` backlog (write-only post-#165) into its own inbox, provenance-stamped, and surfaces it in that summary |
 | `UserPromptSubmit`| `radio prompt-hook`           | Marks the session busy — and surfaces any unread inbox into the model's context (its stdout is injected, unlike Stop's) |
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 | `PostToolUse`     | `radio busy`                  | State flip only — deliberately NOT `prompt-hook`; it fires after every tool call, and the inbox summary belongs at prompt time, not sprayed mid-turn |

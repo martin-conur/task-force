@@ -119,7 +119,13 @@ summary of any inbox that queued while the role was offline — reports whose
 send-time wake found no session file and no-op'd. `SessionStart` stdout is
 injected into the model's context, so that backlog surfaces on the role's very
 first turn, not just after the next human prompt: the offline→online companion
-to the stop-hook flush (busy case) and prompt-hook injection (idle case). Empty
+to the stop-hook flush (busy case) and prompt-hook injection (idle case). On
+that fresh start a repo-scoped `pm-<reponame>` also **adopts** any orphaned
+literal-`pm` backlog: post-#165 nothing registers as the bare `pm`, so its
+inbox is write-only, and a fresh PM with no live `pm` session migrates those
+messages into its own inbox (each stamped with an `adopted-from:` provenance
+header) and surfaces them in the same summary, flagged as adopted — a one-time
+backfill (#182). Empty
 inbox prints nothing. (claude loadouts only — Kiro's hook stdout isn't
 injected; see #146.)
 

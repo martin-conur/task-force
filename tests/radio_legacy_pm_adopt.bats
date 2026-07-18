@@ -172,3 +172,133 @@ _queue_legacy_pm() {
   run cat "$TASK_FORCE_HOME/radio/log"
   assert_output --partial "adopt: migrated 1 legacy pm message(s) into role=pm-myrepo"
 }
+
+# ----- repo routing (#182 review #2) ----------------------------------------
+#
+# A message carries a `repo:` frontmatter field when the sender passed --repo.
+# A pm-<repo> must adopt only messages tagged for its own repo (or untagged =
+# genuinely global), leaving a foreign-repo message for its own PM.
+
+# Queue a message into the literal `pm` inbox carrying an explicit repo: field.
+_queue_legacy_pm_repo() {  # $1 = repo-path  $2 = pr  $3 = from
+  TASK_FORCE_ROLE="${3:-worker-x}" "$RADIO" send --to pm --intent review-requested \
+    --pr "$2" --repo "$1" --body "queued for a specific repo"
+}
+
+@test "register: pm-<repo> leaves a foreign-repo message for its own PM (#182 review #2)" {
+  _queue_legacy_pm_repo /somewhere/beta 41 worker-b   # belongs to pm-beta
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  # alpha did NOT adopt beta's message — it stays in the legacy inbox.
+  assert_equal "$(_inbox_count pm)" "1"
+  assert_equal "$(_inbox_count pm-alpha)" "0"
+  refute_output --partial "adopted from the legacy"
+}
+
+@test "register: pm-<repo> adopts a message tagged for its own repo (#182 review #2)" {
+  _queue_legacy_pm_repo /somewhere/alpha 41 worker-a
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+}
+
+@test "register: an untagged (repo-less) message is adopted by any pm-<repo> (#182 review #2)" {
+  _queue_legacy_pm review-requested 41 "" worker-a   # no --repo → no repo: field
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+}
+
+@test "register: mixed backlog — each pm-<repo> adopts only its own share (#182 review #2)" {
+  _queue_legacy_pm_repo /somewhere/alpha 41 worker-a
+  _queue_legacy_pm_repo /somewhere/beta  42 worker-b
+  _queue_legacy_pm review-requested 43 "" worker-c    # untagged / global
+
+  TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  # alpha takes its own (41) + the untagged global (43); beta's (42) is left.
+  assert_equal "$(_inbox_count pm-alpha)" "2"
+  assert_equal "$(_inbox_count pm)" "1"
+
+  TASK_FORCE_ROLE=pm-beta "$RADIO" register --role pm-beta --tab pm-beta \
+    --repo /somewhere/beta --agent claude
+  assert_equal "$(_inbox_count pm-beta)" "1"
+  assert_equal "$(_inbox_count pm)" "0"
+}
+
+# ----- one-time backfill guarantee (#182 review #3) -------------------------
+
+@test "register: a second distinct pm-<repo> finds nothing left to adopt (#182 review #3)" {
+  # The CHANGELOG claims a genuine one-time backfill. First fresh PM drains the
+  # (untagged/global) backlog; a second, different PM registering later must
+  # find it already empty and adopt nothing.
+  _queue_legacy_pm review-requested 41 "" worker-a
+  TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+
+  TASK_FORCE_ROLE=pm-beta run "$RADIO" register --role pm-beta --tab pm-beta \
+    --repo /somewhere/beta --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm-beta)" "0"
+  refute_output --partial "adopted from the legacy"
+}
+
+# ----- collision-safe migration (#182 review #4) ----------------------------
+
+@test "register: a filename collision migrates under a fresh id, never strands (#182 review #4)" {
+  _queue_legacy_pm review-requested 41 "" worker-a
+  local id
+  id=$(basename "$(ls "$TASK_FORCE_HOME/radio/mailbox/pm/inbox"/*.md)" .md)
+  # Pre-seed the destination inbox with a file of the SAME basename, forcing the
+  # collision branch.
+  mkdir -p "$TASK_FORCE_HOME/radio/mailbox/pm-myrepo/inbox"
+  printf 'pre-existing\n' > "$TASK_FORCE_HOME/radio/mailbox/pm-myrepo/inbox/${id}.md"
+
+  TASK_FORCE_ROLE=pm-myrepo "$RADIO" register --role pm-myrepo --tab pm-myrepo \
+    --repo /somewhere/myrepo --agent claude
+
+  # The legacy inbox is drained (not stranded), and the destination now holds
+  # both the pre-existing file and the migrated one under a suffixed name.
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-myrepo)" "2"
+  run bash -c "grep -l 'adopted-from: pm' '$TASK_FORCE_HOME/radio/mailbox/pm-myrepo/inbox'/*.md | wc -l | tr -d ' '"
+  assert_output "1"
+}
+
+@test "register: a held migration lock skips adoption this pass (#182 review #3)" {
+  # A fresh (non-stale) lock means another register is mid-migration — this one
+  # must skip and leave the backlog for the winner, not double-adopt.
+  _queue_legacy_pm review-requested 41 "" worker-a
+  mkdir -p "$TASK_FORCE_HOME/radio/.adopt-pm.lock"   # simulate a live holder
+
+  TASK_FORCE_ROLE=pm-myrepo run "$RADIO" register --role pm-myrepo --tab pm-myrepo \
+    --repo /somewhere/myrepo --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "1"          # untouched — winner will take it
+  assert_equal "$(_inbox_count pm-myrepo)" "0"
+  refute_output --partial "adopted from the legacy"
+}
+
+@test "register: a stale (>1h) migration lock is reclaimed, not a permanent wedge (#182)" {
+  # A SIGKILL between mkdir and rmdir would leave the lock forever; a lock older
+  # than the 1h liveness threshold must be reclaimed so adoption isn't wedged.
+  _queue_legacy_pm review-requested 41 "" worker-a
+  local lock="$TASK_FORCE_HOME/radio/.adopt-pm.lock"
+  mkdir -p "$lock"
+  touch -t 202001010000 "$lock"   # backdate well past 1h
+
+  TASK_FORCE_ROLE=pm-myrepo run "$RADIO" register --role pm-myrepo --tab pm-myrepo \
+    --repo /somewhere/myrepo --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-myrepo)" "1"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "reclaiming stale migration lock"
+}

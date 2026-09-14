@@ -139,7 +139,10 @@ _queue_message() {
 
 # ----- stop_hook_active guard (no continue loop) ------------------------------
 
-@test "stop-hook with stop_hook_active=true never re-blocks, even with pending mail" {
+@test "stop-hook with stop_hook_active=true and no recorded block set allows the stop" {
+  # Nothing recorded the ids that supposedly caused this continuation (no
+  # prior block in this session), so there is no evidence to weigh against
+  # the loop-breaker — it wins, exactly as it did before #197.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   "$RADIO" busy
   _queue_message
@@ -149,10 +152,113 @@ _queue_message() {
   # ... but it still flips STATE to idle.
   run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   assert_output "STATE=idle"
-  # The stranded count is logged — a message arriving during the drain turn
-  # is otherwise invisible until #164/#168 close that path.
   run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "no recorded block set"
   assert_output --partial "1 still unread"
+}
+
+# ----- blocked-id set comparison (#197) ---------------------------------------
+
+@test "a block records the ids that caused it on the session file (#197)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  _queue_message
+  local id
+  id=$(basename "$(ls "$TASK_FORCE_HOME/radio/mailbox/worker-foo/inbox"/*.md)" .md)
+  run bash -c "echo '{\"stop_hook_active\": false}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output --partial '"decision": "block"'
+  run grep "^BLOCKED_IDS=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output "BLOCKED_IDS=$id"
+}
+
+@test "a message arriving during the drain turn earns one more block, then the loop-breaker stops it (#197)" {
+  # The live 2026-09-14 sequence: PR merged → approved-and-merged queued while
+  # the worker was busy → Stop with stop_hook_active=true. Pre-#197 the worker
+  # went idle with that message unread in its own mailbox, forever.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  _queue_message "first"
+
+  # Turn ends with mail pending → block #1.
+  run bash -c "echo '{\"stop_hook_active\": false}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output --partial '1 unread message(s)'
+
+  # The agent drains nothing and a second message lands mid-continuation.
+  _queue_message "approved-and-merged"
+  run bash -c "echo '{\"stop_hook_active\": true}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output --partial '"decision": "block"'
+  assert_output --partial '2 unread message(s)'
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output "STATE=busy"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "new message(s) arrived during the drain turn"
+
+  # Same two ids ignored again → no new arrival → the stop is allowed (no loop).
+  run bash -c "echo '{\"stop_hook_active\": true}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output ""
+  run grep "^STATE=" "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output "STATE=idle"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "no new message since the block"
+}
+
+@test "an agent that ignores the same message twice still stops (#197 keeps the loop guard)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  _queue_message
+  run bash -c "echo '{\"stop_hook_active\": false}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output --partial '"decision": "block"'
+  run bash -c "echo '{\"stop_hook_active\": true}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output ""
+  # And a third Stop in the same chain doesn't resurrect the block either.
+  run bash -c "echo '{\"stop_hook_active\": true}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output ""
+}
+
+@test "draining the inbox clears the recorded block set (#197)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  _queue_message
+  local id
+  id=$(basename "$(ls "$TASK_FORCE_HOME/radio/mailbox/worker-foo/inbox"/*.md)" .md)
+  run bash -c "echo '{\"stop_hook_active\": false}' | '$RADIO' stop-hook"
+  assert_success
+  run grep -c "^BLOCKED_IDS=." "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output "1"
+
+  # The agent does what the block asked.
+  "$RADIO" read "$id" >/dev/null
+  run bash -c "echo '{\"stop_hook_active\": true}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output ""
+  run grep -c "^BLOCKED_IDS=." "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_failure
+  assert_output "0"
+}
+
+@test "the recorded block set dies with the session file — no leak across sessions (#197)" {
+  # Deliberately not a sidecar: #188 sidecars outlive unregister, and a stale
+  # set could suppress a legitimate block for a later session of this role.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  _queue_message
+  run bash -c "echo '{\"stop_hook_active\": false}' | '$RADIO' stop-hook"
+  assert_success
+  run grep -c "^BLOCKED_IDS=." "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output "1"
+
+  "$RADIO" unregister --manual
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  run grep -c "^BLOCKED_IDS=." "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_failure
+  assert_output "0"
+
+  # The still-unread message blocks the new session's first stop, as it should.
+  run bash -c "echo '{\"stop_hook_active\": false}' | '$RADIO' stop-hook"
+  assert_success
+  assert_output --partial '"decision": "block"'
 }
 
 # ----- usage string honesty (#163) --------------------------------------------

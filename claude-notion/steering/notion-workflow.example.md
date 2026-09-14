@@ -104,7 +104,13 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 When a worker's turn ends, the `Stop` hook runs `radio stop-hook`
 automatically: with an empty inbox it marks the role idle; if messages queued
 up while the worker was busy, it blocks the stop (staying busy) so the agent
-drains them immediately — you don't need to invoke it manually.
+drains them immediately — you don't need to invoke it manually. A message that
+lands *during* that forced drain turn earns one more block of its own (#197):
+the hook records the message ids each block was about and compares the inbox
+against that set, so a genuinely new arrival still gets a continuation while an
+agent that ignores the same ids twice is still allowed to stop. Before this,
+the second `Stop` gave up on the flag alone and the new message sat unread —
+terminal for an idle `--auto` worker nobody was going to prompt again.
 
 Likewise, every submitted prompt runs `radio prompt-hook` (the
 `UserPromptSubmit` hook): if the inbox has unread messages, a line like

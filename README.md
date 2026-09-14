@@ -356,7 +356,7 @@ Spawn workers with `task-work tasks/NNN-slug.md`. Same Kiro shortcuts as `kiro-n
 
 ## PM ↔ worker messaging (radio)
 
-Once you've installed a Claude loadout, `task-init` auto-installs **radio** — a low-latency mailbox CLI under `~/.task-force/radio/` that lets the PM agent and worker agents ping each other directly. No human courier, seconds-level wake-up when the recipient tab is idle, queue-and-defer when busy. The `kiro-*` loadouts install the equivalent hooks under `.kiro/hooks/` instead.
+Once you've installed a Claude loadout, `task-init` auto-installs **radio** — a low-latency mailbox CLI under `~/.task-force/radio/` that lets the PM agent and worker agents ping each other directly. No human courier, seconds-level wake-up when the recipient tab is idle, queue-and-defer when busy. The `kiro-*` loadouts install the corresponding hooks under `.kiro/hooks/` instead — with weaker delivery guarantees; see [kiro delivery is best-effort](#kiro-delivery-is-best-effort).
 
 Radio is the **canonical** coordination channel between the planner, PM, and workers — every role transition in the workflow runs through it. The PM / planner / worker prompts shell out to `radio send` at every documented handoff point.
 
@@ -405,6 +405,7 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 | `delivered — woke <role> (tab_id=N)` | The recipient was idle and reachable; `radio check` was written to its pane. |
 | `queued — <role> is busy; it will drain on its next Stop` | Recipient mid-turn; the stop-hook flush picks it up. (`awaiting` recipients get their own line — drain is via prompt-hook on the next prompt.) |
 | `queued — <role> is idle but wake failed (<reason>); …surface on its next prompt/register` | Idle but unreachable (no zellij / no tab / not zellij-registered / stale or unreachable tab / no pane / write failed); no auto-redelivery until the recipient is next prompted or re-registers. |
+| `queued — <role> …; it polls its own inbox — the message surfaces when it next runs radio check` | The recipient is a **kiro** agent. It has no Stop drain, no prompt-hook injection, and no register backlog report (see [kiro delivery is best-effort](#kiro-delivery-is-best-effort)), so every queued outcome — busy, awaiting, wake-failed — ends in this clause instead of naming a hook it doesn't have. |
 | `WARNING — no session for <role>; …nobody is listening` | No session file — the role isn't running. Also `WARNING — <role> looks dead …` when a non-idle session's heartbeat is >1h stale (see `radio orphans`). |
 
 Because `radio send` now writes to stdout, anything **capturing** its output must discard it (`radio send … >/dev/null`).
@@ -420,15 +421,37 @@ Because `radio send` now writes to stdout, anything **capturing** its output mus
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 | `PostToolUse`     | `radio busy`                  | State flip only — deliberately NOT `prompt-hook`; it fires after every tool call, and the inbox summary belongs at prompt time, not sprayed mid-turn |
 
-For the kiro loadouts the equivalent wiring lives in `.kiro/hooks/` and runs off Kiro's triggers — except `userPromptSubmit`, which keeps plain `radio busy` (no context-injection mechanism there; revisit with #146).
+For the kiro loadouts the equivalent wiring lives in `.kiro/hooks/` and runs off Kiro's triggers — but it is **not** equivalent in effect. See below.
+
+### kiro delivery is best-effort
+
+Every claude backstop above works by putting text into the model's context from a hook. Kiro doesn't inject hook stdout at all (#146), so none of them land:
+
+| kiro hook | Command | What actually happens |
+|-----------|---------|------------------------|
+| `agentSpawn` | `radio register …` | Claims the session file. The #168 offline-backlog summary it prints is **discarded** — the agent never sees it. |
+| `userPromptSubmit` | `radio busy` | State flip only. Deliberately not `prompt-hook`: its inbox summary would be discarded too. |
+| `agentStop` | `radio ready && radio check` | State flip, then a `radio check` whose output goes to the **hook subshell**, not the model. There is no kiro analogue of Stop-hook block JSON, so an idle kiro role with unread mail stays idle. |
+| — | *(no session-end trigger)* | Nothing unregisters on tab close except `task-done`. |
+
+So for a kiro recipient the zellij `write-chars` wake is the *only* push path, and it is best-effort — a missed wake has nothing behind it. Two consequences worth stating plainly:
+
+- **Kiro agents pull.** Every kiro agent prompt in `kiro-*/agents/*.json` carries a standing instruction to run `radio check` at the top of every turn and `radio read <id>` anything listed. That poll, not a hook, is what makes delivery eventually happen.
+- **`radio send` says so.** No outcome line ever promises a kiro recipient a Stop drain, a prompt-hook, or a register report; all of them end in `it polls its own inbox — the message surfaces when it next runs radio check`.
+
+Reaching real parity (a context-injecting kiro hook, a heartbeat-driven unregister) is tracked separately in #146 / #127; this is the honest description of what ships today.
 
 ### Idle workers don't auto-act
 
 A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate for workers: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body — that also opts the worker into the CR (auto-submit) wake-up, so a live ping drains without a keystroke. A PM launched with `task-pm` has that opt-in on by default (#189).
 
+On kiro that injection doesn't happen, so the worker's *own* `radio check` at the top of its next turn is what surfaces the backlog — same "next turn" latency, one less safety net.
+
 ### Cleanup
 
 If a tab dies unexpectedly (or Claude resumes without re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session older than an hour. Safe to `rm ~/.task-force/radio/sessions/<role>.info` or just leave it — the next legitimate `radio register` overwrites it.
+
+On kiro this is the *routine* cleanup step, not just the crash path: `agentStop` fires per turn, not on session close, so there is no kiro analogue of claude's `SessionEnd` → `radio unregister`. `task-done` covers the worker happy path (it unregisters before removing the worktree), but any kiro tab closed without it leaves a session file still advertising `STATE=idle` — which makes `radio send` try to wake a tab that's gone. Run `radio orphans` periodically and delete what it lists. Heartbeat-driven auto-unregister is #127.
 
 ---
 

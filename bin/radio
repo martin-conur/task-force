@@ -1573,23 +1573,52 @@ cmd_prompt_hook() {
   _log "prompt-hook: surfaced $n unread message(s) role=$TASK_FORCE_ROLE"
 }
 
+# The trailing clause of a queued outcome line: *how* the message will actually
+# reach the recipient. It is a property of the recipient's agent, not of the
+# situation alone, so every queued branch in cmd_send routes through here (#190)
+# — the honesty contract #166 opened is only complete once no outcome line can
+# name a mechanism the recipient does not have.
+#
+# claude's hooks pull for it three independent ways: the Stop hook blocks and
+# drains a busy role (#163), the UserPromptSubmit hook injects the inbox summary
+# on the next prompt (#164), and a fresh SessionStart register reports the
+# offline backlog (#168). kiro is wired with none of them — its hook stdout
+# never reaches the model (#146) — so every situation collapses to the same
+# honest answer there: the agent polls its own inbox, and a message waits until
+# it next runs `radio check` at the top of a turn (#190, option B). Note this
+# makes `register` disappear from the kiro wording too: `cmd_register`'s backlog
+# summary rides the same dropped stdout, so promising it was never true either.
+#
+# $1 = recipient's AGENT session field (empty on pre-#151 sessions → treated as
+#      claude, the historical default). $2 = situation.
+_send_surface() {
+  local agent="$1" situation="$2"
+  if [[ "$agent" == "kiro" ]]; then
+    # shellcheck disable=SC2016  # backticks are literal output for the sender, not a subshell
+    printf 'it polls its own inbox — the message surfaces when it next runs `radio check`'
+    return 0
+  fi
+  case "$situation" in
+    busy)        printf 'it will drain on its next Stop' ;;
+    awaiting)    printf 'it will surface via prompt-hook when next prompted' ;;
+    wake-failed) printf 'message will surface on its next prompt/register' ;;
+    # Unreachable for the three call sites, but a silent empty clause would
+    # leave a dangling "…; " on the outcome line. Degrade to the weakest true
+    # statement instead.
+    *)           printf 'the message is queued and surfaces on its next turn' ;;
+  esac
+}
+
 # Emit the "queued — idle but wake failed" outcome line (#166). Every wake miss
 # after the recipient is confirmed idle funnels through here so the five reasons
 # (no zellij, no tab, no TAB_ID, no pane, write-chars failed) share one wording.
 # The #165 recipient-resolution note (`radio: --to pm → … (via …)`) is a separate
 # line printed once in cmd_send, so the outcome lines here name the already-
 # resolved role without needing a suffix of their own.
-#
-# The redelivery promise is agent-specific: claude has a prompt-hook + register
-# drain, so a missed wake resurfaces on the recipient's next prompt/register;
-# kiro has neither hook injected (#146), so soften to the neutral "check/register"
-# rather than promise a prompt-hook that will never fire.
 _send_outcome_wake_failed() {
   local to="$1" reason="$2" agent="${3:-}"
-  local surface="prompt/register"
-  [[ "$agent" == "kiro" ]] && surface="check/register"
-  printf 'radio: queued — %s is idle but wake failed (%s); message will surface on its next %s\n' \
-    "$to" "$reason" "$surface"
+  printf 'radio: queued — %s is idle but wake failed (%s); %s\n' \
+    "$to" "$reason" "$(_send_surface "$agent" wake-failed)"
 }
 
 # Resolve a `--to pm` send to the repo-scoped PM role (#165). `pm` is the stable
@@ -1850,19 +1879,23 @@ cmd_send() {
     fi
     # An `awaiting` agent's turn is already over — no Stop event is coming, and
     # the drain path is prompt-hook after the human responds. Don't promise a
-    # Stop that won't happen; the honest signal is different from `busy`.
+    # Stop that won't happen; the honest signal is different from `busy`. Both
+    # branches take their trailing clause from _send_surface so a kiro recipient
+    # (which has neither a Stop drain nor prompt-hook injection) is told it polls
+    # instead (#190).
     if [[ "$rstate" == "awaiting" ]]; then
       _log "send: $to is awaiting (state=$rstate) — queued (id=$id)"
-      printf 'radio: queued — %s is awaiting user input; it will surface via prompt-hook when next prompted\n' "$to"
+      printf 'radio: queued — %s is awaiting user input; %s\n' "$to" "$(_send_surface "$ragent" awaiting)"
       return 0
     fi
     _log "send: $to is busy (state=$rstate) — queued (id=$id)"
-    printf 'radio: queued — %s is busy; it will drain on its next Stop\n' "$to"
+    printf 'radio: queued — %s is busy; %s\n' "$to" "$(_send_surface "$ragent" busy)"
     return 0
   fi
   # Recipient is registered and idle from here on. Any failure to wake it is a
   # transient wake miss, not a "nobody home" — the message surfaces on the
-  # recipient's next prompt-hook / register. Report the reason honestly.
+  # recipient's next prompt-hook / register (or, for kiro, its next self-driven
+  # `radio check`). Report the reason honestly.
   if [[ -z "${ZELLIJ:-}" ]]; then
     _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
     _send_outcome_wake_failed "$to" "sender is not in a zellij session" "$ragent"

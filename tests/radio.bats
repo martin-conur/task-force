@@ -221,16 +221,64 @@ teardown() {
   assert_output --partial "will surface on its next prompt/register"
 }
 
-@test "send to a kiro recipient softens the redelivery promise (no prompt-hook there) (#166)" {
+@test "send to a kiro recipient softens the redelivery promise (no prompt-hook there) (#166, #190)" {
   # kiro has neither prompt-hook nor register-drain injection (#146), so the
-  # wake-failed line must not promise "prompt/register" — it says "check/register".
+  # wake-failed line must not promise either. #190 dropped "register" from the
+  # kiro wording too — cmd_register's backlog summary rides the same discarded
+  # stdout, so it was never a real redelivery path there. All that is left is
+  # the agent's own poll.
   unset ZELLIJ
   "$RADIO" register --role pm --tab pm --agent kiro
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
   assert_success
   assert_output --partial "radio: queued — pm is idle but wake failed"
-  assert_output --partial "will surface on its next check/register"
+  assert_output --partial "it polls its own inbox"
+  assert_output --partial "radio check"
   refute_output --partial "prompt/register"
+  refute_output --partial "check/register"
+}
+
+@test "send to a BUSY kiro recipient does not promise a next-Stop drain (#190)" {
+  # There is no kiro analogue of the Stop-hook block-and-drain (#163), so the
+  # busy line must not tell the sender the message drains on the next Stop.
+  export ZELLIJ=fake-session
+  "$RADIO" register --role pm --tab pm --agent kiro
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is busy;"
+  assert_output --partial "it polls its own inbox"
+  refute_output --partial "next Stop"
+  # And the message is still queued for that poll to find.
+  run bash -c "ls '$TASK_FORCE_HOME/radio/mailbox/pm/inbox/'*.md 2>/dev/null | wc -l | tr -d ' '"
+  assert_output "1"
+}
+
+@test "send to an AWAITING kiro recipient does not promise prompt-hook (#190)" {
+  # kiro drops hook stdout (#146), so prompt-hook injection never happens there.
+  export ZELLIJ=fake-session
+  "$RADIO" register --role pm --tab pm --agent kiro
+  TASK_FORCE_ROLE=pm "$RADIO" awaiting
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is awaiting user input;"
+  assert_output --partial "it polls its own inbox"
+  refute_output --partial "prompt-hook"
+  refute_output --partial "next Stop"
+}
+
+@test "a session with no AGENT field keeps the claude wording (#190 back-compat)" {
+  # Sessions written before #151 have no AGENT= line. _send_surface must treat
+  # the empty agent as claude — the historical default — not fall through to a
+  # blank clause.
+  export ZELLIJ=fake-session
+  "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=pm "$RADIO" busy
+  grep -v '^AGENT=' "$TASK_FORCE_HOME/radio/sessions/pm.info" > "$TASK_FORCE_HOME/radio/sessions/pm.tmp"
+  mv "$TASK_FORCE_HOME/radio/sessions/pm.tmp" "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
+  assert_success
+  assert_output --partial "radio: queued — pm is busy; it will drain on its next Stop"
 }
 
 @test "send to an awaiting recipient names the state honestly (not 'busy') (#166)" {

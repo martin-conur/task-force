@@ -14,6 +14,10 @@ setup() {
   export TASK_FORCE_ROLE=test-runner
   MAILBOX="$TASK_FORCE_HOME/radio/mailbox"
   SESSIONS="$TASK_FORCE_HOME/radio/sessions"
+  DEADLETTER="$TASK_FORCE_HOME/radio/dead-letter"
+  REPORT="$TASK_FORCE_HOME/radio/.dead-letter-report"
+  # put_mail stamps `from: pm-task-force`, so its reports route to that PM.
+  REPORT_PM="$TASK_FORCE_HOME/radio/.dead-letter-report-pm-task-force"
   LOG="$TASK_FORCE_HOME/radio/log"
   mkdir -p "$MAILBOX" "$SESSIONS"
 }
@@ -83,15 +87,31 @@ put_msg() {
   assert [ -d "$MAILBOX/freshdead" ]
 }
 
-@test "gc preserves a dead role's UNREAD inbox even when aged (the #182 backlog guard)" {
+@test "gc preserves the literal pm role's UNREAD inbox even when aged (the #182 backlog guard)" {
   # No session file, but the inbox still holds undelivered mail (aged). The
-  # whole-dir reclaim must NOT fire — this is exactly the legacy pm backlog case.
-  seed_mailbox legacypm
-  put_msg "$MAILBOX/legacypm/inbox/old.md" "$OLD_TS"
+  # legacy `pm` backlog is exempt from dead-lettering: it is write-only post-#165
+  # and waiting for the first repo-scoped PM to adopt it, so archiving it would
+  # short-circuit that migration. Neither the reclaim nor the archive may fire.
+  seed_mailbox pm
+  put_msg "$MAILBOX/pm/inbox/old.md" "$OLD_TS"
   run "$RADIO" gc
   assert_success
-  assert [ -d "$MAILBOX/legacypm" ]
-  assert [ -f "$MAILBOX/legacypm/inbox/old.md" ]
+  assert [ -d "$MAILBOX/pm" ]
+  assert [ -f "$MAILBOX/pm/inbox/old.md" ]
+  assert [ ! -d "$DEADLETTER/pm" ]
+}
+
+@test "gc still reclaims the literal pm mailbox once its inbox is EMPTY (#201 review #1)" {
+  # The exemption above covers dead-lettering only. A drained `pm` — which is the
+  # state right after #182's adoption runs — is an ordinary dead role with an
+  # empty inbox, and reclaiming it was already legal pre-#201. Exempting the whole
+  # role would re-create this ticket's bug for one mailbox.
+  seed_mailbox pm
+  touch -t "$OLD_TS" "$MAILBOX/pm" "$MAILBOX/pm/inbox" "$MAILBOX/pm/processed"
+  run "$RADIO" gc
+  assert_success
+  assert_output --partial "remove dead mailbox: pm"
+  assert [ ! -d "$MAILBOX/pm" ]
 }
 
 @test "gc reclaims a role whose heartbeat is >1h stale (empty inbox, aged)" {
@@ -103,14 +123,14 @@ put_msg() {
   assert [ ! -d "$MAILBOX/crashed" ]
 }
 
-@test "gc preserves a stale-heartbeat role that still holds unread mail" {
+@test "gc dead-letters a stale-heartbeat role's aged unread mail, then reclaims it (#201)" {
   seed_mailbox crashed2
   seed_stale_session crashed2
   put_msg "$MAILBOX/crashed2/inbox/pending.md" "$OLD_TS"   # unread + aged
   run "$RADIO" gc
   assert_success
-  assert [ -d "$MAILBOX/crashed2" ]
-  assert [ -f "$MAILBOX/crashed2/inbox/pending.md" ]
+  assert [ ! -d "$MAILBOX/crashed2" ]
+  assert [ -f "$DEADLETTER/crashed2/pending.md" ]
 }
 
 @test "gc keeps a role with a fresh heartbeat (not dead), aged mail notwithstanding" {
@@ -214,6 +234,244 @@ put_msg() {
   run "$RADIO" gc --dry-run
   assert_success
   assert [ -f "$SESSIONS/deadworker.loadout" ]
+}
+
+# --- dead-letter (#201) ----------------------------------------------------
+
+# Write a realistic message (frontmatter + body) into a role's inbox and age it.
+put_mail() {
+  local role="$1" id="$2" ts="${3:-$OLD_TS}"
+  cat > "$MAILBOX/$role/inbox/$id.md" <<EOF
+---
+id: $id
+from: pm-task-force
+to: $role
+intent: approved-and-merged
+pr: 164
+created_at: 2026-07-07T21:53:55Z
+---
+merged — squashed to main. Run \`task-done --remove-worktree\`.
+EOF
+  touch -t "$ts" "$MAILBOX/$role/inbox/$id.md"
+}
+
+# Same, with an explicit `from:` and an optional `repo:` — the two fields
+# _dead_letter_owner routes the report on (#201 review #2).
+put_mail_from() {
+  local role="$1" id="$2" from="$3" repo="${4:-}"
+  {
+    printf -- '---\nid: %s\nfrom: %s\nto: %s\nintent: approved-and-merged\n' "$id" "$from" "$role"
+    [[ -n "$repo" ]] && printf 'repo: %s\n' "$repo"
+    printf -- 'created_at: 2026-07-07T21:53:55Z\n---\nmerged.\n'
+  } > "$MAILBOX/$role/inbox/$id.md"
+  touch -t "$OLD_TS" "$MAILBOX/$role/inbox/$id.md"
+  return 0
+}
+
+@test "gc archives a dead role's aged unread mail and then reclaims the mailbox (#201)" {
+  # The headline case: mail addressed to a role that has exited was immortal —
+  # protected by the very sweep meant to clean it up.
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  run "$RADIO" gc
+  assert_success
+  assert_output --partial "dead-letter: worker-gone/20260707-215355-from-pm-abc123.md"
+  assert_output --partial "remove dead mailbox: worker-gone"
+  assert [ ! -d "$MAILBOX/worker-gone" ]
+  assert [ -f "$DEADLETTER/worker-gone/20260707-215355-from-pm-abc123.md" ]
+}
+
+@test "an archived message keeps its id and frontmatter (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  run "$RADIO" gc
+  assert_success
+  run cat "$DEADLETTER/worker-gone/20260707-215355-from-pm-abc123.md"
+  assert_output --partial "id: 20260707-215355-from-pm-abc123"
+  assert_output --partial "from: pm-task-force"
+  assert_output --partial "intent: approved-and-merged"
+  assert_output --partial "pr: 164"
+  assert_output --partial 'task-done --remove-worktree'
+}
+
+@test "gc never dead-letters a LIVE role's inbox, however aged (#201)" {
+  # The guarantee that motivated _inbox_empty in the first place.
+  seed_mailbox liveworker
+  seed_session liveworker
+  put_mail liveworker 20260707-215355-from-pm-abc123
+  run "$RADIO" gc
+  assert_success
+  refute_output --partial "dead-letter:"
+  assert [ -f "$MAILBOX/liveworker/inbox/20260707-215355-from-pm-abc123.md" ]
+  assert [ ! -d "$DEADLETTER/liveworker" ]
+}
+
+@test "gc leaves a dead role's mail alone while it is inside the cutoff (#201)" {
+  # It may yet come back — only mail that has aged out is archived.
+  seed_mailbox recentdead
+  put_mail recentdead 20260914-120000-from-pm-zzz999 "$(date -u +%Y%m%d%H%M)"
+  run "$RADIO" gc
+  assert_success
+  refute_output --partial "dead-letter:"
+  assert [ -f "$MAILBOX/recentdead/inbox/20260914-120000-from-pm-zzz999.md" ]
+  assert [ ! -d "$DEADLETTER/recentdead" ]
+}
+
+@test "gc --dry-run reports the archive and the reclaim without performing either (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  run "$RADIO" gc --dry-run
+  assert_success
+  assert_output --partial "[dry-run] dead-letter: worker-gone/20260707-215355-from-pm-abc123.md"
+  assert_output --partial "[dry-run] remove dead mailbox: worker-gone"
+  assert [ -f "$MAILBOX/worker-gone/inbox/20260707-215355-from-pm-abc123.md" ]
+  assert [ ! -d "$DEADLETTER" ]
+  assert [ ! -f "$REPORT" ]
+}
+
+@test "the gc summary counts dead-lettered messages (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  put_mail worker-gone 20260707-215356-from-pm-def456
+  run "$RADIO" gc
+  assert_success
+  assert_output --partial "2 dead-lettered message(s)"
+}
+
+@test "dead-lettering is collision-safe (#201)" {
+  # A name already present in the archive must not strand the message in the
+  # inbox — that is the immortal-mailbox state this exists to end.
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  mkdir -p "$DEADLETTER/worker-gone"
+  printf 'pre-existing\n' > "$DEADLETTER/worker-gone/20260707-215355-from-pm-abc123.md"
+  run "$RADIO" gc
+  assert_success
+  assert [ ! -d "$MAILBOX/worker-gone" ]
+  run bash -c "ls '$DEADLETTER/worker-gone' | wc -l | tr -d ' '"
+  assert_output "2"
+  run cat "$DEADLETTER/worker-gone/20260707-215355-from-pm-abc123.md"
+  assert_output --partial "pre-existing"
+}
+
+@test "gc logs each dead-lettered message (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  "$RADIO" gc >/dev/null
+  run grep -cF 'gc: dead-lettered role=worker-gone msg=20260707-215355-from-pm-abc123.md' "$LOG"
+  assert_success
+  refute_output "0"
+}
+
+# --- surfacing the count to the PM (#201 acceptance 5) ---------------------
+
+@test "a fresh PM register surfaces the dead-letter count and consumes the report (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  "$RADIO" gc >/dev/null
+  assert [ -f "$REPORT_PM" ]
+
+  run "$RADIO" register --role pm-task-force --tab pm --agent claude
+  assert_success
+  assert_output --partial "1 message(s) addressed to 1 role(s) that had already exited were never delivered"
+  assert_output --partial "worker-gone"
+  assert_output --partial "dead-letter"
+  assert [ ! -f "$REPORT_PM" ]
+}
+
+@test "the dead-letter report is surfaced once, not on every boot (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  "$RADIO" gc >/dev/null
+  "$RADIO" register --role pm-task-force --tab pm --agent claude >/dev/null
+  # A later fresh register of the same PM finds the report consumed.
+  rm -f "$SESSIONS/pm-task-force.info"
+  run "$RADIO" register --role pm-task-force --tab pm --agent claude
+  assert_success
+  refute_output --partial "never delivered"
+}
+
+@test "a worker register never consumes the PM's dead-letter report (#201)" {
+  seed_mailbox worker-gone
+  put_mail worker-gone 20260707-215355-from-pm-abc123
+  "$RADIO" gc >/dev/null
+  run "$RADIO" register --role worker-repo-slug --tab w --agent claude
+  assert_success
+  refute_output --partial "never delivered"
+  assert [ -f "$REPORT_PM" ]
+}
+
+@test "a PM in another repo does not consume this repo's dead-letter report (#201 review #2)" {
+  # $RADIO_HOME is shared machine-wide. A global sentinel would let whichever PM
+  # registered first eat a report about another repo's roles — the same
+  # cross-repo class as #182's adoption bug.
+  seed_mailbox worker-task-force-slug
+  put_mail_from worker-task-force-slug 20260707-215355-from-pm-abc pm-task-force
+  "$RADIO" gc >/dev/null
+  assert [ -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-task-force" ]
+
+  run "$RADIO" register --role pm-recommender-systems --tab pm2 --agent claude
+  assert_success
+  refute_output --partial "never delivered"
+  assert [ -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-task-force" ]
+
+  run "$RADIO" register --role pm-task-force --tab pm --agent claude
+  assert_success
+  assert_output --partial "never delivered"
+  assert_output --partial "worker-task-force-slug"
+  assert [ ! -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-task-force" ]
+}
+
+@test "an explicit repo: field outranks from: when routing the report (#201 review #2)" {
+  seed_mailbox worker-gone
+  put_mail_from worker-gone 20260707-215355-from-pm-abc pm-task-force /src/recommender-systems
+  "$RADIO" gc >/dev/null
+  assert [ -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-recommender-systems" ]
+  assert [ ! -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-task-force" ]
+}
+
+@test "a dead PM's own inbox reports to that PM (#201 review #2)" {
+  # The mirror case: a worker's report to a PM that had already exited. `from:`
+  # is not a PM, so the dead role itself is the owner.
+  seed_mailbox pm-task-force
+  put_mail_from pm-task-force 20260707-215355-from-worker-x worker-task-force-slug
+  "$RADIO" gc >/dev/null
+  assert [ -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-task-force" ]
+  run "$RADIO" register --role pm-task-force --tab pm --agent claude
+  assert_success
+  assert_output --partial "never delivered"
+}
+
+@test "an unattributable message lands in the unscoped report any PM may claim (#201 review #2)" {
+  seed_mailbox worker-gone
+  put_mail_from worker-gone 20260707-215355-from-unknown unknown
+  "$RADIO" gc >/dev/null
+  assert [ -f "$TASK_FORCE_HOME/radio/.dead-letter-report" ]
+  run "$RADIO" register --role pm-anyrepo --tab pm --agent claude
+  assert_success
+  # Named, so a PM reading someone else's entry can at least tell whose it is.
+  assert_output --partial "worker-gone"
+}
+
+@test "a PM claims the reports of its --also aliases too (#201 review #2)" {
+  # An alias address never fresh-registers, so a report scoped to it would sit
+  # unread forever. The primary answers for it, so the primary claims it.
+  seed_mailbox worker-other-slug
+  put_mail_from worker-other-slug 20260707-215355-from-pm-o pm-otherrepo
+  "$RADIO" gc >/dev/null
+  assert [ -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-otherrepo" ]
+  printf 'pm-otherrepo|/src/otherrepo\n' > "$SESSIONS/pm-task-force.aliases"
+
+  run "$RADIO" register --role pm-task-force --tab pm --agent claude
+  assert_success
+  assert_output --partial "worker-other-slug"
+  assert [ ! -f "$TASK_FORCE_HOME/radio/.dead-letter-report-pm-otherrepo" ]
+}
+
+@test "a register with nothing dead-lettered prints no report line (#201)" {
+  run "$RADIO" register --role pm-thisrepo --tab pm --agent claude
+  assert_success
+  refute_output --partial "never delivered"
 }
 
 # --- dry-run ---------------------------------------------------------------

@@ -165,6 +165,7 @@ mailbox.
 | `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. To stop it recurring, relaunch the PM with plain `task-pm` (auto-submit is the default; `--no-auto-submit` is the opt-out) or the worker with `task-work --auto` (#206; here that flag governs auto-submit only — the permission model stays `-a/--trust-all`). The flag is read off the **recipient's** file, after any `--also` alias hop. Auto-submit only makes a wake that *lands* complete itself; nothing backs up a wake that never lands, so the poll model below still carries delivery. |
 | A role keeps vanishing from `sessions/` | Session flapping — something fires a session-end wipe on an intra-session event and takes `TAB_ID` with it. Compare `grep -c 'unregister role='`, `'unregister: proceeding'` and `'unregister: skipping'` in the log: post-#187 `skipping` should carry the bulk of the traffic, and `role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=`, and anything calling it in a loop inflates that counter alone — a test suite that has not isolated `$TASK_FORCE_HOME` will do exactly this against your live role. Otherwise an **old `radio` binary** is on `PATH`, since every non-`--manual` call now logs one or the other; `PATH`'s `radio` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
+| PM merged but the worker never cleaned up | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered. Since #201 gc archives such mail instead of keeping a mailbox nobody will open alive forever — look in `~/.task-force/radio/dead-letter/<role>/`, and `grep 'gc: dead-lettered' ~/.task-force/radio/log` for everything it has archived. The message is intact with its id and frontmatter; only the worktree needs cleaning by hand. |
 | A role idles on a message sitting in its own inbox | Fixed in #197. `BLOCKED_IDS=` in the session file records which ids the last stop-hook block was about, so a message arriving mid-drain earns its own continuation. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the same ids were ignored twice. |
 
 The log is the only place several of these states are distinguishable at all.
@@ -181,13 +182,28 @@ grep -oE 'tab_id_src=[a-z-]+' "$L" | sort | uniq -c   # `none` = role is unwakea
 grep -c 'no tab binding for' "$L"; grep -c 'loadout=unknown' "$L"
 ```
 
-Undelivered mail is never dropped. The message is written to the inbox
+Undelivered mail is never deleted. The message is written to the inbox
 **before** any wake is attempted, so every outcome other than `delivered`
-means "on disk, waiting" rather than "gone". `radio gc` never touches
-`inbox/` (only `processed/`), and it refuses to reclaim a role's mailbox at
-all while that inbox still holds unread mail. There is no dead-letter queue —
-an undeliverable message just waits, and `radio gc --dry-run` shows what a
-sweep would remove without removing it.
+means "on disk, waiting" rather than "gone". `radio gc` expires only
+`processed/`; it never touches a live role's `inbox/` at any age, nor a dead
+role's while that mail is still inside the cutoff — the role may yet come back.
+
+What it no longer does is protect a mailbox forever (#201). Mail addressed to a
+role that has **exited** is never delivered and never read, so once a role is
+gone — no session file, or a >1h-stale heartbeat — and its mail has aged past
+the cutoff, gc moves that mail to `~/.task-force/radio/dead-letter/<role>/`,
+id and frontmatter intact, and reclaims the emptied mailbox. That is an
+archive, not a delete: nothing unread is ever `rm`'d, and the archive has no
+TTL of its own. It is where a merge ping that outlived its worker ends up —
+usually the reason a worktree was left behind. A fresh PM register reports the
+count it finds, once. So there are two places to look:
+
+```bash
+ls ~/.task-force/radio/mailbox/<role>/inbox/  # waiting — the role may still read it
+ls ~/.task-force/radio/dead-letter/           # never delivered — the role is gone
+grep -c 'gc: dead-lettered' ~/.task-force/radio/log
+radio gc --dry-run   # what a sweep would archive and reclaim, without doing either
+```
 
 When the wake itself fails there is nothing behind it. Kiro discards hook
 output, so none of those backstops exist here — the zellij keystroke is the

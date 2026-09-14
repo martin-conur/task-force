@@ -6,6 +6,10 @@ set -euo pipefail
 RADIO_HOME="${TASK_FORCE_HOME:-$HOME/.task-force}/radio"
 SESSIONS_DIR="$RADIO_HOME/sessions"
 MAILBOX_DIR="$RADIO_HOME/mailbox"
+# Archive for mail that was never delivered and never will be (#201): gc moves a
+# dead role's unread inbox here instead of protecting the mailbox forever. It sits
+# OUTSIDE $MAILBOX_DIR so gc's own `for roledir in "$MAILBOX_DIR"/*/` never walks it.
+DEAD_LETTER_DIR="$RADIO_HOME/dead-letter"
 LOG_FILE="$RADIO_HOME/log"
 
 usage() {
@@ -35,7 +39,9 @@ Usage:
                                          task-done
   radio orphans                          list session files with stale (>1h) heartbeat
   radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
-                                         messages (default N=14) and rotate the log
+                                         messages (default N=14) and rotate the log.
+                                         A dead role's still-unread mail is archived to
+                                         dead-letter/<role>/ first, never deleted
 
 Self-identification: every command except `register` reads $TASK_FORCE_ROLE.
 Override the mailbox root with $TASK_FORCE_HOME (defaults to ~/.task-force).
@@ -109,10 +115,12 @@ _newest_mtime_in() {
 }
 
 # True (0) when $1's mailbox has no unread mail — i.e. inbox/ holds no *.md.
-# Gates gc's whole-dir reclaim so a dead role still sitting on undelivered
-# messages (the ~64-message legacy `pm` backlog #182 is deferred to adopt) is
-# never `rm -rf`'d out from under it; such a role falls through to the
-# processed-only sweep, which never touches inbox. Absent inbox dir = empty.
+# Gates gc's whole-dir reclaim so a role still sitting on undelivered messages is
+# never `rm -rf`'d out from under it. Since #201 that gate is no longer terminal
+# for a DEAD role: gc first moves its inbox to dead-letter/ (an archive, never a
+# delete), which empties the inbox and lets the reclaim proceed. A LIVE role — and
+# a dead one still inside the cutoff — keeps its inbox untouched and falls through
+# to the processed-only sweep. Absent inbox dir = empty.
 _inbox_empty() {
   local d f
   d=$(_inbox_dir "$1")
@@ -560,6 +568,10 @@ _info_file_tab_id() {
 
 _inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
 _processed_dir(){ printf '%s/%s/processed' "$MAILBOX_DIR" "$1"; }
+# Where gc parks a dead role's never-delivered mail (#201). Layout formalizes the
+# hand-run 2026-09-14 precedent: dead-letter/<role>/<original-id>.md, frontmatter
+# untouched, so `from:` / `intent:` / `pr:` provenance survives the move.
+_dead_letter_dir(){ printf '%s/%s' "$DEAD_LETTER_DIR" "$1"; }
 
 # Self-healing: write a session file for $TASK_FORCE_ROLE if one is missing,
 # using the identity env vars task-work / task-pm injected at tab launch
@@ -1128,6 +1140,19 @@ cmd_register() {
       ( cmd_gc --max-age-days 14 ) >/dev/null 2>&1 || true
       : > "$gc_sentinel" 2>/dev/null || true
     fi
+  fi
+
+  # Dead-letter report (#201). gc — piggybacked just above, or run by hand
+  # earlier — archives a dead role's never-delivered mail to dead-letter/ and
+  # leaves a count behind; surface it here so a human (and the PM's own context)
+  # learns that a handoff never landed. Overwhelmingly these are PM→worker
+  # `approved-and-merged` / `changes-requested` replies that arrived after the
+  # worker exited: the worker never got the signal to run `task-done`, which is
+  # the mechanism behind leaked worktrees. PM-only, because the PM is who can
+  # re-send or clean up; fresh-register-only, for the same reason as the drain
+  # summary below. `|| true` so a read hiccup can never abort register.
+  if (( fresh == 1 )) && [[ -z "$existing_alias" && "$role" == pm-* ]]; then
+    _surface_dead_letter_report "$role" || true
   fi
 
   # First paint of the idle prefix without waiting for a Stop hook cycle (#95).
@@ -2246,15 +2271,183 @@ cmd_orphans() {
   shopt -u nullglob
 }
 
+# Archive $1's unread inbox into dead-letter/<role>/ (#201). Called by gc only for
+# a role that is already judged dead AND past the cutoff — mail addressed to a role
+# that has exited is never delivered and never reclaimed, so before #201 the
+# `_inbox_empty` reclaim gate made every such mailbox immortal (342 messages across
+# 171 dead roles on the machine that filed the ticket). This is the stage between
+# "undeliverable" and "reclaimed": the messages move, keeping their id and
+# frontmatter, and the emptied inbox lets the existing whole-dir reclaim proceed —
+# so it *unblocks* gc rather than working around it.
+#
+# Never `rm`s a message: a move that fails leaves the message in the inbox and
+# returns 1, which drops the caller back to the processed-only sweep (inbox
+# preserved). The archive itself has no TTL — expiring it is a separate,
+# explicitly-configured decision (#201 note 3).
+#
+# $2=dry_run (1 = report only), $3=output prefix. Sets $DEAD_LETTERED_N.
+_dead_letter_inbox() {
+  local role="$1" dry="$2" pfx="$3"
+  DEAD_LETTERED_N=0
+  local src dst f base target owner n=0
+  src=$(_inbox_dir "$role")
+  [[ -d "$src" ]] || return 0
+  dst=$(_dead_letter_dir "$role")
+  # `[[ -f ]]` guard rather than nullglob juggling: cmd_gc is mid-glob when it
+  # calls us, and this keeps the loop correct either way (an unmatched glob stays
+  # literal and skips).
+  for f in "$src"/*.md; do
+    [[ -f "$f" ]] || continue
+    base="${f##*/}"
+    echo "${pfx}dead-letter: $role/$base"
+    if (( ! dry )); then
+      # Route the report BEFORE the move, while the frontmatter is still here.
+      owner=$(_dead_letter_owner "$f" "$role")
+      if ! mkdir -p "$dst" 2>/dev/null; then
+        _log "gc: dead-letter mkdir failed role=$role — keeping inbox"
+        return 1
+      fi
+      # Collision-safe, same reasoning as the #182 adoption move: a bare skip
+      # would strand the message and keep the mailbox immortal, which is the
+      # exact state this exists to end.
+      target="$dst/$base"
+      if [[ -e "$target" ]]; then target="$dst/${base%.md}.dup-$(_rand_id).md"; fi
+      if ! mv -f "$f" "$target" 2>/dev/null; then
+        _log "gc: dead-letter move failed role=$role msg=$base — keeping inbox"
+        return 1
+      fi
+      _log "gc: dead-lettered role=$role msg=$base owner=${owner:-unscoped}"
+      _dead_letter_report_add "$owner" "$role"
+    fi
+    n=$(( n + 1 ))
+  done
+  DEAD_LETTERED_N=$n
+  return 0
+}
+
+# Which PM should hear about a dead-lettered message (#201 review #2). $RADIO_HOME
+# is shared by every repo on the machine, so a single global sentinel would be
+# consumed by whichever PM happened to register first — a PM in repo A eating a
+# report about repo B's roles, and B's PM never learning its mail was archived.
+# That is the same cross-repo misrouting #182 review #2 fixed for adoption.
+#
+# Three signals, most explicit first. $1 = message file (read BEFORE the move,
+# while it is still in the inbox), $2 = the dead role whose inbox is being
+# archived. Prints the owning `pm-<reponame>`, or nothing.
+#
+#   1. `repo:` — what #182 routes on. Authoritative, but cmd_send only writes it
+#      when --repo was passed, and none of the documented send commands do, so on
+#      its own it would leave nearly every real message unscoped.
+#   2. `from:`, when the sender was a PM. This is the signal that actually fires:
+#      the stranded mail is overwhelmingly PM→worker `approved-and-merged` /
+#      `changes-requested`, and the PM that sent a ping is exactly the one who
+#      needs to know it never landed.
+#   3. the dead role itself, when IT was a PM — the mirror case (a worker's report
+#      to a PM that had already exited). That PM re-registers eventually and
+#      claims its own report.
+#
+# Nothing matched means a genuinely unattributable message; it lands in the
+# unscoped report that any PM may claim, exactly as #182 treats a repo-less
+# backlog entry, and the report names the roles so a reader can tell whose it is.
+_dead_letter_owner() {
+  local f="$1" dead_role="$2" repo from
+  repo=$(_msg_field "$f" repo)
+  if [[ -n "$repo" ]]; then
+    repo=$(_sanitize_role_segment "$(basename "$repo")")
+    if [[ -n "$repo" ]]; then printf 'pm-%s' "$repo"; return 0; fi
+  fi
+  from=$(_msg_field "$f" from)
+  if [[ "$from" == pm-* ]] && _validate_role "$from" 2>/dev/null; then
+    printf '%s' "$from"; return 0
+  fi
+  if [[ "$dead_role" == pm-* ]]; then
+    printf '%s' "$dead_role"; return 0
+  fi
+  return 0
+}
+
+# Report file for owner $1 ('' = the unscoped, any-PM-may-claim one).
+_dead_letter_report_file() {
+  printf '%s/.dead-letter-report%s' "$RADIO_HOME" "${1:+-$1}"
+}
+
+# Record one dead-lettered message for the next fresh PM register to surface
+# (#201 acceptance 5). gc runs inside cmd_register in an output-suppressed
+# subshell, so its stdout can't reach the model — these sentinels carry the news
+# across. One `<role>` line per message; the reader counts lines, dedups the
+# names, and deletes the file, so a report is surfaced once rather than
+# re-injected on every boot.
+_dead_letter_report_add() {
+  local owner="$1" role="$2"
+  printf '%s\n' "$role" >> "$(_dead_letter_report_file "$owner")" 2>/dev/null || true
+}
+
+# Print the pending dead-letter report and consume it. PM-only and fresh-register
+# only, for the same reason the #168 drain summary is: SessionStart stdout is
+# injected into the model's context, and the PM is who can act on "that merge ping
+# never landed" — re-send it, or go clean up the worktree the worker never heard
+# to remove. Silent when there is nothing pending.
+#
+# Claims this PM's own report, those of any `--also` aliases it answers for (#165
+# — an alias address never fresh-registers, so its report would otherwise sit
+# unread forever), and the unscoped one. The role names always appear in the
+# output: an unscoped entry may be about a repo this PM doesn't own, and naming
+# it is what lets the reader tell.
+_surface_dead_letter_report() {
+  local role="$1"
+  local reports=("$(_dead_letter_report_file "$role")")
+  local sidecar a
+  sidecar=$(_aliases_sidecar "$role")
+  if [[ -f "$sidecar" ]]; then
+    while IFS='|' read -r a _; do
+      [[ -n "$a" ]] || continue
+      reports+=("$(_dead_letter_report_file "$a")")
+    done < "$sidecar"
+  fi
+  reports+=("$(_dead_letter_report_file "")")
+
+  local total=0 roles=0 seen="" list="" extra=0 f r
+  for f in "${reports[@]}"; do
+    [[ -f "$f" ]] || continue
+    while read -r r; do
+      [[ -n "$r" ]] || continue
+      total=$(( total + 1 ))
+      if [[ "$seen" == *"|$r|"* ]]; then continue; fi
+      seen="$seen|$r|"
+      roles=$(( roles + 1 ))
+      if (( roles <= 5 )); then
+        if [[ -n "$list" ]]; then list="$list, "; fi
+        list="$list$r"
+      else
+        extra=$(( extra + 1 ))
+      fi
+    done < "$f"
+    rm -f "$f" 2>/dev/null || true
+  done
+
+  (( total > 0 )) || return 0
+  if (( extra > 0 )); then list="$list, +$extra more"; fi
+  printf '[radio] %s message(s) addressed to %s role(s) that had already exited were never delivered, and have been archived to %s/ (%s). Nothing was deleted — read them as plain files, and re-send anything whose handoff still matters.\n' \
+    "$total" "$roles" "$DEAD_LETTER_DIR" "$list"
+  _log "register: surfaced $total dead-lettered message(s) across $roles role(s) role=$role"
+  return 0
+}
+
 # Garbage-collect the radio home (#169): drop expired processed messages, reclaim
 # whole mailbox dirs for roles that are dead (no session file OR >1h-stale
-# heartbeat) AND hold no unread mail AND are quiescent (newest entry older than
-# the cutoff), and rotate the log. The empty-inbox gate is load-bearing: it keeps
-# gc from destroying undelivered mail — notably the legacy `pm` backlog #182 is
-# deferred to adopt (post-#165 nothing registers as literal `pm`, so its inbox is
-# write-only until then). Amortized via a throttled piggyback on cmd_register — no
-# cron needed. `--dry-run` reports without touching anything; `--max-age-days N`
-# (default 14) sets the cutoff.
+# heartbeat) AND quiescent (newest entry older than the cutoff), and rotate the
+# log. Amortized via a throttled piggyback on cmd_register — no cron needed.
+# `--dry-run` reports without touching anything; `--max-age-days N` (default 14)
+# sets the cutoff.
+#
+# Unread mail is never destroyed, but since #201 it no longer makes its mailbox
+# immortal either. The old empty-inbox gate had no second stage, so a dead role
+# holding undelivered mail was protected by the very sweep meant to clean it up —
+# mail nobody would ever read, kept forever. gc now archives that inbox to
+# dead-letter/<role>/ first (see _dead_letter_inbox) and then reclaims the emptied
+# dir. Everything the gate protected still holds: a LIVE role's inbox is never
+# touched at any age, and a dead role still inside the cutoff keeps its mail (it
+# may yet come back).
 cmd_gc() {
   local dry_run=0 max_age_days=14
   while [[ $# -gt 0 ]]; do
@@ -2273,22 +2466,51 @@ cmd_gc() {
   cutoff=$(( now_epoch - max_age_days * 86400 ))
   (( dry_run )) && pfx="[dry-run] "
 
-  local removed_dirs=0 removed_msgs=0
+  local removed_dirs=0 removed_msgs=0 dead_lettered=0
 
   if [[ -d "$MAILBOX_DIR" ]]; then
     shopt -s nullglob
-    local roledir role newest f m
+    local roledir role newest f m reclaimable
     for roledir in "$MAILBOX_DIR"/*/; do
       roledir="${roledir%/}"
       role=$(basename "$roledir")
-      # Whole-dir reclaim, all three conditions required: the role is dead
-      # (no session file OR >1h-stale heartbeat, per _session_dead), its inbox
-      # holds NO unread mail (_inbox_empty — the #182 backlog guard), and its
-      # newest surviving entry has aged past the cutoff. Any one failing drops us
-      # to the processed-only sweep below, which never touches inbox.
-      if _session_dead "$role" "$now_epoch" && _inbox_empty "$role"; then
+      # Whole-dir reclaim, two conditions required: the role is dead (no session
+      # file OR >1h-stale heartbeat, per _session_dead) and its newest surviving
+      # entry has aged past the cutoff. Either failing drops us to the
+      # processed-only sweep below, which never touches inbox — so a live role,
+      # and a dead role whose mail is still fresh, both keep their inbox intact.
+      if _session_dead "$role" "$now_epoch"; then
         newest=$(_newest_mtime_in "$roledir" "$now_epoch")
+        reclaimable=0
         if (( newest <= cutoff )); then
+          reclaimable=1
+          # Dead, aged, and still holding unread mail: archive it rather than
+          # protect the mailbox forever (#201). The literal `pm` role is exempt
+          # from THIS step only — its inbox is the #182 backlog, write-only
+          # post-#165 and waiting for the first repo-scoped PM to adopt it, and
+          # dead-lettering it would short-circuit that migration (cmd_register
+          # runs _adopt_legacy_pm_inbox BEFORE this sweep for the same reason).
+          # The exemption is deliberately scoped to a NON-EMPTY inbox: once
+          # adoption has drained it, `pm` is an ordinary dead role with an empty
+          # inbox and the reclaim below reaps it, which was already legal
+          # pre-#201. Exempting the whole role would re-create this ticket's bug
+          # for one mailbox (#201 review #1).
+          if ! _inbox_empty "$role"; then
+            if [[ "$role" == pm ]]; then
+              reclaimable=0
+            elif _dead_letter_inbox "$role" "$dry_run" "$pfx"; then
+              dead_lettered=$(( dead_lettered + DEAD_LETTERED_N ))
+            else
+              # Archive failed partway — the message is still in the inbox, so
+              # the dir must survive. Never rm mail we failed to save.
+              reclaimable=0
+            fi
+          fi
+          # On a real run the inbox must actually be empty now; on a dry run
+          # nothing moved, so report the reclaim the archive would have unblocked.
+          (( dry_run )) || _inbox_empty "$role" || reclaimable=0
+        fi
+        if (( reclaimable )); then
           echo "${pfx}remove dead mailbox: $role"
           if (( ! dry_run )); then
             rm -rf "$roledir"
@@ -2331,7 +2553,7 @@ cmd_gc() {
   # Rotate the log on a real run only — --dry-run touches nothing on disk.
   (( dry_run )) || _rotate_log
 
-  echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s) (max-age ${max_age_days}d)"
+  echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s), $dead_lettered dead-lettered message(s) (max-age ${max_age_days}d)"
 }
 
 # ----- dispatch -------------------------------------------------------------

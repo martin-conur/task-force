@@ -141,6 +141,26 @@ runbook_block() {
   refute_output "0"
 }
 
+@test "the flapping row names --manual as a cause, not just an old binary" {
+  # `--manual` short-circuits the block that emits BOTH the skipping and
+  # proceeding lines, so it writes only `unregister role=`. A runbook that
+  # attributes a role=/proceeding gap solely to a stale binary misdiagnoses
+  # the case that actually occurs (#205: an unisolated test suite looping
+  # `radio unregister --manual` against the developer's live role).
+  run grep -cE 'if \[\[ "\$manual" != true \]\]' "$REPO_ROOT_REAL/bin/radio"
+  assert_success
+  refute_output "0"
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}"; do
+    local block
+    block=$(runbook_block "$f")
+    [[ "$f" == *README.md ]] && block=$(sed -n '/^### When radio misbehaves$/,/^## /p' "$f")
+    run grep -cF 'it writes only `role=`' <<<"$block"
+    refute_output "0"
+    run grep -cF 'old `radio` binary' <<<"$block"
+    refute_output "0"
+  done
+}
+
 @test "the runbook stays loadout-generic (#177)" {
   # It ships verbatim into gh / jira / notion / local repos, so it must not
   # name one tracker's tooling.

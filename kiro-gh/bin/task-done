@@ -131,14 +131,17 @@ fi
 # `|| true` is a safety net: $TASK_FORCE_ROLE should be set inside a worker
 # tab, but if it isn't (e.g., task-done invoked from an unexpected shell)
 # the no-op must not abort cleanup. `radio unregister` itself already
-# silently exits when $TASK_FORCE_ROLE is unset (#93). Redirect stdin from
-# /dev/null so `radio unregister` doesn't inherit task-done's stdin — under
-# `--force` the calling shell may have piped `y` (or any other content)
-# to confirm something else, and post-#151 a non-empty stdin without a
-# parseable JSON reason triggers the cascade-skip path. That's correct
-# behaviour for SessionEnd hook invocations but wrong for explicit
-# task-done cleanup, which must always proceed with the unregister.
-radio unregister </dev/null 2>/dev/null || true
+# silently exits when $TASK_FORCE_ROLE is unset (#93).
+#
+# `--manual` is the explicit opt-in (#187). On hook-shaped stdin `radio
+# unregister` now defaults to NOT wiping: an empty payload is byte-identical
+# whether it came from deliberate cleanup or a spurious SessionEnd firing, and
+# 98.7% of observed wipes were the latter. This call site is real cleanup —
+# the worktree and the tab are both about to go — so it declares that instead
+# of letting radio infer intent from the shape of its stdin. Keep the
+# /dev/null redirect regardless, so the payload read can't swallow whatever
+# the calling shell piped in (under `--force` that may be a stray `y`).
+radio unregister --manual </dev/null 2>/dev/null || true
 
 # Sweep this worker's radio mailbox (#169). Once the worktree and tab are gone
 # the role is dead by definition, so its inbox/processed dirs are pure residue —

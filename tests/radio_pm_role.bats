@@ -180,7 +180,7 @@ _inbox_count() {  # $1 = role
   "$RADIO" register --role pm-primary --tab pm-primary --agent claude
   "$RADIO" register-alias --role pm-other --alias pm-primary --repo /x/other
   assert [ -f "$TASK_FORCE_HOME/radio/sessions/pm-other.info" ]
-  TASK_FORCE_ROLE=pm-primary "$RADIO" unregister
+  TASK_FORCE_ROLE=pm-primary "$RADIO" unregister --manual
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm-primary.info" ]
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm-other.info" ]
 }

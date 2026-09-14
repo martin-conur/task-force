@@ -41,6 +41,10 @@ KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.
 # pin a loadout by prefixing `AW_IMPL=<impl>` on the `run` invocation; the
 # kiro-gh task-reviewer is still a per-loadout file (kiro parity is #146).
 RADIO="$REPO_ROOT_REAL/bin/radio"
+# Captured Claude Code SessionEnd hook payloads (#187). Tests feed these to
+# `radio unregister` on stdin instead of hand-building JSON — see
+# tests/fixtures/hook-payloads/README.md for provenance and counts.
+HOOK_PAYLOADS="$REPO_ROOT_REAL/tests/fixtures/hook-payloads"
 TASK_PM="$REPO_ROOT_REAL/bin/task-pm"
 TASK_REVIEWER="$REPO_ROOT_REAL/bin/task-reviewer"
 TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"

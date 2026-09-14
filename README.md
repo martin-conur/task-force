@@ -385,7 +385,7 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 | `radio read <id>`                   | Print one message AND mark it acknowledged (moves `inbox/` → `processed/`) |
 | `radio read --peek <id>`            | Print without acknowledging — for inspection / debugging |
 | `radio ack <id>`                    | Mark it acknowledged (idempotent — no-op if already processed by a prior `read`) |
-| `radio register` / `radio unregister` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`) |
+| `radio register` / `radio unregister [--manual]` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`). `unregister` defaults to **not** removing anything when it is hook-invoked (stdin is not a terminal): it wipes only when the piped `SessionEnd` payload names a real-exit `reason` (`logout` / `prompt_input_exit` / `other`), and logs a skip for `clear` / `resume`, an unparseable payload, or an empty one. `--manual` (alias `--force`) is the explicit opt-in for deliberate cleanup — it bypasses the stdin inspection entirely and is what `task-done` passes |
 | `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
 | `radio stop-hook`                   | Stop-hook entrypoint: empty inbox → mark idle; unread messages → mark busy and emit Stop-hook block JSON so the agent continues and drains them |
 | `radio prompt-hook`                 | UserPromptSubmit-hook entrypoint: mark busy; if the inbox has unread messages, print a one-line summary that Claude Code injects into the model's context |

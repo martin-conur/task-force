@@ -57,31 +57,107 @@ teardown() {
   assert [ ! -f "$sess" ]
 }
 
-@test "unregister proceeds when stdin payload has reason=prompt_input_exit (process EOF)" {
+@test "unregister proceeds on a captured reason=prompt_input_exit payload (process EOF)" {
+  # Real captured SessionEnd payload, not a hand-built {"reason":...} stub —
+  # 19 of these in the #187 log window. Pins the full-shape path: the extra
+  # session_id / transcript_path / cwd / prompt_id fields must not perturb the
+  # reason extraction.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
-  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"prompt_input_exit\"}' | '$RADIO' unregister"
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister < '$HOOK_PAYLOADS/sessionend-prompt-input-exit.json'"
+  assert_success
+  assert [ ! -f "$sess" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "proceeding (reason=prompt_input_exit)"
+}
+
+@test "unregister proceeds on a captured reason=other payload (catch-all real exit)" {
+  # Real captured payload, 5-key variant (no prompt_id) — 23 in the window.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister < '$HOOK_PAYLOADS/sessionend-other.json'"
+  assert_success
+  assert [ ! -f "$sess" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "proceeding (reason=other)"
+}
+
+# ----- empty payload on non-tty stdin (#187) --------------------------------
+#
+# The dominant production shape by a factor of 75: the hook fires, stdin is a
+# pipe, and it carries zero bytes. Pre-#187 both the skip-check and the
+# diagnostic log were gated on `[[ -n "$HOOK_PAYLOAD" ]]`, so this case ran
+# neither guard and fell straight through to `rm -f` without logging a thing —
+# 3,165 of 3,207 wipes in the 2026-05-24 → 2026-09-14 log (98.7%), worst role
+# 457 wipes in under 8h. Each wipe costs the TAB_ID binding, which is where the
+# "tab id unresolved" / "no TAB_ID" send failures in the same log come from.
+#
+# The ambiguity is genuine — task-done's `radio unregister </dev/null` produced
+# a byte-identical empty payload — so the fix inverts the default here and
+# gives task-done an explicit `--manual` opt-in instead.
+
+@test "unregister skips on an empty payload from non-tty stdin (#187)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local loadout_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+  assert [ -f "$sess" ]
+
+  # Zero-byte fixture, redirected in — exactly the stdin shape a real hook
+  # invocation presents (non-tty, no bytes). See fixtures/hook-payloads/README.
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister < '$HOOK_PAYLOADS/sessionend-empty.stdin'"
+  assert_success
+
+  # Session file AND both sidecars must survive.
+  assert [ -f "$sess" ]
+  assert [ -f "$loadout_sidecar" ]
+  assert [ -f "$agent_sidecar" ]
+  # And the skip must be logged — the pre-#187 path was silent, which is why
+  # 3,165 wipes went unexplained for four months.
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "skipping (empty payload on non-tty stdin"
+  assert_output --partial "role=worker-foo"
+}
+
+@test "unregister --manual removes everything despite the empty payload (task-done's path, #187)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local loadout_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+
+  # Same stdin as the skip case above; the flag is the only difference.
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister --manual < '$HOOK_PAYLOADS/sessionend-empty.stdin'"
+  assert_success
+  assert [ ! -f "$sess" ]
+  assert [ ! -f "$loadout_sidecar" ]
+  assert [ ! -f "$agent_sidecar" ]
+}
+
+@test "unregister --force is an alias for --manual (#187)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister --force < '$HOOK_PAYLOADS/sessionend-empty.stdin'"
   assert_success
   assert [ ! -f "$sess" ]
 }
 
-@test "unregister proceeds when stdin payload has reason=other (catch-all real exit)" {
+@test "unregister --manual wins over an intra-session reason=clear payload (#187)" {
+  # --manual is an explicit human/cleanup decision; it short-circuits the whole
+  # stdin inspection rather than being overridden by whatever got piped in.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
-  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"other\"}' | '$RADIO' unregister"
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister --manual < '$HOOK_PAYLOADS/sessionend-clear.json'"
   assert_success
   assert [ ! -f "$sess" ]
 }
 
-@test "unregister proceeds when stdin is empty (manual invocation from task-done)" {
+@test "unregister rejects an unknown option instead of silently wiping (#187)" {
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
-  # task-done calls `radio unregister 2>/dev/null || true`. Its stdin is
-  # whatever the calling shell has — typically not piped. Simulate that by
-  # closing stdin so jq sees nothing.
-  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister < /dev/null"
-  assert_success
-  assert [ ! -f "$sess" ]
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister --manul < /dev/null"
+  assert_failure
+  assert_output --partial "unknown option"
+  assert [ -f "$sess" ]
 }
 
 @test "unregister skips when stdin payload is not valid JSON (cascade pattern #151)" {
@@ -129,7 +205,7 @@ teardown() {
   assert [ -f "$agent_sidecar" ]
 
   # Single non-JSON character on stdin, exactly as the cascade fires it.
-  TASK_FORCE_ROLE=worker-foo run bash -c "printf 'y' | '$RADIO' unregister"
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister < '$HOOK_PAYLOADS/cascade-y.stdin'"
   assert_success
   # Session file AND both sidecars must survive — otherwise the next
   # _ensure_session_file would write LOADOUT=unknown / AGENT=claude.

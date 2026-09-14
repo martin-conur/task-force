@@ -120,12 +120,15 @@ teardown() {
 @test "non-TTY default: existing workflow doc is kept silently (exit 0)" {
   run "$KIRO_GH_TASK_INIT" --owner old
   assert_success
-  run "$KIRO_GH_TASK_INIT" --owner ignored
+  # Sentinel must be a string that cannot occur in the doc's prose: the
+  # refute below scans the whole rendered file, so an ordinary English word
+  # ("ignored") false-fails the moment the template text happens to use it.
+  run "$KIRO_GH_TASK_INIT" --owner sentinel-not-written
   assert_success
   assert_output --partial "kept"
   run cat "$TARGET_DIR/.kiro/steering/gh-workflow.md"
   assert_output --partial "old"
-  refute_output --partial "ignored"
+  refute_output --partial "sentinel-not-written"
 }
 
 @test "--force overwrites existing gh-workflow.md" {

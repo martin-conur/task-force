@@ -198,3 +198,49 @@ file + newest inbox/processed entry older than the cutoff), expires old
 `processed/` messages on live roles, and rotates the top-level `log` once it
 passes ~1MB — so no cron is needed. Preview a sweep with `radio gc --dry-run`,
 or force one with a custom window via `radio gc --max-age-days N`. `task-done --remove-worktree` also sweeps its own role's mailbox on cleanup.
+
+### When radio misbehaves
+
+Every radio failure found so far has been a **notification** failure, not a
+lost message: a session file wiped out from under a live role, a wake that
+typed text nobody submitted, a stop-hook that let an unread message sit. The
+mail itself is never deleted — it waits in
+`~/.task-force/radio/mailbox/<role>/inbox/` until someone reads it. So when
+radio looks broken, start at the log (`~/.task-force/radio/log`), not at the
+mailbox.
+
+| Symptom | Cause and check |
+|---------|-----------------|
+| Pinged a role, nothing happened | Re-read the sender's own outcome line — only `delivered` means a keystroke landed; every other line names its own reason. Then `ls ~/.task-force/radio/sessions/` (is the role there, spelled exactly?) and `radio orphans` (a >1h-stale heartbeat means the tab is gone). In the recipient's own tab, `radio check` tells you whether the message arrived and simply wasn't acted on. |
+| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. To stop it recurring, relaunch the PM with plain `task-pm` (auto-submit is the default; `--no-auto-submit` is the opt-out) or the worker with `task-work --auto`. The flag is read off the **recipient's** file, after any `--also` alias hop. |
+| A role keeps vanishing from `sessions/` | Session flapping — something fires a session-end wipe on an intra-session event and takes `TAB_ID` with it. Compare `grep -c 'unregister role='`, `'unregister: proceeding'` and `'unregister: skipping'` in the log: post-#187 `skipping` should carry the bulk of the traffic, and `role=` should be close to `proceeding` plus however many `--manual` calls `task-done` made. `role=` far above both means an **old `radio` binary** is running — every non-`--manual` call logs one or the other now. `radio` on `PATH` is a symlink into a checkout; run `ls -l "$(command -v radio)"` and confirm that tree is current. |
+| `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
+| A role idles on a message sitting in its own inbox | Fixed in #197. `BLOCKED_IDS=` in the session file records which ids the last stop-hook block was about, so a message arriving mid-drain earns its own continuation. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the same ids were ignored twice. |
+
+The log is the only place several of these states are distinguishable at all.
+It is shared by every repo and role on the machine, so read timestamps rather
+than raw counts — and a field missing from an old line means an older binary
+wrote it, not that the value was unset:
+
+```bash
+L=~/.task-force/radio/log
+grep -c 'send id=' "$L"; grep -c 'send: woke' "$L"   # sent vs. actually woken
+grep -oE 'is busy|is awaiting|looks dead|no session for|has no TAB_ID|tab id unresolved|no writable pane|write-chars failed' "$L" | sort | uniq -c | sort -rn
+grep -oE 'skipping \(empty payload on [a-z-]+ stdin' "$L" | sort | uniq -c
+grep -oE 'tab_id_src=[a-z-]+' "$L" | sort | uniq -c   # `none` = role is unwakeable
+grep -c 'no tab binding for' "$L"; grep -c 'loadout=unknown' "$L"
+```
+
+Undelivered mail is never dropped. The message is written to the inbox
+**before** any wake is attempted, so every outcome other than `delivered`
+means "on disk, waiting" rather than "gone". `radio gc` never touches
+`inbox/` (only `processed/`), and it refuses to reclaim a role's mailbox at
+all while that inbox still holds unread mail. There is no dead-letter queue —
+an undeliverable message just waits, and `radio gc --dry-run` shows what a
+sweep would remove without removing it.
+
+When the wake itself fails, the backstops still apply: the `Stop` hook makes
+the agent drain a queued message at the end of its current turn, the
+`UserPromptSubmit` hook puts the unread summary in front of it at the next
+prompt, and a fresh `SessionStart` register reports whatever queued while the
+role was offline. A failed wake is a latency problem here, not a lost message.

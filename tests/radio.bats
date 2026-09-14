@@ -64,19 +64,21 @@ teardown() {
   assert_output "STATE=awaiting"
 }
 
-@test "unregister removes the session file" {
+@test "unregister --manual removes the session file" {
   "$RADIO" register --role pm --tab pm --agent claude
-  TASK_FORCE_ROLE=pm "$RADIO" unregister
+  # --manual is the explicit opt-in (#187): without it, a non-tty stdin with no
+  # real-exit reason is treated as a spurious hook firing and nothing is wiped.
+  TASK_FORCE_ROLE=pm "$RADIO" unregister --manual
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm.info" ]
 }
 
 @test "lifecycle: register → unregister leaves the sessions dir empty (#94)" {
   # Guards against orphan accumulation. The SessionEnd hook + task-done both
-  # call `radio unregister`; this test pins the contract that a clean cycle
-  # leaves no session file behind.
+  # call `radio unregister` (task-done with `--manual`, #187); this test pins
+  # the contract that a clean cycle leaves no session file behind.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
   assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info" ]
-  TASK_FORCE_ROLE=worker-foo "$RADIO" unregister
+  TASK_FORCE_ROLE=worker-foo "$RADIO" unregister --manual
   run bash -c "ls '$TASK_FORCE_HOME/radio/sessions/' 2>/dev/null | wc -l | tr -d ' '"
   assert_output "0"
 }

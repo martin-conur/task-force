@@ -28,7 +28,11 @@ Usage:
   radio prompt-hook                      UserPromptSubmit-hook entrypoint: mark busy; if the
                                          inbox has unread messages, print a one-line summary
                                          (injected into the model's context by Claude Code)
-  radio unregister                       remove this role's session file
+  radio unregister [--manual]            remove this role's session file. Hook-invoked
+                                         (non-tty stdin) it removes nothing unless the
+                                         payload names a real-exit reason; --manual
+                                         (alias --force) is the explicit opt-in used by
+                                         task-done
   radio orphans                          list session files with stale (>1h) heartbeat
   radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
                                          messages (default N=14) and rotate the log
@@ -1254,6 +1258,18 @@ cmd_unregister() {
   _silent_exit_if_no_role
   _require_role
 
+  # --manual (alias --force) is the explicit "a human or a cleanup script asked
+  # for this" opt-in (#187). It bypasses the stdin inspection below entirely,
+  # so a caller that *means* to tear the session down says so instead of having
+  # it inferred from the shape of its stdin.
+  local manual=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --manual|--force) manual=true; shift ;;
+      *) echo "unregister: unknown option '$1'" >&2; return 1 ;;
+    esac
+  done
+
   # When invoked from Claude Code's SessionEnd hook, a JSON payload is piped
   # on stdin with a `reason` field. The hook fires on intra-session events
   # (reason=clear from `/clear`, reason=resume from `/compact` and session
@@ -1263,51 +1279,67 @@ cmd_unregister() {
   # immediately afterwards logging "no session file" against the now-missing
   # file (#107 review).
   #
-  # Manual invocations (e.g. from task-done, or a user typing `radio
-  # unregister` in a shell) don't pipe a JSON payload — proceed unconditionally
-  # in that case. We only filter when both (a) stdin is not a terminal and
-  # (b) a parseable `reason` is present.
-  if [[ ! -t 0 ]]; then
+  # The default on this path is NON-destructive (#187): we wipe only for an
+  # explicitly recognized real-exit reason and skip everything else. A skipped
+  # wipe self-heals at the next `register`; a wrong wipe costs the session
+  # binding (TAB_ID included) for the rest of the tab's life, which is where
+  # the "tab id unresolved" send failures come from. Manual cleanup declares
+  # itself with --manual above rather than being inferred from empty stdin.
+  if [[ "$manual" != true && ! -t 0 ]]; then
     local reason="" payload_oneline
     _read_hook_payload
-    if [[ -n "$HOOK_PAYLOAD" ]] && command -v jq >/dev/null 2>&1; then
-      reason=$(_hook_payload_field reason)
-      case "$reason" in
-        clear|resume)
-          _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
-          return 0
-          ;;
-        "")
-          # Cascade pattern (#151): payload is present but contains no
-          # parseable `.reason` field. The PR-#150 diagnostic showed bursts of
-          # 144 unregister calls in ~25s with payload literally "y" and
-          # reason=<unset> — phantom invocations from somewhere upstream of
-          # Claude Code's documented SessionEnd hook (which always includes
-          # reason ∈ {clear, resume, logout, prompt_input_exit, other}).
-          # Treat these the same as clear/resume: known non-real-exit events
-          # that must not wipe the session file or the sidecars. Real exits
-          # still flow through the logout/prompt_input_exit/other branches
-          # below and clean up normally; manual invocations (no stdin) also
-          # proceed because `[[ ! -t 0 ]]` is false then.
-          payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
-          _log "unregister: skipping (reason=<unset> — cascade, no real-exit signal) role=$TASK_FORCE_ROLE payload=$payload_oneline"
-          return 0
-          ;;
-      esac
+
+    # Dominant production case (#187): stdin is not a terminal but carries
+    # zero bytes, so there is no reason to parse and nothing that identifies a
+    # real exit. 3,165 of 3,207 wipes in a 2026-05-24 → 2026-09-14 log (98.7%)
+    # took this shape; the worst single role lost its session 457 times in
+    # under 8 hours. Pre-#187 both the skip-check and the diagnostic log were
+    # gated on a non-empty payload, so these fell straight through to `rm -f`
+    # unlogged. Treat them as non-real-exit, same as clear/resume — but log,
+    # so the path is never silent again.
+    if [[ -z "$HOOK_PAYLOAD" ]]; then
+      _log "unregister: skipping (empty payload on non-tty stdin — no real-exit signal; use --manual to force) role=$TASK_FORCE_ROLE"
+      return 0
     fi
-    # Instrumentation for #140: when the hook fires with a payload that
-    # *doesn't* match the skip-list, capture the full payload so we can see
-    # what reason (or non-reason) is driving the unregister cascade. Empirically
-    # observed as bursts of 20+ unregister calls in ~30s on long-running
-    # worker sessions; the root cause needs the payload to investigate. Log
-    # is compacted to one line via tr so it doesn't fragment radio.log. Post-
-    # #151, an empty reason is already short-circuited above, so this line
-    # only fires for non-empty named reasons (logout, prompt_input_exit,
-    # other, or anything new Claude Code adds in the future).
-    if [[ -n "$HOOK_PAYLOAD" ]]; then
-      payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
-      _log "unregister: proceeding (reason=${reason:-<unset>}) role=$TASK_FORCE_ROLE payload=$payload_oneline"
+
+    # Fail SAFE without jq (#192 review), mirroring cmd_stop_hook's guard. A
+    # jq-less host cannot read `.reason` at all, so no payload here is an
+    # *identified* real exit — including a clear/resume one, whose #151
+    # protection would otherwise evaporate exactly when we can't parse it.
+    # Falling through would log "proceeding (reason=<unset>)" and wipe, which
+    # is the same destructive-on-ambiguity resolution this ticket exists to
+    # remove. --manual short-circuits above, so task-done cleanup is unaffected.
+    if ! command -v jq >/dev/null 2>&1; then
+      _log "unregister: skipping (jq unavailable — cannot identify a real exit; use --manual to force) role=$TASK_FORCE_ROLE"
+      return 0
     fi
+
+    reason=$(_hook_payload_field reason)
+    case "$reason" in
+      clear|resume)
+        _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
+        return 0
+        ;;
+      "")
+        # Cascade pattern (#151): payload is present but contains no
+        # parseable `.reason` field. The PR-#150 diagnostic showed bursts of
+        # 144 unregister calls in ~25s with payload literally "y" and
+        # reason=<unset> — phantom invocations from somewhere upstream of
+        # Claude Code's documented SessionEnd hook (which always includes
+        # reason ∈ {clear, resume, logout, prompt_input_exit, other}).
+        # Treat these the same as clear/resume: known non-real-exit events
+        # that must not wipe the session file or the sidecars.
+        payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
+        _log "unregister: skipping (reason=<unset> — cascade, no real-exit signal) role=$TASK_FORCE_ROLE payload=$payload_oneline"
+        return 0
+        ;;
+    esac
+    # Everything reaching here is a named real-exit reason (logout,
+    # prompt_input_exit, other, or anything new Claude Code adds later) — the
+    # loud path, unchanged. Capture the full payload on one line so radio.log
+    # keeps a record of what drove the wipe.
+    payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
+    _log "unregister: proceeding (reason=${reason:-<unset>}) role=$TASK_FORCE_ROLE payload=$payload_oneline"
   fi
 
   local f
@@ -2123,7 +2155,7 @@ case "$sub" in
   awaiting)    cmd_awaiting ;;
   stop-hook)   cmd_stop_hook ;;
   prompt-hook) cmd_prompt_hook ;;
-  unregister)  cmd_unregister ;;
+  unregister)  cmd_unregister "$@" ;;
   orphans)     cmd_orphans ;;
   gc)          cmd_gc "$@" ;;
   -h|--help)   usage 0 ;;

@@ -1332,7 +1332,17 @@ cmd_unregister() {
   # binding (TAB_ID included) for the rest of the tab's life, which is where
   # the "tab id unresolved" send failures come from. Manual cleanup declares
   # itself with --manual above rather than being inferred from empty stdin.
-  if [[ "$manual" != true && ! -t 0 ]]; then
+  #
+  # #187 gated this whole block on `! -t 0` as well, which left the guard
+  # bypassable by the one caller most likely to be a mistake: a human typing
+  # `radio unregister` in a terminal wiped the session with neither a
+  # `skipping` nor a `proceeding` line in the log (#198). `-t 0` is demoted
+  # here from wipe-authority to output-channel — nothing decides a wipe except
+  # --manual or a named real-exit reason, and the tty test only decides whether
+  # a skip is ALSO announced on stderr. Removing it cannot reintroduce a
+  # blocking `cat` on a terminal: _read_hook_payload carries its own `! -t 0`
+  # test, which was the original reason this gate existed.
+  if [[ "$manual" != true ]]; then
     local reason="" payload_oneline
     _read_hook_payload
 
@@ -1345,7 +1355,16 @@ cmd_unregister() {
     # unlogged. Treat them as non-real-exit, same as clear/resume — but log,
     # so the path is never silent again.
     if [[ -z "$HOOK_PAYLOAD" ]]; then
-      _log "unregister: skipping (empty payload on non-tty stdin — no real-exit signal; use --manual to force) role=$TASK_FORCE_ROLE"
+      # Interactive invocation (#198): ~/.task-force/radio/log is not where a
+      # person is looking, so the "use --manual to force" guidance has to reach
+      # the terminal too — otherwise demoting the tty gate would trade a silent
+      # wipe for a silent no-op, which is worse interactive UX than the bug.
+      local stdin_shape="non-tty"
+      if [[ -t 0 ]]; then
+        stdin_shape="tty"
+        echo "radio unregister: refusing to wipe ${TASK_FORCE_ROLE:-<unset role>} without an explicit signal (no SessionEnd payload on stdin) — re-run with --manual to force." >&2
+      fi
+      _log "unregister: skipping (empty payload on $stdin_shape stdin — no real-exit signal; use --manual to force) role=$TASK_FORCE_ROLE"
       return 0
     fi
 

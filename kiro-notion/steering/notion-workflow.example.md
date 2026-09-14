@@ -127,6 +127,13 @@ here, treat this as routine housekeeping rather than a crash-only step: a stale
 session still reads as `STATE=idle` to senders, so radio will keep aiming wakes
 at a tab that no longer exists.
 
+`radio unregister` on its own is **not** a cleanup command (#198). With no
+`SessionEnd` payload naming a real exit on stdin it refuses and says so on
+stderr, whatever shape that stdin has — a terminal used to bypass the guard
+and wipe the session silently. Pass `--manual` when you mean to tear the
+session down; that is what `task-done` does, and it still works from any
+stdin shape.
+
 The session file is a soft cache, not the source of truth (#188). Two tiny
 sidecars sit beside it — `<role>.loadout` and `<role>.agent` — holding the
 values a re-seed cannot read out of the `.info` file it is replacing, and they

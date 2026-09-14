@@ -57,6 +57,30 @@ make_nojq_bin() {
   done
   printf '%s' "$d"
 }
+# Run `bash -c "$1"` with a real pty on stdin, so `[[ -t 0 ]]` inside the
+# command under test is TRUE (#198: the unregister guard now uses that test to
+# decide whether a skip is announced on stderr, and #187's tty bypass can only
+# be regression-tested from a terminal). `script` is the portable-enough pty
+# allocator, but its two flavors disagree on argument order, and CI runs both:
+#   util-linux (ubuntu): script -qec "<cmd>" /dev/null
+#   BSD       (macOS):   script -q /dev/null <cmd> <args...>
+# Both propagate the child's exit status with these flags, so `run pty_run …`
+# keeps working with assert_success / assert_failure. stdout and stderr are
+# merged by the pty; redirect stderr inside "$1" when a test needs to prove
+# which channel a line came out on. Prints the child's output verbatim except
+# for the CR that a pty appends to every line, which is stripped so
+# assert_output --partial matches behave as they do off-pty.
+pty_run() {
+  local cmd="$1" out rc=0
+  if script --version 2>/dev/null | grep -qi util-linux; then
+    out=$(script -qec "$cmd" /dev/null) || rc=$?
+  else
+    out=$(script -q /dev/null bash -c "$cmd") || rc=$?
+  fi
+  printf '%s' "$out" | tr -d '\r'
+  return "$rc"
+}
+
 TASK_PM="$REPO_ROOT_REAL/bin/task-pm"
 TASK_REVIEWER="$REPO_ROOT_REAL/bin/task-reviewer"
 TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"

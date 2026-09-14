@@ -1456,6 +1456,71 @@ cmd_awaiting() { _hook_role_gate; _update_state awaiting; }
 # model. Instead, when the inbox is non-empty we emit Claude Code's
 # `{"decision": "block", ...}` JSON on stdout (with exit 0), which forces the
 # agent to continue and drain the queue the moment its turn ends.
+# --- stop-hook blocked-id bookkeeping (#197) ---------------------------------
+# The loop-breaker below used to key off `stop_hook_active` alone, so ANY second
+# Stop allowed the stop — even when the inbox had grown since the block. A
+# message landing DURING the forced-continuation turn (state=busy → cmd_send
+# queues with no wake) therefore stranded until something else pulled it, which
+# for an idle `--auto` worker awaiting `approved-and-merged` is never: no human
+# prompts it (#164) and no SessionStart fires (#168). Observed 9 times in the
+# 2026-05-24 → 2026-09-14 log, every one a handoff that silently didn't happen.
+#
+# The fix compares the unread *id set* across the block instead of the flag: a
+# genuinely new id earns one more continuation, while an agent that ignores the
+# same ids twice still stops — the infinite-loop protection #163 added is
+# preserved exactly.
+#
+# The set lives in a `BLOCKED_IDS=` field of the session file, deliberately NOT
+# in a sidecar: #188 sidecars survive `unregister` by design, and a set that
+# outlived its session could suppress a legitimate block for a later, unrelated
+# session of the same role. The .info file's lifetime is exactly the lifetime
+# this state wants. Message ids are `<compact-ts>-from-<role>-<rand>` — no
+# commas, no `=` — so a comma-joined list survives _session_field's grep+cut
+# parse unchanged.
+_blocked_ids_join() {
+  local out="" f id
+  for f in "$@"; do
+    id="${f##*/}"; id="${id%.md}"
+    out+="${out:+,}$id"
+  done
+  printf '%s' "$out"
+}
+
+# rc 0 when any message file argument is absent from the recorded set — i.e.
+# something arrived after the block that forced this continuation.
+_blocked_ids_has_new() {
+  local recorded="$1"; shift
+  local f id
+  for f in "$@"; do
+    id="${f##*/}"; id="${id%.md}"
+    case ",${recorded}," in
+      *",${id},"*) ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Record the ids a block is about. Silent no-op when there is no session file
+# to hold them — the next Stop then reads an empty set and falls back to the
+# flag-only behavior, so a role without a session file can never loop.
+_blocked_ids_record() {
+  local ids="$1" f
+  f=$(_session_file "$TASK_FORCE_ROLE")
+  [[ -f "$f" ]] || return 0
+  _session_set_fields "$f" "BLOCKED_IDS=$ids"
+}
+
+# Drop the record. Cheap-exits when there is nothing recorded so the common
+# empty-inbox Stop doesn't pay for an extra session-file rewrite.
+_blocked_ids_clear() {
+  local f
+  f=$(_session_file "$TASK_FORCE_ROLE")
+  [[ -f "$f" ]] || return 0
+  grep -q '^BLOCKED_IDS=.' "$f" || return 0
+  _session_set_fields "$f" "BLOCKED_IDS="
+}
+
 cmd_stop_hook() {
   _hook_role_gate
 
@@ -1466,15 +1531,19 @@ cmd_stop_hook() {
   # exit — which the Stop-hook contract interprets as "block, with raw
   # stderr as the reason".
   local inbox n=0
+  local msgs=()
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
   if [[ -d "$inbox" ]]; then
     shopt -s nullglob
-    local msgs=("$inbox"/*.md)
+    msgs=("$inbox"/*.md)
     shopt -u nullglob
     n=${#msgs[@]}
   fi
 
   if (( n == 0 )); then
+    # Drained: whatever a block was about is gone, so the record has nothing
+    # left to describe (#197 — "cleaned up on drain").
+    _blocked_ids_clear
     _update_state idle
     return 0
   fi
@@ -1498,16 +1567,32 @@ cmd_stop_hook() {
   active=$(_hook_payload_field stop_hook_active)
 
   # stop_hook_active=true means this Stop event was itself caused by a prior
-  # block from this hook. Blocking again would loop the agent forever — the
-  # agent already got one forced continuation to drain the inbox; let it
-  # stop. Known gap: a message that arrives DURING the drain turn (state=busy
-  # → cmd_send queues silently) strands here until the next wake — logged for
-  # visibility; #164 (prompt-hook injection) and #168 (drain-on-register)
-  # close that path from other directions.
+  # block from this hook. Which ids caused it decides what happens now (#197):
+  # the same ids mean the agent declined to drain them and blocking again
+  # would loop it forever, while a NEW id is a message that arrived during the
+  # drain turn and has had no continuation of its own yet.
   if [[ "$active" == "true" ]]; then
-    _log "stop-hook: stop_hook_active=true — allowing stop ($n still unread) role=$TASK_FORCE_ROLE"
-    _update_state idle
-    return 0
+    local recorded
+    recorded=$(_session_field "$(_session_file "$TASK_FORCE_ROLE")" BLOCKED_IDS 2>/dev/null || true)
+
+    # No recorded set to compare against: the block never persisted one (no
+    # session file at the time) or the file has been re-seeded/unregistered
+    # since. Without evidence the loop-breaker wins — this is also what keeps
+    # a session-file-less role from blocking on every single Stop.
+    if [[ -z "$recorded" ]]; then
+      _log "stop-hook: stop_hook_active=true, no recorded block set — allowing stop ($n still unread) role=$TASK_FORCE_ROLE"
+      _update_state idle
+      return 0
+    fi
+
+    if ! _blocked_ids_has_new "$recorded" "${msgs[@]}"; then
+      _log "stop-hook: stop_hook_active=true, no new message since the block — allowing stop ($n still unread) role=$TASK_FORCE_ROLE"
+      _blocked_ids_clear
+      _update_state idle
+      return 0
+    fi
+
+    _log "stop-hook: stop_hook_active=true but new message(s) arrived during the drain turn — blocking again ($n unread) role=$TASK_FORCE_ROLE"
   fi
 
   # We're about to block, so the agent WILL continue — busy is the truthful
@@ -1515,6 +1600,11 @@ cmd_stop_hook() {
   # on a hook-forced continuation) where cmd_send sees idle and write-chars
   # into a running pane mid-drain (#172 review).
   _update_state busy
+
+  # Record the ids this block is about, so the next Stop can tell a genuinely
+  # new arrival from the same unread message (#197). After _update_state, which
+  # re-seeds the session file if it went missing.
+  _blocked_ids_record "$(_blocked_ids_join "${msgs[@]}")"
 
   # The backticks in the reason are literal markdown for the agent reading
   # the block message, not command substitution.

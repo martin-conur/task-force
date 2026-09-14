@@ -22,6 +22,10 @@ setup() {
   setup_repo
   setup_stubs
   setup_worktree "$SLUG"
+  # task-done runs `radio unregister --manual`, which wipes a session file
+  # unconditionally by design. Without an isolated radio home that lands on the
+  # live session of whoever ran the suite (#203).
+  setup_task_force_home
   cd "$WORKTREE_BASE/$SLUG"
 }
 
@@ -426,13 +430,12 @@ add_submodule_to_worktree() {
 # ---------------------------------------------------------------------------
 
 # Pre-register a radio session for the current "worker" role, then assert
-# task-done removes it. Uses the real radio binary on PATH and an isolated
-# $TASK_FORCE_HOME tempdir so the host's session dir is untouched.
+# task-done removes it. Uses the real radio binary on PATH; setup()'s isolated
+# $TASK_FORCE_HOME keeps the host's session dir untouched.
 assert_task_done_unregisters() {
   local script="$1"
   local role="worker-task-force-$SLUG"
 
-  setup_task_force_home
   cp "$RADIO" "$STUB_BIN/radio"
   chmod +x "$STUB_BIN/radio"
   export TASK_FORCE_ROLE="$role"
@@ -610,7 +613,6 @@ assert_ambient_pr_number_does_not_force_delete() {
 @test "task-done cleanup tolerates radio binary missing from PATH (#94)" {
   # The `|| true` safety net: if radio isn't installed (or PATH doesn't
   # include it), cleanup must still succeed.
-  setup_task_force_home
   export TASK_FORCE_ROLE="worker-task-force-$SLUG"
   # Note: deliberately do NOT install radio into $STUB_BIN here.
 
@@ -624,7 +626,6 @@ assert_ambient_pr_number_does_not_force_delete() {
 # ---------------------------------------------------------------------------
 
 @test "claude-gh: --remove-worktree sweeps its own radio mailbox" {
-  setup_task_force_home
   export TASK_FORCE_ROLE="worker-task-force-$SLUG"
   local mbx="$TASK_FORCE_HOME/radio/mailbox/$TASK_FORCE_ROLE"
   mkdir -p "$mbx/inbox" "$mbx/processed"
@@ -636,7 +637,6 @@ assert_ambient_pr_number_does_not_force_delete() {
 }
 
 @test "claude-local: --remove-worktree sweeps its own radio mailbox" {
-  setup_task_force_home
   export TASK_FORCE_ROLE="worker-task-force-$SLUG"
   local mbx="$TASK_FORCE_HOME/radio/mailbox/$TASK_FORCE_ROLE"
   mkdir -p "$mbx/inbox" "$mbx/processed"
@@ -648,7 +648,6 @@ assert_ambient_pr_number_does_not_force_delete() {
 }
 
 @test "claude-gh: mailbox sweep is a no-op (keeps mailbox root) when role is unset" {
-  setup_task_force_home
   unset TASK_FORCE_ROLE
   mkdir -p "$TASK_FORCE_HOME/radio/mailbox/some-other-role"
 

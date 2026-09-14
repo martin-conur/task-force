@@ -615,6 +615,17 @@ git submodule update --init --recursive   # first time only
 ./run_tests.sh task_done                  # run a single suite
 ```
 
+**Radio-home isolation.** The suite drives destructive radio commands —
+`task-done` calls `radio unregister --manual`, which wipes a session file
+unconditionally. `tests/setup_suite.bash` therefore points every run at a
+throwaway `$TASK_FORCE_HOME`, so no test can reach the `~/.task-force` of
+whoever ran it (#203; before the fix a full run wiped the runner's own live
+session 57 times, which made an agent worker unaddressable mid-run). You get
+that for free from `./run_tests.sh` *and* from a bare `bats tests/foo.bats`.
+If `$TASK_FORCE_HOME` is missing or aimed back at the real home, loading
+`tests/helpers/common.bash` aborts the run with an explanation rather than
+writing to the live mailbox.
+
 <details>
 <summary><b>Test suites</b> (click to expand)</summary>
 
@@ -640,12 +651,15 @@ git submodule update --init --recursive   # first time only
 | `kiro_local_task_init.bats`       | `kiro-local/bin/task-init` — `tasks/` scaffolding, `.kiro/steering/local-workflow.md`, agents |
 | `task_board.bats`                 | Shared `task-board` script — frontmatter parsing, sidecar overlay, `_board.md` regen |
 | `task_done.bats`                  | `task-done` across combos — cleanup, PR, guards |
+| `radio_home_isolation.bats`       | The suite's own radio-home isolation — nothing lands under `$HOME/.task-force` |
 
 </details>
 
 Infrastructure:
 
 - `tests/helpers/common.bash` — `setup_repo`, `setup_stubs`, `setup_worktree`, `teardown_all`, `assert_stub_called`
+- `tests/setup_suite.bash` — runs once per bats invocation; exports the run-scoped `$TASK_FORCE_HOME`
+- `tests/helpers/radio_home.bash` — `task_force_home_is_isolated`, `require_isolated_task_force_home`
 - `tests/helpers/stubs/` — fakes for `zellij`, `gh`, `kiro-cli`, `claude`; every call lands in `$STUB_CALLS_DIR/*.calls`
 - `tests/libs/` — bats-core, bats-support, bats-assert as git submodules
 
@@ -672,6 +686,9 @@ load helpers/common
 
 setup() { setup_repo; setup_stubs; cd "$MAIN_REPO"; }
 teardown() { teardown_all; }
+
+# Anything that shells out to radio or task-done also wants a per-test mailbox:
+#   setup() { setup_repo; setup_stubs; setup_task_force_home; cd "$MAIN_REPO"; }
 
 @test "description" {
   run "$MY_SCRIPT" arg

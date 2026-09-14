@@ -17,6 +17,10 @@ setup() {
   setup_repo
   setup_stubs
   setup_worktree "$SLUG"
+  # task-done runs `radio unregister --manual`, which wipes a session file
+  # unconditionally by design. Without an isolated radio home that lands on the
+  # live session of whoever ran the suite (#203).
+  setup_task_force_home
   cd "$WORKTREE_BASE/$SLUG"
 }
 

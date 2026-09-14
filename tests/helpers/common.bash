@@ -4,6 +4,20 @@
 # shellcheck disable=SC2034  # path vars are used by the .bats files that load this helper
 
 REPO_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Radio-home isolation guard (#203). Every suite loads this helper, so this is
+# the chokepoint that catches a file (or a bats invocation that never picked up
+# tests/setup_suite.bash) about to drive the developer's live ~/.task-force.
+# shellcheck source=tests/helpers/radio_home.bash
+source "$REPO_ROOT_REAL/tests/helpers/radio_home.bash"
+# bats sources every file once with BATS_TEST_NAME=source to gather test names,
+# and that pass runs *before* setup_suite — so an unset $TASK_FORCE_HOME proves
+# nothing there. A home that is set but points at the real one is wrong on any
+# pass.
+if [[ -n "${TASK_FORCE_HOME:-}" || "${BATS_TEST_NAME:-}" != source ]]; then
+  require_isolated_task_force_home || exit 1
+fi
+
 KIRO_TASK_WORK="$REPO_ROOT_REAL/kiro-notion/bin/task-work"
 JIRA_TASK_WORK="$REPO_ROOT_REAL/claude-jira/bin/task-work"
 KIRO_TASK_DONE="$REPO_ROOT_REAL/kiro-notion/bin/task-done"
@@ -133,6 +147,9 @@ reset_radio_env() {
 setup_task_force_home() {
   TASK_FORCE_HOME=$(mktemp -d)
   export TASK_FORCE_HOME
+  # Flag ownership so teardown_all removes only a home this test created, and
+  # never the run-scoped one tests/setup_suite.bash hands down (#203).
+  TASK_FORCE_HOME_OWNED=1
   reset_radio_env
 }
 
@@ -161,7 +178,9 @@ teardown_all() {
   [[ -z "${WORKTREE_BASE:-}"   ]] || rm -rf "$WORKTREE_BASE"
   [[ -z "${STUB_BIN:-}"        ]] || rm -rf "$STUB_BIN"
   [[ -z "${STUB_CALLS_DIR:-}"  ]] || rm -rf "$STUB_CALLS_DIR"
-  [[ -z "${TASK_FORCE_HOME:-}" ]] || rm -rf "$TASK_FORCE_HOME"
+  if [[ -n "${TASK_FORCE_HOME_OWNED:-}" && -n "${TASK_FORCE_HOME:-}" ]]; then
+    rm -rf "$TASK_FORCE_HOME"
+  fi
 }
 
 # Seed the zellij stub with a JSON snapshot of tabs / panes for the radio

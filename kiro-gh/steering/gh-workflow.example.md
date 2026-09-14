@@ -95,6 +95,27 @@ When a worker finishes its task and has nothing pending, the `radio ready` step
 runs automatically via the `agentStop` hook — you don't need to invoke it
 manually.
 
+**Delivery here is best-effort — kiro agents pull, they don't receive.** The
+hooks under `.kiro/hooks/` keep each role's session file accurate, but kiro
+does not inject hook output into the agent's context, so nothing a hook prints
+ever reaches the model: `agentSpawn`'s offline-backlog summary is discarded,
+`userPromptSubmit` is a plain `radio busy` with no inbox summary, and
+`agentStop`'s `radio check` writes to the hook subshell rather than the agent.
+There is also no kiro equivalent of the Stop-hook block that makes a busy agent
+drain its queue before going idle. That leaves the zellij keystroke wake — one
+best-effort push with no fallback behind it.
+
+So the agents poll instead: every agent in `.kiro/agents/` carries a standing
+instruction to run `radio check` at the start of each turn and `radio read <id>`
+whatever it lists. If you are waiting on a handoff that seems not to have
+arrived, prompt the recipient tab — its next turn starts with a check.
+
+There is likewise no session-end trigger (`agentStop` fires per turn, not on
+session close), so closing a tab leaves its session file behind still
+advertising `STATE=idle`, and senders will keep trying to wake a tab that is
+gone. `task-done` unregisters on the worker happy path; for everything else,
+`radio orphans` is the cleanup step — see below.
+
 Full command form:
 
 ```bash
@@ -122,9 +143,12 @@ reviewer never approves, merges, or mutates status. The reviewer tab stays
 open showing the analysis; clean up with `task-done --remove-worktree` when
 done.
 
-If a worker tab dies unexpectedly (or kiro resumes a session without
-re-firing the `agentSpawn` hook), the session file's `LAST_HEARTBEAT` will go
-stale. Run `radio orphans` to list any session whose heartbeat is older than
-1 hour — those entries are safe to delete
+If a worker tab dies unexpectedly, is closed without `task-done`, or kiro
+resumes a session without re-firing the `agentSpawn` hook, the session file's
+`LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session whose
+heartbeat is older than 1 hour — those entries are safe to delete
 (`rm ~/.task-force/radio/sessions/<role>.info`) or leave for the next
-legitimate `radio register` to overwrite.
+legitimate `radio register` to overwrite. Because there is no session-end hook
+here, treat this as routine housekeeping rather than a crash-only step: a stale
+session still reads as `STATE=idle` to senders, so radio will keep aiming wakes
+at a tab that no longer exists.

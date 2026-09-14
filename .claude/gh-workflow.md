@@ -54,6 +54,26 @@ The worker reads these three values and updates the project item's Status field 
 
 Use the issue title as prefix: `<Issue title>: <short description>`
 
+### Pre-PR checklist (this repo)
+
+The `/worker` pre-PR checklist is deliberately repo-generic (it ships downstream
+verbatim via `task-init`). In **this** repo it resolves to:
+
+- **Changelog** — add an entry under `## [Unreleased]` in `CHANGELOG.md`
+  ([Keep a Changelog](https://keepachangelog.com) format). Include the
+  **"Upgrading: re-run `task-init <loadout>`"** note whenever installer-written
+  artifacts change (radio hooks, the copied `commands/*.md`, `settings.json`);
+  say so explicitly when no re-run is needed.
+- **Docs** — a model-facing or user-visible change also updates the README
+  section, the four `steering/*.example.md` templates, and the loadout workflow
+  docs (`.claude/*-workflow.md`). See PRs #172–#175 for the findings this
+  checklist encodes; #163 / #164 / #168 for the doc-beat precedent.
+- **Reuse / drift** — logic shared across loadouts lives behind `# region:`
+  sentinels guarded by `tools/check-drift.sh`; extract rather than copy a second
+  time, and add a sentinel + manifest entry when you do.
+- **Green** — run `./run_tests.sh`, `tools/check-drift.sh`, and `shellcheck -x`
+  on changed shell files; confirm `gh pr checks` after pushing.
+
 ### Shell Commands
 
 `task-work <slug> [gh-url] [options]` — create worktree + zellij tab + worker session
@@ -142,6 +162,16 @@ workers reach it by sending `--to pm`, which radio resolves to this repo's
 `pm-<reponame>` via the injected `$TASK_FORCE_PM_ROLE` or the sender's own identity. To oversee
 several repos from one PM tab, pass `task-pm --also <other-repo>` (repeatable):
 it writes an alias radio session so `pm-<other>` routes into this one inbox.
+
+Radio wakes addressed to a PM **auto-submit** (#189): the wake types
+`radio check` into the PM's prompt box and presses Enter for it, so a worker's
+report is drained without a keypress. Before this, every PM-bound wake sat
+unsubmitted in the input box while the sender was told `delivered` — the PM
+being the most-addressed role, that was the most-felt delivery defect in the
+system. Pass `task-pm --no-auto-submit` to keep the old human gate (the wake
+types `radio check` and waits for your Enter); worth it if you type long
+prompts into the PM box, since an incoming wake would otherwise submit whatever
+is half-typed there. `--also` aliases inherit the primary PM's setting.
 
 To dispatch a one-shot reviewer worker for a PR, run
 `task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab.

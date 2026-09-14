@@ -5,6 +5,7 @@
 #   - exports TASK_FORCE_ROLE / ZELLIJ_TAB = pm-<reponame>
 #   - exec's `claude /pm` (claude impls) / `kiro-cli chat --agent pm` (kiro)
 #   - --also aliases other repos onto this PM
+#   - exports TASK_FORCE_AUTO_SUBMIT=1 by default, honoring --no-auto-submit (#189)
 #   - errors out cleanly outside a git repo
 #
 # The loadout is pinned per-test via AW_IMPL (lib/detect-impl.sh resolution
@@ -128,7 +129,88 @@ teardown() {
   assert_success
   assert_output --partial "Usage: task-pm"
   assert_output --partial "--also"
+  assert_output --partial "--no-auto-submit"
+  # The accepted aliases must be discoverable, not just tolerated (#189 review).
+  assert_output --partial "Also accepted as --auto."
+  assert_output --partial "Also accepted as --no-auto."
   rm -rf "$outside"
+}
+
+# ----- radio auto-submit opt-in (#189) --------------------------------------
+#
+# task-pm exports TASK_FORCE_AUTO_SUBMIT so the SessionStart hook's
+# `radio register` persists AUTO_SUBMIT=1 into pm-<reponame>.info, which is
+# what flips `radio send`'s wake terminator from LF (types "radio check" and
+# waits for a human Enter) to CR (submits). Before #189 no PM ever set it, so
+# every ping to a PM sat unsubmitted in its input box. The session-file and
+# wake-terminator halves of the contract live in tests/radio_auto_submit.bats.
+
+@test "claude task-pm exports TASK_FORCE_AUTO_SUBMIT=1 by default (#189)" {
+  AW_IMPL=claude-gh run "$TASK_PM"
+  assert_success
+  run cat "$STUB_CALLS_DIR/claude.env"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "claude task-pm --no-auto-submit leaves TASK_FORCE_AUTO_SUBMIT unset (#189)" {
+  AW_IMPL=claude-gh run "$TASK_PM" --no-auto-submit
+  assert_success
+  run cat "$STUB_CALLS_DIR/claude.env"
+  refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+  # Still launched — the opt-out is not an error path.
+  run stub_calls claude
+  assert_output --partial "/pm"
+}
+
+@test "claude task-pm --no-auto-submit wins over an inherited env value (#189)" {
+  # A PM launched from a shell that already exported the flag (e.g. a tab
+  # spawned by task-work --auto) must still honor the explicit opt-out.
+  export TASK_FORCE_AUTO_SUBMIT=1
+  AW_IMPL=claude-gh run "$TASK_PM" --no-auto-submit
+  assert_success
+  run cat "$STUB_CALLS_DIR/claude.env"
+  refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "claude task-pm accepts --auto-submit / --auto as explicit no-ops (#189)" {
+  AW_IMPL=claude-gh run "$TASK_PM" --auto-submit
+  assert_success
+  run cat "$STUB_CALLS_DIR/claude.env"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+
+  rm -f "$STUB_CALLS_DIR/claude.env"
+  AW_IMPL=claude-gh run "$TASK_PM" --auto
+  assert_success
+  run cat "$STUB_CALLS_DIR/claude.env"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "claude task-pm --no-auto is accepted as an alias for --no-auto-submit (#189)" {
+  AW_IMPL=claude-gh run "$TASK_PM" --no-auto
+  assert_success
+  run cat "$STUB_CALLS_DIR/claude.env"
+  refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "kiro task-pm exports TASK_FORCE_AUTO_SUBMIT=1 by default (#189)" {
+  AW_IMPL=kiro-gh run "$TASK_PM"
+  assert_success
+  run cat "$STUB_CALLS_DIR/kiro-cli.env"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+}
+
+@test "task-pm --no-auto-submit composes with --also (#189)" {
+  setup_task_force_home
+  local primary other
+  primary=$(_clean_repo pmrepo)
+  other=$(_clean_repo otherrepo)
+  cd "$primary"
+
+  AW_IMPL=claude-gh run "$TASK_PM" --also "$other" --no-auto-submit
+  assert_success
+  assert_output --partial "Aliased pm-otherrepo → pm-pmrepo"
+  run cat "$STUB_CALLS_DIR/claude.env"
+  refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
 # ----- --also alias sessions (#165) -----------------------------------------

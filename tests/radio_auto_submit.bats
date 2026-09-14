@@ -8,6 +8,9 @@
 #     "radio check" + CR (0x0D) via zellij write-chars. Otherwise LF (0x0A).
 #   - `_ensure_session_file` (the self-heal path) re-applies the same env check
 #     so the opt-in survives /clear, /compact, /resume.
+#   - The CR/LF choice is driven by the *recipient's* session file, never the
+#     sender's env — and it's read after the #165 alias hop, so a `task-pm
+#     --also` alias inherits its primary PM's setting (#189).
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -72,14 +75,58 @@ teardown() {
   assert_stub_called zellij "action write-chars --pane-id 800 radio check"
 }
 
-@test "send to PM (which never opts in) always uses LF, even if sender is --auto" {
-  # PM registers without the env flag.
+@test "the CR/LF choice follows the recipient's session file, not the sender's env" {
+  # Recipient registers without the env flag (a `task-pm --no-auto-submit` PM,
+  # or any default worker).
   "$RADIO" register --role pm --tab pm --agent claude
-  # Worker sends back review-requested with the flag in its own env. The CR/LF
-  # decision is driven by the *recipient's* session file, not the sender's env.
+  # Sender has the flag in its own env — that must not leak into the decision.
   TASK_FORCE_ROLE=worker-foo TASK_FORCE_AUTO_SUBMIT=1 \
     "$RADIO" send --to pm --intent review-requested --body "PR up"
 
+  run grep -cF $'radio check\r' "$STUB_CALLS_DIR/zellij.calls"
+  assert_output "0"
+  assert_stub_called zellij "action write-chars --pane-id 700 radio check"
+}
+
+# ----- task-pm's opt-in: a PM recipient submits without a keypress (#189) ----
+
+@test "a PM registered with the task-pm opt-in gets the CR wake-up (#189)" {
+  # This is the env task-pm now exports before exec'ing the agent; the
+  # SessionStart hook's `radio register` is what persists it.
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role pm --tab pm --agent claude
+  run cat "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output --partial "AUTO_SUBMIT=1"
+
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent review-requested --body "PR up"
+  run grep -cF $'radio check\r' "$STUB_CALLS_DIR/zellij.calls"
+  assert_output "1"
+}
+
+@test "a --also alias inherits its primary PM's auto-submit setting (#189)" {
+  # `task-pm --also otherrepo` writes pm-otherrepo.info carrying
+  # ALIAS=pm-pmrepo and no inbox; cmd_send follows the hop and reads
+  # AUTO_SUBMIT off the *primary's* file, so the opt-in falls out — pin it.
+  seed_zellij_tabs pm-pmrepo
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role pm-pmrepo --tab pm-pmrepo --agent claude
+  "$RADIO" register-alias --role pm-otherrepo --alias pm-pmrepo --repo /tmp/otherrepo
+
+  # The alias file itself carries no AUTO_SUBMIT — that's the point.
+  run cat "$TASK_FORCE_HOME/radio/sessions/pm-otherrepo.info"
+  refute_output --partial "AUTO_SUBMIT"
+
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm-otherrepo --intent review-requested --body "PR up"
+  run grep -cF $'radio check\r' "$STUB_CALLS_DIR/zellij.calls"
+  assert_output "1"
+  # And it woke the primary's pane, not a pane of its own.
+  assert_stub_called zellij "action write-chars --pane-id 700"
+}
+
+@test "a --no-auto-submit primary keeps LF for its aliases too (#189)" {
+  seed_zellij_tabs pm-pmrepo
+  "$RADIO" register --role pm-pmrepo --tab pm-pmrepo --agent claude
+  "$RADIO" register-alias --role pm-otherrepo --alias pm-pmrepo --repo /tmp/otherrepo
+
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm-otherrepo --intent review-requested --body "PR up"
   run grep -cF $'radio check\r' "$STUB_CALLS_DIR/zellij.calls"
   assert_output "0"
   assert_stub_called zellij "action write-chars --pane-id 700 radio check"

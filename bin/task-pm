@@ -34,6 +34,20 @@ aw_parse_impl_flag "$@" || exit 1
 # task-pm takes no positional args, so a swallowed `--alos` typo would launch a
 # PM with no alias and leave phantom-routing debugging later (#165 RC-7).
 ALSO_REPOS=()
+# Radio auto-submit (#189). `radio send`'s zellij wake writes "radio check"
+# into the recipient's prompt box terminated by LF (types it, waits for a human
+# Enter) unless the recipient's session file carries AUTO_SUBMIT=1, in which
+# case it uses CR (submits). task-work / task-reviewer opt in via `--auto`;
+# task-pm never did, so *every* wake addressed to a PM sat unsubmitted in its
+# input box while the sender was told `delivered` — the most-felt delivery
+# defect in the system, since the PM is the most-addressed role.
+#
+# Default on here: the LF human-gate exists to protect a partially-typed
+# prompt from being corrupted by an incoming wake, which is a real risk for a
+# worker mid-implementation but a weak one for a PM tab that sits idle between
+# handoffs. `--no-auto-submit` is the opt-out for anyone who types long prompts
+# into the PM box and would rather press Enter themselves.
+AUTO_SUBMIT=1
 if ((${#AW_REMAINING_ARGS[@]})); then
   set -- "${AW_REMAINING_ARGS[@]}"
 else
@@ -44,15 +58,26 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'EOF'
 Usage: task-pm [--impl <name>] [--also <repo-path-or-name> ...]
+               [--no-auto-submit]
 
 Rename the current zellij tab to "pm-<reponame>" and launch the PM agent
 in-place (claude /pm on claude loadouts, kiro-cli chat --agent pm on kiro
 loadouts). Run from inside a task-force-initialized git repo.
 
---also <repo>   Also answer this repo's PM address from this one tab. Writes an
-                alias radio session (pm-<other> → pm-<reponame>); repeatable.
-                One PM brain, one inbox, N repos. Zero-config alternative: run
-                one task-pm per repo in separate tabs.
+--also <repo>       Also answer this repo's PM address from this one tab.
+                    Writes an alias radio session (pm-<other> → pm-<reponame>);
+                    repeatable. One PM brain, one inbox, N repos. Zero-config
+                    alternative: run one task-pm per repo in separate tabs.
+--auto-submit       Radio wakes addressed to this PM submit themselves (CR
+                    instead of LF), so a worker's report is processed without a
+                    keypress in this tab. This is the default; the flag is
+                    accepted for symmetry with task-work / task-reviewer.
+                    Also accepted as --auto.
+--no-auto-submit    Opt out: a wake types "radio check" into the prompt box and
+                    waits for you to press Enter. Use this if you type long
+                    prompts into the PM box — an incoming wake would otherwise
+                    submit whatever is half-typed there.
+                    Also accepted as --no-auto.
 EOF
       exit 0 ;;
     --also)
@@ -66,6 +91,14 @@ EOF
         _a=$(cd "$_a" && pwd)
       fi
       ALSO_REPOS+=("$_a"); shift 2 ;;
+    # `--auto` / `--no-auto` are accepted as aliases because that's the spelling
+    # task-work and task-reviewer use and the one a user will reach for — and
+    # task-pm rejects unknown flags hard (#165 RC-7), so a near-miss would
+    # abort the launch rather than be ignored. Unlike those two launchers, this
+    # flag governs *only* radio auto-submit: task-pm never touches the agent's
+    # permission mode (the PM merges PRs; auto-approving that is not ours to do).
+    --auto-submit|--auto)       AUTO_SUBMIT=1;  shift ;;
+    --no-auto-submit|--no-auto) AUTO_SUBMIT=""; shift ;;
     *) echo "Error: unknown argument '$1' (see task-pm --help)" >&2; exit 1 ;;
   esac
 done
@@ -129,6 +162,19 @@ done
 
 export TASK_FORCE_ROLE="$PM_ROLE"
 export ZELLIJ_TAB="$PM_ROLE"
+# The SessionStart / agentSpawn hook runs `radio register` as a child of the
+# agent we're about to exec, so this export is what persists AUTO_SUBMIT=1 into
+# pm-<reponame>.info — and `_ensure_session_file` re-reads it on every self-heal,
+# so the opt-in survives /compact, /clear, and resume. Aliases written by
+# --also need nothing: `radio send` follows the alias hop to this primary's
+# session file before reading AUTO_SUBMIT.
+if [[ -n "$AUTO_SUBMIT" ]]; then
+  export TASK_FORCE_AUTO_SUBMIT=1
+else
+  # An inherited value from the launching shell must not silently re-enable the
+  # opt-in the user just declined.
+  unset TASK_FORCE_AUTO_SUBMIT
+fi
 case "$AGENT" in
   claude) exec claude "/pm" ;;
   kiro)   exec kiro-cli chat --agent pm ;;

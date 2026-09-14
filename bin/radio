@@ -1010,10 +1010,11 @@ cmd_register() {
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
       "$role" "$tab" "$tab_id" "$zsession" "$repo" "$repo_name" "$(_now)" "$agent" "$loadout"
-    # Persist the --auto opt-in (#128). task-work --auto exports
-    # TASK_FORCE_AUTO_SUBMIT=1 into the tab's env; cmd_send reads AUTO_SUBMIT
-    # off the recipient's session file and flips wake-up from LF (manual) to
-    # CR (auto-submit). task-pm and default workers never export this, so
+    # Persist the --auto opt-in (#128). task-work --auto / task-reviewer and
+    # task-pm (on by default since #189) export TASK_FORCE_AUTO_SUBMIT=1 into
+    # the tab's env; cmd_send reads AUTO_SUBMIT off the recipient's session
+    # file and flips wake-up from LF (manual) to CR (auto-submit). Default
+    # workers — and a `task-pm --no-auto-submit` PM — never export this, so
     # they keep the human-gated default. `if` rather than `&&` so the brace
     # group exits 0 even when the flag is absent — pipefail + set -e would
     # otherwise abort register on every non-auto worker.
@@ -1881,12 +1882,17 @@ cmd_send() {
   # command. The recipient reads the actual message via `radio check` /
   # `radio read`.
   #
-  # Recipients launched via `task-work --auto` opt in to CR (auto-submit) so
-  # PM pings process without a manual Enter (#128). Everyone else — PM,
-  # default workers, pre-#128 workers with no AUTO_SUBMIT field — gets LF,
-  # which lands "radio check" in the input box and waits for the user to
-  # press Enter. The human gate is what protects partially-typed prompts
-  # from being corrupted by an incoming wake-up.
+  # Recipients launched via `task-work --auto` / `task-reviewer`, and PMs
+  # launched by `task-pm` (auto-submit on by default, #189), opt in to CR so
+  # pings process without a manual Enter (#128). Everyone else — default
+  # workers, a `task-pm --no-auto-submit` PM, pre-#128 sessions with no
+  # AUTO_SUBMIT field — gets LF, which lands "radio check" in the input box
+  # and waits for the user to press Enter. The human gate is what protects
+  # partially-typed prompts from being corrupted by an incoming wake-up.
+  #
+  # The decision is driven by the *recipient's* session file, never the
+  # sender's env — and `$rs` is resolved after the #165 alias hop, so a
+  # `--also` alias inherits its primary PM's setting.
   local wake_term=$'\n'
   if [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" == "1" ]]; then
     wake_term=$'\r'

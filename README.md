@@ -473,6 +473,113 @@ If a tab dies unexpectedly (or Claude resumes without re-firing `SessionStart`),
 
 On kiro this is the *routine* cleanup step, not just the crash path: `agentStop` fires per turn, not on session close, so there is no kiro analogue of claude's `SessionEnd` → `radio unregister`. `task-done` covers the worker happy path (it unregisters before removing the worktree), but any kiro tab closed without it leaves a session file still advertising `STATE=idle` — which makes `radio send` try to wake a tab that's gone. Run `radio orphans` periodically and delete what it lists. Heartbeat-driven auto-unregister is #127.
 
+### When radio misbehaves
+
+Every radio defect found so far has been a **notification** failure, not a delivery
+failure: a session file wiped out from under a live role, a wake-up that typed text
+nobody submitted, a stop-hook that let an unread message sit. In none of them was the
+message lost — the inbox had it the whole time; what broke was the signal that something
+needed attention. So when radio looks broken, start at the **log**
+(`~/.task-force/radio/log`), not at the mailbox.
+
+#### Symptom → cause → check
+
+| Symptom | Likely cause | What to check |
+|---------|--------------|---------------|
+| **"I pinged the worker and nothing happened."** | The send never had a live, wakeable recipient — no session file, a stale one, or an empty/unresolvable `TAB_ID`. | 1. Re-read the sender's own outcome line (see [the outcome table](#how-wake-up-works)) — only `delivered` means a keystroke landed; every other line names its own reason. 2. `ls ~/.task-force/radio/sessions/` — is the role there at all, spelled exactly? 3. `radio orphans` — a >1h-stale heartbeat means the tab is gone. 4. `grep 'to=<role>' ~/.task-force/radio/log \| tail` and read the `send:` line right after each `send id=`. 5. In the recipient's own tab, `radio check`: if the message is listed, delivery worked and the agent simply didn't act on it. |
+| **"The agent has `radio check` sitting unsubmitted in its prompt box."** | The wake was delivered but not submitted: the recipient's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). | `grep AUTO_SUBMIT ~/.task-force/radio/sessions/<role>.info` — no line means LF. Pressing Enter completes that delivery by hand. For good: relaunch the PM with plain `task-pm` (auto-submit is the default since #189; `--no-auto-submit` is the opt-out), or the worker with `task-work --auto`. The flag is read off the **recipient's** file, after any `--also` alias hop. |
+| **"A role keeps disappearing from `sessions/`."** | Session flapping — something fires `SessionEnd` → `radio unregister` on intra-session events (`/clear`, `/compact`, resume, or an unexplained cascade) and the wipe takes `TAB_ID` with it. #187 / #198 made `unregister` refuse unless a wipe is explicitly authorized. | Compare the three counters below. Post-#187, `skipping` should carry the bulk of the traffic and `unregister role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=` — anything calling it in a loop inflates that counter alone, notably a test suite that hasn't isolated `$TASK_FORCE_HOME` and is unregistering your live role (#205). Otherwise an **old `radio` binary** is running, since every non-`--manual` call now logs one or the other; `radio` on `PATH` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
+| **"I ran `radio unregister` and nothing happened."** | Expected behaviour since #198, not a bug. A bare `unregister` has no `SessionEnd` payload naming a real exit, so it refuses. | It printed `refusing to wipe <role> … re-run with --manual` on stderr, and logged a `skipping` line. Pass `--manual` if you actually meant to tear the session down. |
+| **"The worker says it's idling for a message that's in its own inbox."** | Fixed in #197. Pre-#197 the stop-hook gave up on the `stop_hook_active` flag alone, so a message that landed *during* a forced drain turn got no continuation of its own — terminal for an idle `--auto` worker nobody was going to prompt again. | `grep BLOCKED_IDS ~/.task-force/radio/sessions/<role>.info` — the ids the last block was about. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the agent ignored the same ids twice. |
+
+#### Reading the log
+
+`~/.task-force/radio/log` is the single best diagnostic and the only place several of
+these states are distinguishable at all. It is append-only, one UTC-stamped line per
+event, **shared by every repo and role on the machine**, and rotated by `radio gc` once
+it passes ~1MB. Read timestamps, not just counts: a log spans radio versions, so a field
+missing from an old line means "written by an older binary", not "unset".
+
+```bash
+L=~/.task-force/radio/log
+
+# Delivery rate — how many sends actually woke someone vs. queued
+grep -c 'send id='   "$L"      # messages sent
+grep -c 'send: woke' "$L"      # …that landed as a keystroke in a live pane
+
+# Wake failures bucketed by reason (role names stripped)
+grep -oE 'is busy|is awaiting|looks dead|no session for|has no TAB_ID|tab id unresolved|no writable pane|write-chars failed' "$L" \
+  | sort | uniq -c | sort -rn
+
+# Wipes vs. refusals (#187 / #198). `role=` counts every actual wipe and is
+# the ONLY line a --manual wipe writes, so role= minus proceeding is the
+# --manual traffic — deliberate (task-done) or not (#205).
+grep -c 'unregister role='       "$L"
+grep -c 'unregister: proceeding' "$L"
+grep -c 'unregister: skipping'   "$L"
+
+# A refusal records the stdin shape it came from (#198) — `tty` was a human typing it
+grep -oE 'skipping \(empty payload on [a-z-]+ stdin' "$L" | sort | uniq -c
+
+# Re-seed losses (#188): where a rebuilt session got its tab binding.
+# `none` is the bad one — that role is unwakeable until a real `register`.
+grep -oE 'tab_id_src=[a-z-]+' "$L" | sort | uniq -c
+grep -c 'no tab binding for' "$L"
+grep -c 'loadout=unknown'    "$L"   # sidecar was missing at re-seed time
+
+# Stop-hook (#197): a re-block is now distinct from a give-up
+grep 'arrived during the drain turn'  "$L"   # re-blocked — correct, new mail mid-drain
+grep 'no new message since the block' "$L"   # gave up — same ids ignored twice
+```
+
+#### What `radio unregister` does, and doesn't
+
+`unregister` is **not** a cleanup command you reach for by hand. It wipes only when a
+piped `SessionEnd` payload names a real-exit `reason` (`logout` / `prompt_input_exit` /
+`other`), and logs a `skipping` line for everything else: `clear` / `resume`, a payload
+with no parseable `reason`, an empty payload, and any payload at all on a host without
+`jq` (where no reason can be read, so none can be trusted). A terminal on stdin does not
+authorize a wipe either — it only adds the stderr hint (#198).
+
+`--manual` (alias `--force`) is the explicit opt-in. It bypasses the stdin inspection
+entirely, works from any stdin shape, and is what `task-done` passes. A wipe removes the
+`.info` and any `--also` aliases pointing at it; the `.loadout` / `.agent` sidecars
+beside it deliberately survive, so the next `busy` / `ready` re-seed rebuilds a session
+that still knows what it is (see [Session state and self-heal](#session-state-and-self-heal)).
+
+#### Undelivered mail is never dropped
+
+There is no dead-letter queue, and nothing in radio deletes a message you haven't read.
+A message is written to `~/.task-force/radio/mailbox/<role>/inbox/` **before** any wake
+is attempted, so every outcome other than `delivered` means "on disk, waiting" — not
+"gone". `radio read <id>` (or `radio ack <id>`) is the only thing that moves it to
+`processed/`.
+
+`radio gc` respects that: it expires `processed/` messages past the cutoff, but it
+**never touches `inbox/`**, and it refuses to reclaim a role's mailbox at all while that
+inbox is non-empty — even for a role with no session file. To see queued mail for a role
+that isn't running:
+
+```bash
+ls ~/.task-force/radio/mailbox/<role>/inbox/
+radio gc --dry-run          # what a sweep would remove, without removing it
+```
+
+If the role is gone for good, the mail is readable as plain files; if it comes back, its
+`SessionStart` register surfaces the whole backlog in the summary it injects.
+
+#### Delivery is not symmetric between claude and kiro
+
+Every backstop in the list above — the Stop-hook drain, the prompt-hook injection, the
+register backlog report — works by putting hook stdout into the model's context, which
+kiro does not do. For a kiro recipient the zellij keystroke is the **only** push path,
+and a missed wake has nothing behind it; what makes delivery eventually happen is the
+agent's own `radio check` poll at the top of each turn. Diagnose a kiro role by its
+`AGENT=` line (`grep AGENT ~/.task-force/radio/sessions/<role>.info`) and read
+[kiro delivery is best-effort](#kiro-delivery-is-best-effort) before concluding anything
+is broken — a queued message with no drain is the documented behaviour there, not a
+failure.
+
 ---
 
 ## The normal workflow

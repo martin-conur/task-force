@@ -434,10 +434,11 @@ Every claude backstop above works by putting text into the model's context from 
 | `agentStop` | `radio ready && radio check` | State flip, then a `radio check` whose output goes to the **hook subshell**, not the model. There is no kiro analogue of Stop-hook block JSON, so an idle kiro role with unread mail stays idle. |
 | — | *(no session-end trigger)* | Nothing unregisters on tab close except `task-done`. |
 
-So for a kiro recipient the zellij `write-chars` wake is the *only* push path, and it is best-effort — a missed wake has nothing behind it. Two consequences worth stating plainly:
+So for a kiro recipient the zellij `write-chars` wake is the *only* push path, and it is best-effort — a missed wake has nothing behind it. Three consequences worth stating plainly:
 
 - **Kiro agents pull.** Every kiro agent prompt in `kiro-*/agents/*.json` carries a standing instruction to run `radio check` at the top of every turn and `radio read <id>` anything listed. That poll, not a hook, is what makes delivery eventually happen.
 - **`radio send` says so.** No outcome line ever promises a kiro recipient a Stop drain, a prompt-hook, or a register report; all of them end in `it polls its own inbox — the message surfaces when it next runs radio check`.
+- **Dispatch kiro workers with `--auto` so the one push path can finish.** `task-work --auto` opts the worker into the CR (auto-submit) wake-up, so a wake that lands is acted on instead of sitting in the prompt box for a human Enter. Until #206 kiro's `task-work` parsed no `--auto` flag at all, which made the keypress mandatory — a kiro worker's only push path could not self-complete. The flag changes nothing else: it adds no backstop behind a *missed* wake, and it does **not** touch kiro's permission model (that is still `-a/--trust-all`).
 
 Reaching real parity (a context-injecting kiro hook, a heartbeat-driven unregister) is tracked separately in #146 / #127; this is the honest description of what ships today.
 
@@ -445,7 +446,7 @@ Reaching real parity (a context-injecting kiro hook, a heartbeat-driven unregist
 
 A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate for workers: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body — that also opts the worker into the CR (auto-submit) wake-up, so a live ping drains without a keystroke. A PM launched with `task-pm` has that opt-in on by default (#189).
 
-On kiro that injection doesn't happen, so the worker's *own* `radio check` at the top of its next turn is what surfaces the backlog — same "next turn" latency, one less safety net.
+On kiro that injection doesn't happen, so the worker's *own* `radio check` at the top of its next turn is what surfaces the backlog — same "next turn" latency, one less safety net. `task-work --auto` works there too (#206), but it only buys the auto-submit — the three context-injecting backstops are still claude-only.
 
 ### Session state and self-heal
 
@@ -708,7 +709,9 @@ Common to every combo:
 - `--no-launch` — create the worktree and open the tab at that directory, but don't auto-start the agent (you pick the model/command yourself)
 - `--impl <name>` — force a specific combo, bypassing auto-detection
 
-`kiro-*` combos also accept `-m/--model MODEL` and `-a/--trust-all`.
+`claude-*` combos also accept `-p/--plan` and `--auto` (agent permission mode — and, on both, the radio auto-submit opt-in below).
+
+`kiro-*` combos also accept `-m/--model MODEL`, `-a/--trust-all`, and `--auto`. On kiro, `--auto` governs **radio auto-submit only** — the permission model is `-a/--trust-all` and stays separate (#206). Before #206 kiro had no `--auto` case at all, so the flag aborted the launch and a kiro worker could never be woken without a keypress.
 
 ---
 

@@ -39,6 +39,13 @@ Options:
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start kiro-cli. Use this when you want to
                       pick the command/model interactively.
+      --auto          Opt this worker into radio's auto-submit wake-up: an
+                      incoming ping is submitted for the agent instead of
+                      sitting in its prompt box until someone presses Enter.
+                      Governs auto-submit ONLY — kiro's permission model is
+                      -a/--trust-all and stays separate. Also keeps focus on
+                      the calling tab instead of switching to the new one.
+                      (No effect with --no-launch.)
   -h, --help          Show this help.
 
 Environment:
@@ -49,6 +56,7 @@ Examples:
   task-work add-store-filtering "https://www.notion.so/abc123def456"
   task-work https://www.notion.so/My-Task-abc123def456
   task-work refactor-auth -m claude-opus-4.6 --trust-all
+  task-work refactor-auth --trust-all --auto   # radio pings submit themselves
   task-work spike-idea --no-launch
   TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing https://...
   # Stack a follow-up on top of an in-flight branch:
@@ -62,6 +70,7 @@ POSITIONAL=()
 MODEL="${TASK_WORK_MODEL:-}"
 TRUST_ALL=""
 NO_LAUNCH=""
+AUTO_MODE=""
 BASE_BRANCH_OVERRIDE=""
 FROM_REF_OVERRIDE=""
 
@@ -84,6 +93,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
       FROM_REF_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
+    --auto) AUTO_MODE="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
     *) POSITIONAL+=("$1"); shift ;;

@@ -187,15 +187,35 @@ runbook_block() {
   done
 }
 
-@test "no kiro doc tells the reader to relaunch a worker with task-work --auto" {
-  # kiro's task-work parses no --auto flag, so AUTO_MODE is never set and
-  # TASK_FORCE_AUTO_SUBMIT is never injected for a kiro worker. Advising it
-  # would send a reader after a flag that does not exist.
-  run grep -c 'AUTO_MODE=' "$REPO_ROOT_REAL/kiro-gh/bin/task-work"
-  assert_output "0"
+@test "the kiro runbook advises task-work --auto, and the flag exists (#206)" {
+  # Inverted from #191's version of this test. Back then kiro's task-work
+  # parsed no --auto flag, so AUTO_MODE was never set, the shared
+  # radio-env-injection region's TASK_FORCE_AUTO_SUBMIT line was dead, and the
+  # runbook was right to withhold the advice. #206 added the flag, so the
+  # advice is now correct — and this pins both halves together so a doc that
+  # recommends the flag can never outlive the flag itself.
+  for tw in "$REPO_ROOT_REAL/kiro-gh/bin/task-work" \
+            "$REPO_ROOT_REAL/kiro-local/bin/task-work" \
+            "$REPO_ROOT_REAL/kiro-notion/bin/task-work"; do
+    run grep -cE '^\s*--auto\) AUTO_MODE="1"; shift ;;$' "$tw"
+    refute_output "0"
+  done
   for f in "${KIRO_TEMPLATES[@]}"; do
     run grep -cF 'task-work --auto' "$f"
-    assert_output "0"
+    refute_output "0"
+  done
+}
+
+@test "the kiro runbook keeps --auto scoped to auto-submit, not permissions (#206)" {
+  # kiro's permission model is -a/--trust-all and is deliberately separate;
+  # a reader must not take --auto for a trust-all synonym.
+  for f in "${KIRO_TEMPLATES[@]}"; do
+    local block
+    block=$(runbook_block "$f")
+    run grep -cF 'governs auto-submit only' <<<"$block"
+    refute_output "0"
+    run grep -cF '`-a/--trust-all`' <<<"$block"
+    refute_output "0"
   done
 }
 

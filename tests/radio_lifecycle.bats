@@ -119,6 +119,17 @@ teardown() {
   assert_output --partial "role=worker-foo"
 }
 
+@test "unregister stays quiet on the hook path — the stderr hint is tty-only (#198)" {
+  # The #198 hint must not leak into the SessionEnd hook's stderr on every
+  # intra-session event: Claude Code surfaces hook stderr, and this path fires
+  # in bursts of 40+. `-t 0` is the output-channel test, so the hook (non-tty)
+  # gets the log line only.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister < '$HOOK_PAYLOADS/sessionend-empty.stdin'"
+  assert_success
+  refute_output --partial "refusing to wipe"
+}
+
 @test "unregister --manual removes everything despite the empty payload (task-done's path, #187)" {
   "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
@@ -151,6 +162,74 @@ teardown() {
   TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister --manual < '$HOOK_PAYLOADS/sessionend-clear.json'"
   assert_success
   assert [ ! -f "$sess" ]
+}
+
+# ----- the tty bypass (#198) -------------------------------------------------
+#
+# #187 wrapped the whole non-destructive guard in `[[ "$manual" != true && ! -t 0 ]]`,
+# so a terminal on stdin walked straight past it to `rm -f` — no `skipping`, no
+# `proceeding`, nothing in the log. That is how ~399 wipes in the 2026-09-14 log
+# were logged as nothing at all: a worker exercising `cmd_unregister` from a shell.
+#
+# The fix demotes `-t 0` from wipe-authority to output-channel. These three tests
+# pin both halves: the tty no longer authorizes a wipe, --manual still does from
+# any stdin shape, and the refusal reaches the human on stderr rather than only
+# the log (without that last part the fix would trade a silent wipe for a silent
+# no-op, which is worse). See pty_run in tests/helpers/common.bash for the
+# util-linux / BSD `script` split.
+
+@test "unregister from a terminal refuses to wipe (#198)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert [ -f "$sess" ]
+
+  TASK_FORCE_ROLE=worker-foo run pty_run "'$RADIO' unregister"
+  assert_success
+
+  # The whole point: `.info` (and with it the TAB_ID binding) survives.
+  assert [ -f "$sess" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
+
+  # And the skip is logged, distinguishing the stdin shape so a tty invocation
+  # is identifiable in the log instead of masquerading as a hook call.
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "skipping (empty payload on tty stdin"
+  assert_output --partial "role=worker-foo"
+  refute_output --partial "unregister role=worker-foo"
+}
+
+@test "unregister --manual from a terminal still wipes (task-done unaffected, #198)" {
+  # --manual is the explicit opt-in that replaced the tty heuristic as
+  # wipe-authority; it has to keep working from every stdin shape, terminal
+  # included, or `task-done --manual` run by hand stops cleaning up.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+
+  TASK_FORCE_ROLE=worker-foo run pty_run "'$RADIO' unregister --manual"
+  assert_success
+  assert [ ! -f "$sess" ]
+  # Sidecars still outlive the wipe (#188).
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "unregister role=worker-foo"
+}
+
+@test "unregister from a terminal explains itself on stderr, not just the log (#198)" {
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+
+  # stderr is redirected to a file INSIDE the pty'd command, so the assertion
+  # is about the channel, not merely about the text appearing somewhere: `-t 0`
+  # still sees the pty, while the hint lands where only stderr goes.
+  local errfile="$BATS_TEST_TMPDIR/unregister.err"
+  TASK_FORCE_ROLE=worker-foo run pty_run "'$RADIO' unregister 2>'$errfile'"
+  assert_success
+
+  run cat "$errfile"
+  assert_output --partial "refusing to wipe worker-foo"
+  # The guidance a human needs is the flag that overrides the refusal.
+  assert_output --partial "--manual"
 }
 
 @test "unregister without jq skips rather than wiping on a clear payload (#192 review)" {

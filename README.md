@@ -396,6 +396,8 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 
 `radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. A persisted `TAB_ID` is only meaningful within one zellij server lifetime, so before driving a wake by id, `send` **verifies the tab still at that id still bears the recipient's own tab name** (one `list-tabs` call, emoji prefix stripped from both sides). A `.info` that outlived a zellij restart carries a `TAB_ID` that now addresses an unrelated tab — the name won't match, so `send` re-resolves by tab name and repairs the file on a hit, or queues on a miss, never blindly writing into whatever tab inherited the id. `ZELLIJ_SESSION=` (the server name at register time) is a diagnostic and drives one extra guard: if it names a *different but still-live* server (`zellij list-sessions`), the real owner is unreachable from here, so `send` queues rather than misdeliver into this server's same-named look-alike tab. If `STATE=busy`, the message is queued with no wake attempt — no interrupting the recipient mid-turn. Delivery then happens at the end of the recipient's current turn: its `Stop` hook (`radio stop-hook`) sees the non-empty inbox and emits Stop-hook block JSON, which makes Claude Code continue the agent so it drains the queue immediately (`radio check`, then `radio read` each message). A `stop_hook_active` payload never re-blocks, so a drain turn can't loop forever.
 
+**The wake-up's last byte decides whether the agent acts on it.** `write-chars` types into the recipient's TUI input buffer, so terminating with LF leaves `radio check` sitting in the prompt box until a human presses Enter, while CR is the Enter. The recipient picks: a session file carrying `AUTO_SUBMIT=1` gets CR, everything else gets LF. `task-work --auto`, `task-reviewer`, and `task-pm` (on by default since #189 — a PM tab sits idle between handoffs, and it's the most-addressed role in the system, so an unsubmitted wake there was the most-felt delivery defect) export `TASK_FORCE_AUTO_SUBMIT=1` for their `radio register` to persist. Default workers keep LF, and `task-pm --no-auto-submit` opts back into it — the human gate is what stops an incoming wake from submitting a half-typed prompt. The choice is read off the *recipient's* session file, after the `--also` alias hop, so aliases inherit their primary PM's setting.
+
 **`radio send` tells you which of those happened, on stdout** (always exit 0 — queuing is legitimate; only usage errors exit 2). The sending agent reads the line and acts on it instead of assuming delivery:
 
 | Outcome line | Meaning |
@@ -422,7 +424,7 @@ For the kiro loadouts the equivalent wiring lives in `.kiro/hooks/` and runs off
 
 ### Idle workers don't auto-act
 
-A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body.
+A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate for workers: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body — that also opts the worker into the CR (auto-submit) wake-up, so a live ping drains without a keystroke. A PM launched with `task-pm` has that opt-in on by default (#189).
 
 ### Cleanup
 
@@ -440,7 +442,7 @@ Here's what an end-to-end PR cycle looks like once everything is wired up. Eight
 task-pm
 ```
 
-Renames the current tab to `pm`, registers via the `SessionStart` hook, and starts the PM agent in-place.
+Renames the current tab to `pm-<reponame>`, registers via the `SessionStart` hook, and starts the PM agent in-place. Radio wakes addressed to it auto-submit, so workers' reports are drained without a keypress in this tab; `task-pm --no-auto-submit` keeps the manual Enter.
 
 **2. PM grooms the backlog and dispatches a worker.** From the PM tab:
 

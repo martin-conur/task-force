@@ -163,6 +163,16 @@ workers reach it by sending `--to pm`, which radio resolves to this repo's
 several repos from one PM tab, pass `task-pm --also <other-repo>` (repeatable):
 it writes an alias radio session so `pm-<other>` routes into this one inbox.
 
+Radio wakes addressed to a PM **auto-submit** (#189): the wake types
+`radio check` into the PM's prompt box and presses Enter for it, so a worker's
+report is drained without a keypress. Before this, every PM-bound wake sat
+unsubmitted in the input box while the sender was told `delivered` — the PM
+being the most-addressed role, that was the most-felt delivery defect in the
+system. Pass `task-pm --no-auto-submit` to keep the old human gate (the wake
+types `radio check` and waits for your Enter); worth it if you type long
+prompts into the PM box, since an incoming wake would otherwise submit whatever
+is half-typed there. `--also` aliases inherit the primary PM's setting.
+
 To dispatch a one-shot reviewer worker for a PR, run
 `task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab.
 It spawns a fresh zellij tab + worktree on the PR's head ref, runs the

@@ -74,11 +74,26 @@ setup_worktree() {
     > "$WORKTREE_BASE/.$slug.info"
 }
 
+# Drop the radio identity env a task-force agent tab exports into every child.
+# The suite is routinely run from inside such a tab (`./run_tests.sh` from a
+# worker or PM), so without this these leak in as ambient defaults and make
+# assertions depend on who launched the run. Concretely: from a PM/worker tab
+# whose $TASK_FORCE_PM_ROLE is set, the `--to pm` shim (#165) resolved to that
+# repo's pm-<reponame> instead of the literal `pm` the radio / radio_lifecycle
+# tests address, and from a `task-work --auto` worker the radio_auto_submit
+# "omits AUTO_SUBMIT when the env var is unset" tests failed because the var
+# was not, in fact, unset. Every test that needs one of these sets it
+# explicitly per-invocation, after setup.
+reset_radio_env() {
+  unset TASK_FORCE_AUTO_SUBMIT TASK_FORCE_PM_ROLE TASK_FORCE_LOADOUT
+}
+
 # Creates a tempdir for $TASK_FORCE_HOME (radio mailbox root) and exports it.
 # Pair with teardown_all() which cleans it up.
 setup_task_force_home() {
   TASK_FORCE_HOME=$(mktemp -d)
   export TASK_FORCE_HOME
+  reset_radio_env
 }
 
 # Puts stub scripts first on PATH and sets STUB_CALLS_DIR for recording.
@@ -93,6 +108,8 @@ setup_stubs() {
   done
 
   export PATH="$STUB_BIN:$PATH"
+
+  reset_radio_env
 }
 
 teardown_all() {

@@ -45,6 +45,18 @@ RADIO="$REPO_ROOT_REAL/bin/radio"
 # `radio unregister` on stdin instead of hand-building JSON — see
 # tests/fixtures/hook-payloads/README.md for provenance and counts.
 HOOK_PAYLOADS="$REPO_ROOT_REAL/tests/fixtures/hook-payloads"
+
+# Build a PATH directory holding everything radio needs *except* jq, so the
+# jq-less fail-safe branches can be exercised (#172 for stop-hook, #192 for
+# unregister). Prints the dir; the caller is responsible for removing it.
+make_nojq_bin() {
+  local d cmd
+  d=$(mktemp -d)
+  for cmd in bash cat mkdir mv rm awk grep cut head tr date dirname basename ls sed env; do
+    ln -s "$(command -v "$cmd")" "$d/$cmd"
+  done
+  printf '%s' "$d"
+}
 TASK_PM="$REPO_ROOT_REAL/bin/task-pm"
 TASK_REVIEWER="$REPO_ROOT_REAL/bin/task-reviewer"
 TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"

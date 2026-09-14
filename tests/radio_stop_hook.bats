@@ -114,12 +114,8 @@ _queue_message() {
 @test "stop-hook without jq fails safe: no block, idle, exit 0" {
   # jq absent means stop_hook_active is unreadable; blocking blind could
   # re-block on every Stop forever, so stop-hook degrades to queue-only.
-  # Build a PATH of symlinks to everything radio needs, minus jq.
   local nojq_bin
-  nojq_bin=$(mktemp -d)
-  for cmd in bash cat mkdir mv rm awk grep cut head tr date dirname basename ls sed env; do
-    ln -s "$(command -v $cmd)" "$nojq_bin/$cmd"
-  done
+  nojq_bin=$(make_nojq_bin)
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   "$RADIO" busy
   _queue_message

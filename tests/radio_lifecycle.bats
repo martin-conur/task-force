@@ -151,6 +151,65 @@ teardown() {
   assert [ ! -f "$sess" ]
 }
 
+@test "unregister without jq skips rather than wiping on a clear payload (#192 review)" {
+  # A jq-less host cannot read `.reason`, so nothing on this path is an
+  # *identified* real exit. Pre-guard, the whole jq block was skipped, reason
+  # stayed "", and execution reached `rm -f` while logging the misleading
+  # "proceeding (reason=<unset>)" — wiping on a /clear or /compact payload and
+  # silently undoing #151's protection exactly when it can't be verified.
+  # Mirrors cmd_stop_hook's "Fail SAFE without jq" guard.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local nojq_bin
+  nojq_bin=$(make_nojq_bin)
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "env PATH='$nojq_bin' '$RADIO' unregister < '$HOOK_PAYLOADS/sessionend-clear.json'"
+  rm -rf "$nojq_bin"
+  assert_success
+
+  assert [ -f "$sess" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "skipping (jq unavailable"
+  refute_output --partial "proceeding (reason=<unset>)"
+}
+
+@test "unregister without jq skips even on a real-exit payload it cannot parse (#192 review)" {
+  # The cost of failing safe: a genuine logout/other on a jq-less host leaves
+  # the session file behind. That is the deliberate trade — a skipped wipe
+  # self-heals at the next register, a wrong one costs the tab binding for the
+  # rest of the tab's life — and `radio orphans` surfaces the residue.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local nojq_bin
+  nojq_bin=$(make_nojq_bin)
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "env PATH='$nojq_bin' '$RADIO' unregister < '$HOOK_PAYLOADS/sessionend-other.json'"
+  rm -rf "$nojq_bin"
+  assert_success
+  assert [ -f "$sess" ]
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "skipping (jq unavailable"
+}
+
+@test "unregister --manual still removes everything without jq (task-done unaffected, #192 review)" {
+  # --manual short-circuits before the jq guard, so cleanup on a jq-less host
+  # behaves exactly as it does anywhere else. This is what keeps task-done
+  # working — it is the reason the guard above can afford to fail safe.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local nojq_bin
+  nojq_bin=$(make_nojq_bin)
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "env PATH='$nojq_bin' '$RADIO' unregister --manual < '$HOOK_PAYLOADS/sessionend-clear.json'"
+  rm -rf "$nojq_bin"
+  assert_success
+  assert [ ! -f "$sess" ]
+  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
+  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
+}
+
 @test "unregister rejects an unknown option instead of silently wiping (#187)" {
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"

@@ -1302,31 +1302,42 @@ cmd_unregister() {
       return 0
     fi
 
-    if command -v jq >/dev/null 2>&1; then
-      reason=$(_hook_payload_field reason)
-      case "$reason" in
-        clear|resume)
-          _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
-          return 0
-          ;;
-        "")
-          # Cascade pattern (#151): payload is present but contains no
-          # parseable `.reason` field. The PR-#150 diagnostic showed bursts of
-          # 144 unregister calls in ~25s with payload literally "y" and
-          # reason=<unset> — phantom invocations from somewhere upstream of
-          # Claude Code's documented SessionEnd hook (which always includes
-          # reason ∈ {clear, resume, logout, prompt_input_exit, other}).
-          # Treat these the same as clear/resume: known non-real-exit events
-          # that must not wipe the session file or the sidecars.
-          payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
-          _log "unregister: skipping (reason=<unset> — cascade, no real-exit signal) role=$TASK_FORCE_ROLE payload=$payload_oneline"
-          return 0
-          ;;
-      esac
+    # Fail SAFE without jq (#192 review), mirroring cmd_stop_hook's guard. A
+    # jq-less host cannot read `.reason` at all, so no payload here is an
+    # *identified* real exit — including a clear/resume one, whose #151
+    # protection would otherwise evaporate exactly when we can't parse it.
+    # Falling through would log "proceeding (reason=<unset>)" and wipe, which
+    # is the same destructive-on-ambiguity resolution this ticket exists to
+    # remove. --manual short-circuits above, so task-done cleanup is unaffected.
+    if ! command -v jq >/dev/null 2>&1; then
+      _log "unregister: skipping (jq unavailable — cannot identify a real exit; use --manual to force) role=$TASK_FORCE_ROLE"
+      return 0
     fi
-    # Named real-exit reason (logout, prompt_input_exit, other, or anything
-    # new Claude Code adds later) — the loud path, unchanged. Capture the full
-    # payload on one line so radio.log keeps a record of what drove the wipe.
+
+    reason=$(_hook_payload_field reason)
+    case "$reason" in
+      clear|resume)
+        _log "unregister: skipping (reason=$reason — intra-session event) role=$TASK_FORCE_ROLE"
+        return 0
+        ;;
+      "")
+        # Cascade pattern (#151): payload is present but contains no
+        # parseable `.reason` field. The PR-#150 diagnostic showed bursts of
+        # 144 unregister calls in ~25s with payload literally "y" and
+        # reason=<unset> — phantom invocations from somewhere upstream of
+        # Claude Code's documented SessionEnd hook (which always includes
+        # reason ∈ {clear, resume, logout, prompt_input_exit, other}).
+        # Treat these the same as clear/resume: known non-real-exit events
+        # that must not wipe the session file or the sidecars.
+        payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
+        _log "unregister: skipping (reason=<unset> — cascade, no real-exit signal) role=$TASK_FORCE_ROLE payload=$payload_oneline"
+        return 0
+        ;;
+    esac
+    # Everything reaching here is a named real-exit reason (logout,
+    # prompt_input_exit, other, or anything new Claude Code adds later) — the
+    # loud path, unchanged. Capture the full payload on one line so radio.log
+    # keeps a record of what drove the wipe.
     payload_oneline=$(printf '%s' "$HOOK_PAYLOAD" | tr '\n' ' ' | tr -s ' ')
     _log "unregister: proceeding (reason=${reason:-<unset>}) role=$TASK_FORCE_ROLE payload=$payload_oneline"
   fi

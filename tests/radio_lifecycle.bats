@@ -129,8 +129,10 @@ teardown() {
   TASK_FORCE_ROLE=worker-foo run bash -c "'$RADIO' unregister --manual < '$HOOK_PAYLOADS/sessionend-empty.stdin'"
   assert_success
   assert [ ! -f "$sess" ]
-  assert [ ! -f "$loadout_sidecar" ]
-  assert [ ! -f "$agent_sidecar" ]
+  # The sidecars are the exception, post-#188: they outlive every unregister,
+  # --manual included, so the next register/re-seed keeps the real LOADOUT.
+  assert [ -f "$loadout_sidecar" ]
+  assert [ -f "$agent_sidecar" ]
 }
 
 @test "unregister --force is an alias for --manual (#187)" {
@@ -206,8 +208,10 @@ teardown() {
   rm -rf "$nojq_bin"
   assert_success
   assert [ ! -f "$sess" ]
-  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
-  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
+  # Sidecars survive here too (#188) — the jq-less path changes nothing about
+  # which files a --manual unregister is allowed to remove.
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
 }
 
 @test "unregister rejects an unknown option instead of silently wiping (#187)" {
@@ -656,19 +660,10 @@ teardown() {
   assert_output "claude-gh"
 }
 
-@test "unregister: sweeps loadout sidecar so a stale value can't leak to the next role lifecycle (#140)" {
-  "$RADIO" register --role worker-foo --tab worker-foo --agent claude --loadout claude-gh
-  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
-  local sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
-  assert [ -f "$sidecar" ]
-
-  # Real exit unregister (reason=logout slips past the skip-list, file
-  # deleted, sidecar deleted).
-  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"logout\"}' | '$RADIO' unregister"
-  assert_success
-  assert [ ! -f "$sess" ]
-  assert [ ! -f "$sidecar" ]
-}
+# NOTE: #140's "unregister sweeps the loadout sidecar" test was REVERSED by #188
+# — the sweep is what made 78 of 79 observed re-seeds write LOADOUT=unknown. Its
+# replacement ("unregister keeps the loadout + agent sidecars…") lives in the
+# #188 block at the end of this file, alongside the re-seed recovery it enables.
 
 @test "unregister: skipped unregister (reason=clear) does NOT sweep loadout sidecar (#140)" {
   # The skip-list applies symmetrically to both: if we don't delete .info,
@@ -743,20 +738,8 @@ teardown() {
   assert_output "AGENT=claude"
 }
 
-@test "unregister: sweeps agent sidecar so a stale value can't leak (#151)" {
-  # Symmetric to the loadout sweep: real-exit unregister must remove the
-  # agent sidecar too, otherwise a tab reused for a different role would
-  # inherit the previous AGENT value on its first re-seed.
-  "$RADIO" register --role worker-foo --tab worker-foo --agent kiro --loadout kiro-gh
-  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
-  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
-  assert [ -f "$agent_sidecar" ]
-
-  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"logout\"}' | '$RADIO' unregister"
-  assert_success
-  assert [ ! -f "$sess" ]
-  assert [ ! -f "$agent_sidecar" ]
-}
+# NOTE: #151's symmetric "unregister sweeps the agent sidecar" test was likewise
+# reversed by #188 — see the note above and the #188 block at the end of the file.
 
 @test "unregister: skipped unregister (reason=clear) does NOT sweep agent sidecar (#151)" {
   # Symmetric to the loadout no-sweep-on-skip test. If we skipped the .info
@@ -971,4 +954,90 @@ _queue_offline() {
   run bash -c "env -u TASK_FORCE_ROLE '$RADIO' register --role '' --tab t --agent claude"
   assert_success
   assert_output ""
+}
+
+# ----- #188: the re-seed must not lose the tab binding or the sidecars -------
+
+@test "unregister keeps the loadout + agent sidecars so the next re-seed recovers them (#188)" {
+  # A real exit still wipes the session file — but the sidecars exist precisely
+  # to outlive it (#140/#151). Deleting them here is what made 78 of 79 observed
+  # re-seeds write LOADOUT=unknown: by re-seed time there was nothing to read.
+  "$RADIO" register --role worker-foo --tab w-foo --agent kiro --loadout kiro-gh
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  local loadout_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout"
+  local agent_sidecar="$TASK_FORCE_HOME/radio/sessions/worker-foo.agent"
+
+  TASK_FORCE_ROLE=worker-foo run bash -c "echo '{\"reason\":\"logout\"}' | '$RADIO' unregister"
+  assert_success
+  assert [ ! -f "$sess" ]
+  assert [ -f "$loadout_sidecar" ]
+  assert [ -f "$agent_sidecar" ]
+
+  # And the payoff: the next busy re-seeds the real values, not the fallbacks.
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=w-foo run env -u TASK_FORCE_LOADOUT -u TASK_FORCE_AGENT "$RADIO" busy
+  assert_success
+  run cat "$sess"
+  assert_output --partial "LOADOUT=kiro-gh"
+  assert_output --partial "AGENT=kiro"
+  refute_output --partial "LOADOUT=unknown"
+}
+
+@test "--manual unregister also keeps the sidecars (#188)" {
+  # task-done's deliberate cleanup path. Same reasoning: the worktree is going
+  # away, the ~10-byte sidecars are gc's problem, and a genuine re-register
+  # overwrites them.
+  "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" unregister --manual
+  assert_success
+  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.loadout" ]
+  assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
+}
+
+@test "re-seed recovers TAB_ID from \$INFO_FILE when the zellij lookup misses (#188)" {
+  # The zellij-miss path used to write TAB_ID= empty, which cmd_send reports as
+  # "not zellij-registered" and queues with no wake attempt — permanently, for
+  # the rest of the role's life. task-work persists the id in its own info file
+  # (region:info-tab-id) and radio never writes that file, so it is the
+  # authoritative fallback.
+  setup_repo
+  setup_worktree w-foo
+  printf 'TAB_ID=%s\n' 41 >> "$WORKTREE_BASE/.w-foo.info"
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert [ ! -f "$sess" ]
+
+  # $ZELLIJ unset → the zellij lookup is skipped entirely, exactly as on a
+  # non-zellij host or when `zellij action list-tabs` is unreachable.
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=w-foo '$RADIO' busy"
+  assert_success
+  run cat "$sess"
+  assert_output --partial "TAB_ID=41"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab_id=41 tab_id_src=info-file"
+}
+
+@test "re-seed ignores a non-numeric \$INFO_FILE TAB_ID rather than writing garbage (#188)" {
+  setup_repo
+  setup_worktree w-foo
+  printf 'TAB_ID=%s\n' 'not-a-number' >> "$WORKTREE_BASE/.w-foo.info"
+
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=w-foo '$RADIO' busy"
+  assert_success
+  run cat "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output --partial "TAB_ID="
+  refute_output --partial "TAB_ID=not-a-number"
+}
+
+@test "re-seed logs an unbound TAB_ID distinctly when no binding exists anywhere (#188)" {
+  # The genuinely-unbound case (non-zellij / CI): nothing to recover, so an
+  # empty TAB_ID is correct — but it gets its own greppable log line, because
+  # it is the only shape that leaves the role unwakeable.
+  setup_repo
+  setup_worktree w-foo   # info file carries no TAB_ID= line
+
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=w-foo '$RADIO' busy"
+  assert_success
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab_id= tab_id_src=none"
+  assert_output --partial "no tab binding for worker-foo"
 }

@@ -72,14 +72,18 @@ teardown() {
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/pm.info" ]
 }
 
-@test "lifecycle: register → unregister leaves the sessions dir empty (#94)" {
+@test "lifecycle: register → unregister leaves no session file behind (#94)" {
   # Guards against orphan accumulation. The SessionEnd hook + task-done both
   # call `radio unregister` (task-done with `--manual`, #187); this test pins
-  # the contract that a clean cycle leaves no session file behind.
+  # the contract that a clean cycle leaves no `.info` behind — that file is what
+  # `radio orphans` and `_session_dead` read, and what a stale entry would
+  # pollute. Since #188 the `.loadout` / `.agent` sidecars deliberately stay:
+  # they are ~10 bytes, they are how a later re-seed recovers the real LOADOUT,
+  # and `radio gc` reclaims them once the role is provably gone.
   "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
   assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info" ]
   TASK_FORCE_ROLE=worker-foo "$RADIO" unregister --manual
-  run bash -c "ls '$TASK_FORCE_HOME/radio/sessions/' 2>/dev/null | wc -l | tr -d ' '"
+  run bash -c "ls '$TASK_FORCE_HOME/radio/sessions/'*.info 2>/dev/null | wc -l | tr -d ' '"
   assert_output "0"
 }
 

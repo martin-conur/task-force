@@ -152,3 +152,17 @@ legitimate `radio register` to overwrite. Because there is no session-end hook
 here, treat this as routine housekeeping rather than a crash-only step: a stale
 session still reads as `STATE=idle` to senders, so radio will keep aiming wakes
 at a tab that no longer exists.
+
+The session file is a soft cache, not the source of truth (#188). Two tiny
+sidecars sit beside it — `<role>.loadout` and `<role>.agent` — holding the
+values a re-seed cannot read out of the `.info` file it is replacing, and they
+deliberately **survive `unregister`**, `task-done`'s `--manual` one included.
+Only a genuine `register` overwrites them, and `radio gc` reclaims them once
+the role has no session file left at all. So when a wipe is followed by a
+`busy` / `ready` self-heal, the rebuilt session keeps the real `LOADOUT` /
+`AGENT` instead of `unknown` / `claude`, and it recovers `TAB_ID` from the
+task-work-owned `<worktree-base>/.<slug>.info` when the zellij name lookup
+misses. An empty `TAB_ID` — the state that makes a role permanently unwakeable,
+since `radio send` then queues with no wake attempt — is now written only when
+there is genuinely no binding anywhere (non-zellij / CI paths), and the log
+says so distinctly.

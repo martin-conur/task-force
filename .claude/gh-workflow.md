@@ -191,6 +191,20 @@ Run `radio orphans` to list any session whose heartbeat is older than 1 hour —
 those entries are safe to delete (`rm ~/.task-force/radio/sessions/<role>.info`)
 or leave for the next legitimate `radio register` to overwrite.
 
+The session file is a soft cache, not the source of truth (#188). Two tiny
+sidecars sit beside it — `<role>.loadout` and `<role>.agent` — holding the
+values a re-seed cannot read out of the `.info` file it is replacing, and they
+deliberately **survive `unregister`**, `task-done`'s `--manual` one included.
+Only a genuine `register` overwrites them, and `radio gc` reclaims them once
+the role has no session file left at all. So when a wipe is followed by a
+`busy` / `ready` self-heal, the rebuilt session keeps the real `LOADOUT` /
+`AGENT` instead of `unknown` / `claude`, and it recovers `TAB_ID` from the
+task-work-owned `<worktree-base>/.<slug>.info` when the zellij name lookup
+misses. An empty `TAB_ID` — the state that makes a role permanently unwakeable,
+since `radio send` then queues with no wake attempt — is now written only when
+there is genuinely no binding anywhere (non-zellij / CI paths), and the log
+says so distinctly.
+
 The mailbox and log self-prune (#169): a fresh `SessionStart` register runs a
 quiet `radio gc` (14-day default) that deletes dead roles' mailboxes (no session
 file + newest inbox/processed entry older than the cutoff), expires old

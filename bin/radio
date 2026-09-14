@@ -534,6 +534,30 @@ _aliases_sidecar() {
   printf '%s/%s.aliases' "$SESSIONS_DIR" "$1"
 }
 
+# TAB_ID as recorded by task-work / task-reviewer in *their* info file (#188).
+# Both binaries write `TAB_ID=<n>` into `<worktree-base>/.<slug>.info` right
+# after spawning the tab (`region:info-tab-id`) precisely because radio's own
+# copy gets clobbered mid-life (#117) — and radio never writes that file, so it
+# stays authoritative across any number of session-file wipes. The worktree
+# lives at `<worktree-base>/<slug>`, so from inside it the file is
+# `dirname(<toplevel>)/.<slug>.info`, with `<slug>` == $ZELLIJ_TAB: both
+# binaries derive the tab name and the info filename from the same SLUG. (Not
+# the branch name — task-reviewer's branch is `task/review-pr<N>` while its
+# slug is `review-pr<N>`, so only $ZELLIJ_TAB is a safe key for both.)
+#
+# Empty stdout means "no binding recorded here", which callers must treat as a
+# miss rather than a value: a non-numeric or absent TAB_ID is exactly the state
+# `_live_tab_id` / `cmd_send` read as "not zellij-registered".
+_info_file_tab_id() {
+  local repo="$1" slug="$2" f id
+  [[ -n "$repo" && -n "$slug" ]] || return 0
+  f="$(dirname "$repo")/.${slug}.info"
+  [[ -f "$f" ]] || return 0
+  id=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$f" 2>/dev/null || true)
+  case "$id" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$id"
+}
+
 _inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
 _processed_dir(){ printf '%s/%s/processed' "$MAILBOX_DIR" "$1"; }
 
@@ -553,9 +577,35 @@ _ensure_session_file() {
 
   [[ -n "${ZELLIJ_TAB:-}" ]] || { _log "ensure_session: \$ZELLIJ_TAB unset; cannot re-seed $TASK_FORCE_ROLE"; return 1; }
 
-  local tab_id=""
+  # Resolved up front because the TAB_ID fallback below is keyed off the
+  # worktree's location. Persisting REPO_NAME= on re-seed too (#165 RC-2),
+  # worktree-proof, keeps the shim's sender-derivation working after a
+  # self-heal wiped the original .info.
+  local repo repo_name=""
+  repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  if [[ -n "$repo" ]]; then
+    repo_name=$(_repo_name_of "$repo")
+    [[ -n "$repo_name" ]] || repo_name=$(_sanitize_role_segment "$(basename "$repo")")
+  fi
+
+  # TAB_ID recovery (#188). The zellij name lookup is the primary source, but
+  # it misses whenever zellij is unreachable, jq is absent, or the tab has been
+  # repainted to a name this role no longer matches — and a miss used to write
+  # TAB_ID= *empty*, which cmd_send reports as "has no TAB_ID (not
+  # zellij-registered?)" and queues with NO wake attempt for the rest of that
+  # role's life, until a genuine `register` happens. 24 of 92 re-seeds in the
+  # production log took that shape. $INFO_FILE is the authoritative fallback:
+  # task-work recorded the id there at tab creation and radio never writes it.
+  # Invariant: a re-seed must never produce an empty TAB_ID while a valid
+  # binding exists on disk.
+  local tab_id="" tab_id_src=none
   if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
     tab_id=$(_zellij_tab_id_by_name "$ZELLIJ_TAB" || true)
+    [[ -z "$tab_id" ]] || tab_id_src=zellij
+  fi
+  if [[ -z "$tab_id" ]]; then
+    tab_id=$(_info_file_tab_id "$repo" "$ZELLIJ_TAB")
+    [[ -z "$tab_id" ]] || tab_id_src=info-file
   fi
 
   # Bind the re-seeded TAB_ID to this zellij server instance (#167) so a later
@@ -601,15 +651,6 @@ _ensure_session_file() {
   agent=$(cat "$agent_sidecar" 2>/dev/null || true)
   [[ -n "$agent" ]] || agent="${TASK_FORCE_AGENT:-claude}"
 
-  local repo repo_name=""
-  repo=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-  # Persist REPO_NAME= on re-seed too (#165 RC-2), worktree-proof, so the shim's
-  # sender-derivation keeps working after a self-heal wiped the original .info.
-  if [[ -n "$repo" ]]; then
-    repo_name=$(_repo_name_of "$repo")
-    [[ -n "$repo_name" ]] || repo_name=$(_sanitize_role_segment "$(basename "$repo")")
-  fi
-
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
       "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$zsession" "$repo" "$repo_name" "$(_now)" \
@@ -625,7 +666,13 @@ _ensure_session_file() {
   } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$TASK_FORCE_ROLE")" "$(_processed_dir "$TASK_FORCE_ROLE")"
-  _log "ensure_session: re-seeded $TASK_FORCE_ROLE (file was missing) tab_id=$tab_id loadout=$loadout agent=$agent"
+  _log "ensure_session: re-seeded $TASK_FORCE_ROLE (file was missing) tab_id=$tab_id tab_id_src=$tab_id_src loadout=$loadout agent=$agent"
+  # An unbound re-seed is logged distinctly from a recovered one (#188): this is
+  # the only shape that leaves the role unwakeable, so it must be greppable on
+  # its own rather than hiding inside the generic re-seed line.
+  if [[ "$tab_id_src" == none ]]; then
+    _log "ensure_session: no tab binding for $TASK_FORCE_ROLE (zellij lookup miss, no TAB_ID in \$INFO_FILE) — TAB_ID left empty; sends to it will queue with no wake"
+  fi
 }
 
 # Update STATE=… and LAST_HEARTBEAT=… on the current session file.
@@ -1345,11 +1392,17 @@ cmd_unregister() {
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
   rm -f "$f"
-  # Sweep the loadout + agent sidecars too — leaving them behind would let a
-  # future _ensure_session_file resurrect a stale loadout / agent for a role
-  # whose tab has really exited and been re-used (#140, #151).
-  rm -f "$(_loadout_sidecar "$TASK_FORCE_ROLE")"
-  rm -f "$(_agent_sidecar "$TASK_FORCE_ROLE")"
+  # The loadout + agent sidecars deliberately SURVIVE this (#188). They exist
+  # to outlive the session file — #140/#151 added them because a re-seed cannot
+  # read LOADOUT=/AGENT= out of the .info it is replacing — and deleting them
+  # here undid exactly that: 78 of the 79 observed re-seeds carrying the field
+  # wrote LOADOUT=unknown, because by re-seed time the sidecar was gone.
+  # The original rationale for sweeping ("a future re-seed could resurrect a
+  # stale loadout for a role whose tab was re-used") is much cheaper to live
+  # with than that loss rate: the files are ~10 bytes, a genuine `register`
+  # overwrites them, and `radio gc` reclaims them once the role is provably
+  # gone. The alias sidecar below is a different animal and is still swept —
+  # a stale alias routes live mail into a dead inbox.
 
   # Sweep alias files pointing at this role (#165): `task-pm --also` created
   # pm-<other>.info with ALIAS=<this role>; they must not outlive their primary
@@ -2131,6 +2184,15 @@ cmd_gc() {
           if (( ! dry_run )); then
             rm -rf "$roledir"
             _log "gc: removed dead mailbox role=$role"
+            # Sidecars now outlive `unregister` (#188), so gc is what keeps
+            # them from accumulating one pair per retired worker slug forever.
+            # Stricter gate than the reclaim above: sweep only when there is NO
+            # session file at all, never on the merely-stale-heartbeat arm of
+            # _session_dead — a live-but-quiet role that lost its sidecars is
+            # the #188 bug being fixed here, and gc must not re-create it.
+            if [[ ! -f "$(_session_file "$role")" ]]; then
+              rm -f "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")"
+            fi
           fi
           removed_dirs=$(( removed_dirs + 1 ))
           continue

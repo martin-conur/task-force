@@ -171,6 +171,51 @@ put_msg() {
   assert [ -f "$MAILBOX/liveworker/inbox/old.md" ]
 }
 
+# --- sidecar reclaim (#188) ------------------------------------------------
+
+@test "gc sweeps the loadout + agent sidecars of a role whose mailbox it reclaims (#188)" {
+  # Sidecars now outlive `unregister` (#188), so gc is the only thing keeping
+  # them from accumulating one pair per retired worker slug forever.
+  seed_mailbox deadworker
+  put_msg "$MAILBOX/deadworker/processed/old.md" "$OLD_TS"
+  printf 'claude-gh' > "$SESSIONS/deadworker.loadout"
+  printf 'claude'    > "$SESSIONS/deadworker.agent"
+
+  run "$RADIO" gc
+  assert_success
+  assert [ ! -d "$MAILBOX/deadworker" ]
+  assert [ ! -f "$SESSIONS/deadworker.loadout" ]
+  assert [ ! -f "$SESSIONS/deadworker.agent" ]
+}
+
+@test "gc keeps sidecars for a stale-heartbeat role that still has a session file (#188)" {
+  # _session_dead also fires on a >1h-stale heartbeat, but sweeping sidecars on
+  # that arm would re-create the exact bug #188 fixes: a live-but-quiet role
+  # whose next re-seed then writes LOADOUT=unknown. Sidecars go only when there
+  # is no session file at all.
+  seed_mailbox staleworker
+  seed_stale_session staleworker
+  put_msg "$MAILBOX/staleworker/processed/old.md" "$OLD_TS"
+  printf 'claude-gh' > "$SESSIONS/staleworker.loadout"
+  printf 'claude'    > "$SESSIONS/staleworker.agent"
+
+  run "$RADIO" gc
+  assert_success
+  assert [ ! -d "$MAILBOX/staleworker" ]   # mailbox reclaim is unchanged
+  assert [ -f "$SESSIONS/staleworker.loadout" ]
+  assert [ -f "$SESSIONS/staleworker.agent" ]
+}
+
+@test "gc --dry-run leaves sidecars alone (#188)" {
+  seed_mailbox deadworker
+  put_msg "$MAILBOX/deadworker/processed/old.md" "$OLD_TS"
+  printf 'claude-gh' > "$SESSIONS/deadworker.loadout"
+
+  run "$RADIO" gc --dry-run
+  assert_success
+  assert [ -f "$SESSIONS/deadworker.loadout" ]
+}
+
 # --- dry-run ---------------------------------------------------------------
 
 @test "gc --dry-run reports but does not delete" {

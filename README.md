@@ -385,12 +385,12 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 | `radio read <id>`                   | Print one message AND mark it acknowledged (moves `inbox/` → `processed/`) |
 | `radio read --peek <id>`            | Print without acknowledging — for inspection / debugging |
 | `radio ack <id>`                    | Mark it acknowledged (idempotent — no-op if already processed by a prior `read`) |
-| `radio register` / `radio unregister [--manual]` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`). `unregister` defaults to **not** removing anything when it is hook-invoked (stdin is not a terminal): it wipes only when the piped `SessionEnd` payload names a real-exit `reason` (`logout` / `prompt_input_exit` / `other`), and logs a skip for `clear` / `resume`, an unparseable payload, an empty one, or any payload at all on a host without `jq` (where no `reason` can be read, so none can be trusted). `--manual` (alias `--force`) is the explicit opt-in for deliberate cleanup — it bypasses the stdin inspection entirely and is what `task-done` passes |
+| `radio register` / `radio unregister [--manual]` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`). `unregister` defaults to **not** removing anything when it is hook-invoked (stdin is not a terminal): it wipes only when the piped `SessionEnd` payload names a real-exit `reason` (`logout` / `prompt_input_exit` / `other`), and logs a skip for `clear` / `resume`, an unparseable payload, an empty one, or any payload at all on a host without `jq` (where no `reason` can be read, so none can be trusted). `--manual` (alias `--force`) is the explicit opt-in for deliberate cleanup — it bypasses the stdin inspection entirely and is what `task-done` passes. A wipe removes the `.info` (and any `--also` aliases pointing at it); the `.loadout` / `.agent` sidecars beside it deliberately survive — see [Session state and self-heal](#session-state-and-self-heal) |
 | `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
 | `radio stop-hook`                   | Stop-hook entrypoint: empty inbox → mark idle; unread messages → mark busy and emit Stop-hook block JSON so the agent continues and drains them |
 | `radio prompt-hook`                 | UserPromptSubmit-hook entrypoint: mark busy; if the inbox has unread messages, print a one-line summary that Claude Code injects into the model's context |
 | `radio orphans`                     | List session files whose heartbeat is >1h stale |
-| `radio gc [--dry-run] [--max-age-days N]` | Prune the radio home: drop dead roles' mailboxes (no session file + newest entry older than N days, default 14), expire old `processed/` messages, and rotate an oversized `log`. Runs automatically (quietly) on a fresh `register`, so it usually needs no manual invocation; `--dry-run` reports without deleting |
+| `radio gc [--dry-run] [--max-age-days N]` | Prune the radio home: drop dead roles' mailboxes (no session file + newest entry older than N days, default 14) along with their `.loadout` / `.agent` sidecars, expire old `processed/` messages, and rotate an oversized `log`. Runs automatically (quietly) on a fresh `register`, so it usually needs no manual invocation; `--dry-run` reports without deleting |
 
 ### How wake-up works
 
@@ -446,6 +446,24 @@ Reaching real parity (a context-injecting kiro hook, a heartbeat-driven unregist
 A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate for workers: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body — that also opts the worker into the CR (auto-submit) wake-up, so a live ping drains without a keystroke. A PM launched with `task-pm` has that opt-in on by default (#189).
 
 On kiro that injection doesn't happen, so the worker's *own* `radio check` at the top of its next turn is what surfaces the backlog — same "next turn" latency, one less safety net.
+
+### Session state and self-heal
+
+`~/.task-force/radio/sessions/<role>.info` is a **soft cache, not a lock**. Hooks wipe it more often than anyone intends — that is the whole reason `busy` / `ready` re-seed a missing one instead of failing — so the durable identity lives in two ~10-byte sidecars next to it:
+
+| File | Holds | Why it can't live in `.info` |
+|------|-------|------------------------------|
+| `<role>.loadout` | `claude-gh`, `kiro-local`, … | A re-seed rebuilds the `.info` it is replacing, so it can't read the old `LOADOUT=` line — and `$TASK_FORCE_LOADOUT` isn't in a hook subshell's environment |
+| `<role>.agent`   | `claude` / `kiro`            | Same story for `$TASK_FORCE_AGENT`: without the sidecar every re-seed writes `AGENT=claude`, silently mislabelling kiro workers |
+
+**The sidecars survive `unregister`** — hook-invoked or `--manual`. They exist precisely to outlive the session file, and deleting them alongside it defeated the point: 78 of 79 observed re-seeds wrote `LOADOUT=unknown` because the sidecar was already gone by the time they ran (#188). A genuine `register` overwrites them, and `radio gc` reclaims them once the role has no session file at all, so nothing accumulates.
+
+`TAB_ID` gets the same treatment from the other direction. A re-seed resolves it by asking zellij for the tab id behind `$ZELLIJ_TAB`; when that lookup misses (no zellij, no `jq`, a repainted tab), it falls back to the `TAB_ID=` line `task-work` / `task-reviewer` wrote into their own `<worktree-base>/.<slug>.info` at tab creation — a file radio never writes, so it stays authoritative however many times the session file is wiped. This matters because an empty `TAB_ID` is not a small degradation: `radio send` reports the recipient as "not zellij-registered" and queues **with no wake attempt**, for the rest of that role's life. A re-seed now writes an empty `TAB_ID` only when there is genuinely no binding anywhere (non-zellij / CI paths), and logs that case on its own line:
+
+```
+ensure_session: re-seeded worker-foo … tab_id=41 tab_id_src=info-file loadout=claude-gh agent=claude
+ensure_session: no tab binding for worker-foo (zellij lookup miss, no TAB_ID in $INFO_FILE) — TAB_ID left empty; sends to it will queue with no wake
+```
 
 ### Cleanup
 

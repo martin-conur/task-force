@@ -33,7 +33,7 @@ jobs:
           shellcheck -x \
             install.sh task-init run_tests.sh \
             bin/* lib/*.sh tools/*.sh \
-            tests/helpers/*.bash \
+            tests/helpers/*.bash tests/setup_suite.bash \
             */install.sh */bin/*
 
   drift-check:

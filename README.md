@@ -73,7 +73,7 @@ cd ~/agentic-workflow
 ./install.sh all              # install all seven
 ```
 
-The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
+The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-board`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
 
 ### 3. Set up a project
 
@@ -177,9 +177,9 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
-`task-work`, `task-done`, and `task-init` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last.
+`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last.
 
-When you run `task-work` or `task-done` inside a project, the dispatcher detects the impl by looking at which workflow doc is present:
+When you run one of them inside a project, the dispatcher detects the impl by looking at which workflow doc is present:
 
 | File present | Combo |
 |---|---|
@@ -199,7 +199,19 @@ So you can have different combos in different projects and never have to think a
 - `AW_IMPL=<name>` environment variable
 - Auto-detection from the workflow file
 
-`task-done` is worktree-aware: when run from a task worktree (which has no workflow doc), it falls back to inspecting the main worktree so detection still works.
+`task-done` is worktree-aware: when run from a task worktree (which has no workflow doc), it falls back to inspecting the main worktree so detection still works. `task-board` detects from `--repo PATH` when that flag is given, since `task-work` and `task-done` call it that way from a worktree.
+
+**`task-board` is the one dispatcher that can refuse.** It renders `tasks/_board.md` out of local task-file frontmatter, which only the two local-tracking loadouts have — so on a `gh` / `jira` / `notion` repo it exits non-zero naming the detected loadout and where that repo's board actually lives:
+
+```
+$ task-board                       # in a claude-gh repo
+Error: task-board is only available on the local-tracking loadouts
+       (claude-local, kiro-local); this repo uses 'claude-gh'.
+       It renders tasks/_board.md from local task-file frontmatter,
+       which a 'claude-gh' repo has none of — its board lives in GitHub Projects.
+```
+
+Every loadout links it anyway, on purpose: a command that explains itself beats one that is silently missing. Before #215 only the two `*-local` installers linked `task-board`, each straight at its own copy — so it was absent everywhere else, and installing both local loadouts left whichever ran last owning the symlink.
 
 ---
 
@@ -282,7 +294,7 @@ cd ~/my-project
 task-init claude-local         # creates tasks/, .claude/local-workflow.md, and slash commands
 ```
 
-`task-init` writes `.claude/local-workflow.md` and references it from `CLAUDE.md`, plus drops a `tasks/` directory and `task-board` into your `~/.local/bin` (alongside the shared dispatchers).
+`task-init` writes `.claude/local-workflow.md` and references it from `CLAUDE.md`, plus drops a `tasks/` directory. `task-board` is one of the shared root dispatchers installed by every loadout — on this one it resolves to `claude-local/bin/task-board`.
 
 **What "local tracking" means** — there is no Jira, Notion, or GitHub board. The markdown files in `tasks/` *are* the database, and `tasks/_board.md` is an auto-generated kanban view. Everything renders cleanly in Obsidian, so you can plan and read tasks from your editor of choice.
 
@@ -879,6 +891,7 @@ writing to the live mailbox.
 | `kiro_local_task_work.bats`       | `kiro-local/bin/task-work` — same as `claude-local` but launching `kiro-cli` |
 | `kiro_local_task_init.bats`       | `kiro-local/bin/task-init` — `tasks/` scaffolding, `.kiro/steering/local-workflow.md`, agents |
 | `task_board.bats`                 | Shared `task-board` script — frontmatter parsing, sidecar overlay, `_board.md` regen |
+| `task_board_dispatcher.bats`      | Root `bin/task-board` — local-loadout dispatch, `--repo`-driven detection, refusal on gh/jira/notion |
 | `task_done.bats`                  | `task-done` across combos — cleanup, PR, guards |
 | `radio_home_isolation.bats`       | The suite's own radio-home isolation — nothing lands under `$HOME/.task-force` |
 

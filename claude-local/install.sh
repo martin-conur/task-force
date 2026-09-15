@@ -6,11 +6,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Installing claude-local scripts..."
 
 # region:install-shared-symlinks
-# Shared root scripts. task-init / task-work / task-done are impl-dispatching
-# scripts at the repo root (they route per-project based on which workflow doc
-# is present); task-pm and radio are canonical single copies (#170). This
-# stanza is byte-identical across all seven loadout installers and is
-# drift-guarded by tools/check-drift.sh.
+# Shared root scripts. task-init / task-work / task-done / task-board are
+# impl-dispatching scripts at the repo root (they route per-project based on
+# which workflow doc is present); task-pm and radio are canonical single copies
+# (#170). Every loadout links task-board even though only the two *-local
+# loadouts implement it: the dispatcher's job on the others is to refuse with a
+# message naming the detected loadout, rather than the command being absent
+# (#215). This stanza is byte-identical across all seven loadout installers and
+# is drift-guarded by tools/check-drift.sh.
 mkdir -p ~/.local/bin
 ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
 echo "  ✓ Script: task-init (shared dispatcher)"; sleep 0.05
@@ -24,11 +27,11 @@ ln -sf "$SCRIPT_DIR/../bin/radio" ~/.local/bin/radio
 echo "  ✓ Script: radio (PM↔worker mailbox CLI)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/ci-guard" ~/.local/bin/ci-guard
 echo "  ✓ Script: ci-guard (commit-msg CI-skip-marker guard)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-board" ~/.local/bin/task-board
+echo "  ✓ Script: task-board (shared dispatcher)"; sleep 0.05
 # endregion:install-shared-symlinks
 ln -sf "$SCRIPT_DIR/../bin/task-reviewer" ~/.local/bin/task-reviewer
 echo "  ✓ Script: task-reviewer (canonical + kiro routing)"; sleep 0.05
-ln -sf "$SCRIPT_DIR/bin/task-board" ~/.local/bin/task-board
-echo "  ✓ Script: task-board (local-tracker)"; sleep 0.05
 
 # Ensure ~/.local/bin is on PATH
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Project-aware dispatcher for task-board.
+#
+# Detects which <impl>/bin/task-board to run by inspecting the current git
+# repo's workflow docs (see lib/detect-impl.sh). Override with --impl <name>
+# or AW_IMPL=<name>.
+#
+# Unlike its five siblings, task-board only *has* an implementation on the
+# local-tracking loadouts: it renders tasks/_board.md out of local task-file
+# frontmatter, and a gh/jira/notion repo has no such files — its board lives in
+# the tracker. On those loadouts this exits non-zero naming the detected
+# loadout (#215). Before this dispatcher existed the two *-local installers
+# symlinked ~/.local/bin/task-board straight at their own copy, so the command
+# was simply *absent* on every other loadout ("command not found", indis-
+# tinguishable from a broken install) and last-install-wins decided which copy
+# a machine with both got.
+
+# Resolve own path through symlinks -> AW_ROOT (repo root of agentic-workflow).
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+source "$AW_ROOT/lib/detect-impl.sh"
+
+aw_parse_impl_flag "$@" || exit 1
+
+# task-board takes `--repo PATH` to operate on a repo other than $PWD — and
+# task-work / task-done call it exactly that way, from a worktree. Detection
+# has to follow the flag, or the impl would be chosen from whatever directory
+# the caller happened to be standing in. Only the space-separated spelling is
+# recognized, because that is the only one the impl itself accepts; `--repo=X`
+# is left alone so the impl can reject it with its own message.
+DETECT_DIR=""
+if ((${#AW_REMAINING_ARGS[@]})); then
+  _i=0
+  while ((_i < ${#AW_REMAINING_ARGS[@]})); do
+    if [[ "${AW_REMAINING_ARGS[$_i]}" == "--repo" ]]; then
+      DETECT_DIR="${AW_REMAINING_ARGS[$((_i + 1))]:-}"
+    fi
+    _i=$((_i + 1))
+  done
+fi
+
+if [[ -n "$DETECT_DIR" ]]; then
+  [[ -d "$DETECT_DIR" ]] || {
+    echo "Error: --repo path '$DETECT_DIR' is not an existing directory" >&2
+    exit 1
+  }
+  IMPL=$(cd "$DETECT_DIR" && aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+else
+  IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+fi
+
+case "$IMPL" in
+  claude-local|kiro-local) ;;
+  *)
+    case "${IMPL#*-}" in
+      gh)     TRACKER="GitHub Projects" ;;
+      jira)   TRACKER="Jira" ;;
+      notion) TRACKER="Notion" ;;
+      *)      TRACKER="your tracker" ;;
+    esac
+    echo "Error: task-board is only available on the local-tracking loadouts" >&2
+    echo "       (claude-local, kiro-local); this repo uses '$IMPL'." >&2
+    echo "       It renders tasks/_board.md from local task-file frontmatter," >&2
+    echo "       which a '$IMPL' repo has none of — its board lives in $TRACKER." >&2
+    exit 1 ;;
+esac
+
+TARGET="$AW_ROOT/$IMPL/bin/task-board"
+[[ -x "$TARGET" ]] || {
+  echo "Error: $TARGET not found or not executable. Is the repository complete?" >&2
+  exit 1
+}
+
+exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}

@@ -195,3 +195,18 @@ teardown() {
   run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
+
+@test "kiro task-work --auto: snap-back fires (PM keeps focus) (#206)" {
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
+    run "$KIRO_GH_TASK_WORK" my-feature --auto
+  assert_success
+  assert_stub_called zellij "go-to-tab 1"
+}
+
+@test "kiro task-work without --auto: no snap-back (#206)" {
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
+    run "$KIRO_GH_TASK_WORK" my-feature
+  assert_success
+  run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}

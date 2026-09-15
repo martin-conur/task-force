@@ -173,11 +173,16 @@ _queue_legacy_pm() {
   assert_output --partial "adopt: migrated 1 legacy pm message(s) into role=pm-myrepo"
 }
 
-# ----- repo routing (#182 review #2) ----------------------------------------
+# ----- repo routing: the `repo:` arm (#182 review #2) -----------------------
 #
-# A message carries a `repo:` frontmatter field when the sender passed --repo.
-# A pm-<repo> must adopt only messages tagged for its own repo (or untagged =
-# genuinely global), leaving a foreign-repo message for its own PM.
+# A message carries a `repo:` frontmatter field ONLY when the sender passed
+# --repo. Nothing in the system does (#210: 0 of 163 documented `radio send`
+# call sites, 0 of 399 real messages), so these four tests pin a branch
+# production never reaches — which is exactly why #182's filter could be inert
+# for months without a single failing test. They are kept because `repo:` is
+# still the higher-precedence signal for the day something starts passing
+# --repo; the real-traffic cases live in the `from:` section below, and every
+# message there is built the way cmd_send really builds one.
 
 # Queue a message into the literal `pm` inbox carrying an explicit repo: field.
 _queue_legacy_pm_repo() {  # $1 = repo-path  $2 = pr  $3 = from
@@ -301,4 +306,163 @@ _queue_legacy_pm_repo() {  # $1 = repo-path  $2 = pr  $3 = from
   assert_equal "$(_inbox_count pm-myrepo)" "1"
   run cat "$TASK_FORCE_HOME/radio/log"
   assert_output --partial "reclaiming stale migration lock"
+}
+
+# ----- repo routing: the `from:` arm — real traffic (#210) -------------------
+#
+# #182's filter routed on `repo:` alone, a field cmd_send writes only when
+# --repo was passed. Nothing passes it, so the filter never once executed — and
+# its untagged fall-through *adopts*, so a guard that never ran was
+# indistinguishable from one that ran and said yes. Observed: one PM adopting 53
+# messages belonging to four other repos, silently, with the
+# `left N foreign-repo message(s)` log line unable to fire because `skipped`
+# only incremented inside the dead branch.
+#
+# Every fixture below is built by `radio send` with NO --repo — exactly the
+# shape of real traffic — so these tests can only pass if routing works on a
+# signal production actually carries. The senders use the real role grammar:
+# `worker-<reponame>-<slug>`, `reviewer-<reponame>-pr<N>`, `pm-<reponame>`.
+
+_log_content() { cat "$TASK_FORCE_HOME/radio/log"; }
+
+@test "register: pm-<repo> leaves an untagged foreign-repo message for its own PM (#210)" {
+  # THE REGRESSION. Pre-#210 this message carried no repo: field, so alpha
+  # adopted it and beta's PM would never have found it.
+  _queue_legacy_pm review-requested 41 "" worker-beta-fix-login
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "1"
+  assert_equal "$(_inbox_count pm-alpha)" "0"
+  refute_output --partial "adopted from the legacy"
+}
+
+@test "register: the 'left N foreign-repo' log line actually fires (#210)" {
+  # It could not fire at all before: `skipped` only incremented inside the
+  # branch gated on a repo: field no real message carries.
+  _queue_legacy_pm review-requested 41 "" worker-beta-fix-login
+  _queue_legacy_pm review-requested 42 "" worker-gamma-add-cache
+  TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  run _log_content
+  assert_output --partial "adopt: left 2 foreign-repo message(s) for their own PM role=pm-alpha"
+}
+
+@test "register: pm-<repo> adopts a worker-<own-repo>-<slug> message (#210)" {
+  _queue_legacy_pm review-requested 41 "" worker-alpha-fix-login
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+}
+
+@test "register: pm-<repo> adopts a reviewer-<own-repo>-pr<N> message (#210)" {
+  # The reviewer grammar is `reviewer-<reponame>-pr<N>` — same one-sided test.
+  _queue_legacy_pm review-complete-clean 41 "" reviewer-alpha-pr41
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+}
+
+@test "register: pm-<repo> leaves a reviewer-<other-repo>-pr<N> message behind (#210)" {
+  _queue_legacy_pm review-complete-clean 41 "" reviewer-beta-pr41
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "1"
+  assert_equal "$(_inbox_count pm-alpha)" "0"
+}
+
+@test "register: pm-<own-repo> as sender routes to itself; pm-<other> does not (#210)" {
+  _queue_legacy_pm changes-requested 41 "" pm-alpha
+  _queue_legacy_pm changes-requested 42 "" pm-beta
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+  assert_equal "$(_inbox_count pm)" "1"
+}
+
+@test "register: an unattributable (from: unknown) message is adopted first-come (#210)" {
+  # A pre-env worker sent with no $TASK_FORCE_ROLE, so cmd_send wrote
+  # `from: unknown`. There is no signal at all — first-come is the only option.
+  env -u TASK_FORCE_ROLE "$RADIO" send --to pm --intent review-requested --pr 41 \
+    --body "pre-env worker, no role in the environment"
+  run grep -h '^from: ' "$TASK_FORCE_HOME/radio/mailbox/pm/inbox"/*.md
+  assert_output "from: unknown"
+
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+}
+
+@test "register: an unattributable adoption is LOGGED, not silent (#210)" {
+  # The point of the ticket: adopting because nothing could be attributed must
+  # look different in the log from adopting because the sender matched.
+  env -u TASK_FORCE_ROLE "$RADIO" send --to pm --intent review-requested --pr 41 \
+    --body "pre-env worker, no role in the environment"
+  TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  run _log_content
+  assert_output --partial "adopt: 1 message(s) named no repo (from: unattributable) — adopted first-come role=pm-alpha"
+}
+
+@test "register: a matched adoption logs no unattributable line (#210)" {
+  _queue_legacy_pm review-requested 41 "" worker-alpha-fix-login
+  TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  run _log_content
+  assert_output --partial "adopt: migrated 1 legacy pm message(s) into role=pm-alpha"
+  refute_output --partial "named no repo"
+}
+
+@test "register: mixed untagged backlog — each pm-<repo> adopts only its own share (#210)" {
+  # The observed incident in miniature, with messages built the way cmd_send
+  # really builds them. Queue everything BEFORE any pm-* session exists so the
+  # `--to pm` shim can't resolve to a live PM and bypass the legacy inbox.
+  _queue_legacy_pm review-requested 41 "" worker-alpha-fix-login
+  _queue_legacy_pm review-requested 42 "" worker-beta-add-cache
+  _queue_legacy_pm review-complete-clean 43 "" reviewer-beta-pr42
+  env -u TASK_FORCE_ROLE "$RADIO" send --to pm --intent spec-ready --issue 7 --body "unattributable"
+  assert_equal "$(_inbox_count pm)" "4"
+
+  TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  # alpha takes its own (41) + the unattributable one; beta's two are left.
+  assert_equal "$(_inbox_count pm-alpha)" "2"
+  assert_equal "$(_inbox_count pm)" "2"
+
+  TASK_FORCE_ROLE=pm-beta "$RADIO" register --role pm-beta --tab pm-beta \
+    --repo /somewhere/beta --agent claude
+  assert_equal "$(_inbox_count pm-beta)" "2"
+  assert_equal "$(_inbox_count pm)" "0"
+}
+
+@test "register: repo: outranks from: when a message carries both (#210)" {
+  # The higher-precedence arm, kept for the day something starts passing --repo:
+  # an explicit repo: tag wins over whatever the sender's name implies.
+  TASK_FORCE_ROLE=worker-beta-fix-login "$RADIO" send --to pm --intent review-requested \
+    --pr 41 --repo /somewhere/alpha --body "tagged alpha, sent by a beta worker"
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha \
+    --repo /somewhere/alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "1"
+}
+
+@test "register: a pm with no reponame still adopts everything (#210)" {
+  # register without --repo (test/CI paths) leaves my_repo empty — the filter is
+  # skipped wholesale, preserving the pre-repo behavior rather than stranding a
+  # backlog nobody can claim.
+  _queue_legacy_pm review-requested 41 "" worker-beta-fix-login
+  _queue_legacy_pm review-requested 42 "" worker-gamma-add-cache
+  TASK_FORCE_ROLE=pm-alpha run "$RADIO" register --role pm-alpha --tab pm-alpha --agent claude
+  assert_success
+  assert_equal "$(_inbox_count pm)" "0"
+  assert_equal "$(_inbox_count pm-alpha)" "2"
 }

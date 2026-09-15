@@ -131,7 +131,13 @@ literal-`pm` backlog: post-#165 nothing registers as the bare `pm`, so its
 inbox is write-only, and a fresh PM with no live `pm` session migrates those
 messages into its own inbox (each stamped with an `adopted-from:` provenance
 header) and surfaces them in the same summary, flagged as adopted — a one-time
-backfill (#182). Empty
+backfill (#182), and one scoped to **this** repo: a message is adopted only
+when its `from:` names this repo — `worker-<reponame>-<slug>`,
+`reviewer-<reponame>-pr<N>`, `pm-<reponame>` — so another repo's report stays in
+`mailbox/pm/inbox` for its own PM instead of being claimed by whichever PM
+booted first, and `radio`'s log records the count left behind. Mail no name can
+attribute (`from: unknown`, sent before the role env existed) is still adopted
+first-come, and the log says so rather than staying silent (#210). Empty
 inbox prints nothing. (claude loadouts only — Kiro's hook stdout isn't
 injected; see #146.)
 

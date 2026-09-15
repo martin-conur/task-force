@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# region:board-render
 set -euo pipefail
 
 # task-board — regenerate <repo>/tasks/_board.md from the frontmatter of
@@ -171,3 +172,4 @@ print_bucket() {
 } > "$BOARD"
 
 echo "✓ Wrote $BOARD"
+# endregion:board-render

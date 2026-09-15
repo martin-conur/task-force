@@ -36,7 +36,6 @@ teardown() {
   bash "$REPO_ROOT_REAL/claude-local/install.sh" >/dev/null
   assert [ -L "$HOME/.local/bin/task-pm" ]
   assert [ -L "$HOME/.local/bin/radio" ]
-  # claude-local also adds the task-board symlink.
   assert [ -L "$HOME/.local/bin/task-board" ]
 }
 
@@ -67,7 +66,7 @@ resolve_link() {
     rm -rf "$HOME/.local/bin"
     bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
 
-    for cmd in task-init task-work task-done task-pm radio ci-guard; do
+    for cmd in task-init task-work task-done task-board task-pm radio ci-guard; do
       [ -L "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink missing"; return 1; }
       [ -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink dangling"; return 1; }
     done
@@ -75,6 +74,13 @@ resolve_link() {
       || { echo "$impl: radio resolves to $(resolve_link radio)"; return 1; }
     [ "$(resolve_link task-pm)" = "$REPO_ROOT_REAL/bin/task-pm" ] \
       || { echo "$impl: task-pm resolves to $(resolve_link task-pm)"; return 1; }
+    # task-board is linked by every loadout even though only the two *-local
+    # ones implement it (#215): the root dispatcher refuses on the others with
+    # a message naming the loadout, which beats "command not found". Before
+    # this, only claude-local / kiro-local linked it — straight at their own
+    # copy, so installing both made the last one win.
+    [ "$(resolve_link task-board)" = "$REPO_ROOT_REAL/bin/task-board" ] \
+      || { echo "$impl: task-board resolves to $(resolve_link task-board)"; return 1; }
     # ci-guard is the commit-msg marker guard (#194) — the hook task-work
     # installs execs it off PATH, so a missing link silently disarms it.
     [ "$(resolve_link ci-guard)" = "$REPO_ROOT_REAL/bin/ci-guard" ] \

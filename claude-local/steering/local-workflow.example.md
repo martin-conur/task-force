@@ -101,7 +101,12 @@ task-work tasks/007-spike-idea.md --no-launch
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
-`.git/task-force/state.json`. Idempotent; safe to run anytime.
+`.git/task-force/state.json`. Idempotent; safe to run anytime. Like `task-work`
+/ `task-done`, it is a root dispatcher that resolves the loadout per-repo
+(#215) — on a repo tracked in GitHub / Jira / Notion it refuses with a message
+naming that loadout, because there are no local task files to render a board
+from. `--repo PATH` picks the repo, and the dispatcher detects from that path
+rather than from `$PWD`.
 
 `ci-guard` — the commit-msg guard `task-work` installs (#194)
 

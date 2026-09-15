@@ -329,3 +329,58 @@ msg() { printf '%s\n' "$@" > "$TMP/msg"; }
   assert_success
   assert_output --partial "commits will NOT be checked"
 }
+
+# ------------------------------------------------- workflow-doc parity
+
+# Print the ci-guard section of a workflow doc: its heading through the line
+# before the radio section that follows it. Same shape as radio_runbook's
+# runbook_block(), and it works unchanged on the dogfood copy because the
+# section sits inside task-init's managed region.
+ci_guard_block() {
+  awk '/^`ci-guard` — the commit-msg guard/{p=1} p&&/^### PM ↔ worker messaging/{exit} p{print}' "$1"
+}
+
+@test "the ci-guard section is byte-identical across all 8 workflow docs" {
+  # The section documents a hook that installs itself into the user's repo, so
+  # a loadout whose copy drifts is a loadout whose users are told something
+  # untrue about their own git hooks.
+  local docs=(
+    "$REPO_ROOT_REAL/.claude/gh-workflow.md"
+    "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
+  )
+  local ref other
+  ref=$(ci_guard_block "${docs[0]}")
+  [ -n "$ref" ] || { echo "no ci-guard block in ${docs[0]}"; return 1; }
+  for doc in "${docs[@]:1}"; do
+    other=$(ci_guard_block "$doc")
+    [ "$ref" = "$other" ] || { echo "ci-guard block diverges in $doc"; return 1; }
+  done
+}
+
+@test "the ci-guard section lives inside task-init's managed region (#212)" {
+  # Below the end marker it would be repo-specific content task-init never
+  # refreshes — the section would then go stale on every upgrade.
+  local doc="$REPO_ROOT_REAL/.claude/gh-workflow.md"
+  local sec_line end_line
+  sec_line=$(grep -n '^`ci-guard` — the commit-msg guard' "$doc" | cut -d: -f1)
+  # The intro paragraph names the marker in prose too — match the real one,
+  # which is a standalone line.
+  end_line=$(grep -n '^<!-- task-init:managed:end -->$' "$doc" | cut -d: -f1)
+  [ -n "$sec_line" ] && [ -n "$end_line" ] || { echo "marker or section missing"; return 1; }
+  [ "$sec_line" -lt "$end_line" ] || { echo "ci-guard section is below the end marker"; return 1; }
+}
+
+@test "this repo's pre-PR checklist carries the CI-markers gate" {
+  # It sits below the managed-region end marker, so task-init never rewrites
+  # it — but nothing else guards it either, and it was deleted three times.
+  run grep -q '^- \*\*CI markers\*\*' "$REPO_ROOT_REAL/.claude/gh-workflow.md"
+  assert_success
+  run grep -q 'empty `gh pr checks` list is not a pass' "$REPO_ROOT_REAL/.claude/gh-workflow.md"
+  assert_success
+}

@@ -10,6 +10,8 @@ source "$AW_ROOT_REAL/lib/zellij-tab.sh"
 source "$AW_ROOT_REAL/lib/worktree-create.sh"
 # shellcheck source=lib/repo-name.sh
 source "$AW_ROOT_REAL/lib/repo-name.sh"
+# shellcheck source=lib/ci-guard.sh
+source "$AW_ROOT_REAL/lib/ci-guard.sh"
 # endregion:lib-source-header
 
 usage() {
@@ -160,6 +162,17 @@ aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 printf 'BASE_BRANCH=%s\nSLUG=%s\nJIRA_REF=%s\n' "$BASE_BRANCH" "$SLUG" "$JIRA_REF" > "$INFO_FILE"
+
+# region:ci-guard-hook
+# Install the commit-msg guard before the worker gets a shell (#194). GitHub
+# honours a CI-skip marker anywhere in the head commit's message, so an agent
+# that merely *quotes* one while describing another commit silently gets zero
+# workflow runs — and reports "CI green" off an empty check list in good faith.
+# A prompt warning is not enough: it has already happened to an agent that was
+# correctly explaining the bug. Git shares one hooks dir across a repo's
+# worktrees, so this protects every commit here, not just this worktree's.
+aw_install_ci_guard_hook "$REPO_ROOT"
+# endregion:ci-guard-hook
 
 # region:radio-env-injection
 # Inject radio session env vars into the spawned command so the agent's

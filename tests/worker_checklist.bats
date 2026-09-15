@@ -21,11 +21,35 @@ SHIPPED_WORKERS=(
   "$REPO_ROOT_REAL/claude-local/commands/worker.md"
 )
 
-# Extract the checklist block (from the "Pre-PR checklist" line through the
-# "Green" bullet) from a worker.md file.
+# Extract the checklist block (from the "Pre-PR checklist" line up to the
+# numbered step that follows it) from a worker.md file. The window deliberately
+# runs past the "Green" bullet so its fenced proof-of-run command is compared
+# across loadouts too (#194) rather than drifting unwatched.
 checklist_block() {
-  awk '/^\*\*Pre-PR checklist\*\*/{p=1} p{print} /^- \*\*Green\*\*/{if(p)exit}' "$1"
+  awk '/^\*\*Pre-PR checklist\*\*/{p=1} p&&/^[0-9]+\. /{exit} p{print}' "$1"
 }
+
+# All 8 shipped worker prompts: the 5 claude markdown copies (incl. the
+# dogfood one) plus the 3 kiro agent definitions, whose prompt lives in a JSON
+# field. Printing them through one accessor keeps the #194 assertions below
+# loadout-shaped rather than format-shaped.
+worker_prompt() {
+  case "$1" in
+    *.json) python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["prompt"])' "$1" ;;
+    *)      cat "$1" ;;
+  esac
+}
+
+ALL_WORKER_PROMPTS=(
+  "$REPO_ROOT_REAL/.claude/commands/worker.md"
+  "$REPO_ROOT_REAL/claude-gh/commands/worker.md"
+  "$REPO_ROOT_REAL/claude-jira/commands/worker.md"
+  "$REPO_ROOT_REAL/claude-notion/commands/worker.md"
+  "$REPO_ROOT_REAL/claude-local/commands/worker.md"
+  "$REPO_ROOT_REAL/kiro-gh/agents/worker.json"
+  "$REPO_ROOT_REAL/kiro-local/agents/worker.json"
+  "$REPO_ROOT_REAL/kiro-notion/agents/worker.json"
+)
 
 @test "every shipped claude worker.md carries a pre-PR checklist" {
   for f in "${SHIPPED_WORKERS[@]}"; do
@@ -76,4 +100,60 @@ checklist_block() {
 @test "this repo's gh-workflow.md carries the task-force-specific gloss" {
   run grep -q 'Pre-PR checklist (this repo)' "$REPO_ROOT_REAL/.claude/gh-workflow.md"
   assert_success
+}
+
+# --- #194: CI-skip markers and the empty-check-list caveat -------------------
+
+@test "all 8 worker prompts warn against a literal CI-skip marker" {
+  # GitHub reads the whole commit message, so quoting a marker while
+  # *describing* another commit suppresses your own run. Two workers hit this
+  # in one hour; the second was explaining the first.
+  for f in "${ALL_WORKER_PROMPTS[@]}"; do
+    run worker_prompt "$f"
+    assert_success
+    [[ "$output" == *"CI-skip marker"* ]] || { echo "no marker warning in $f"; return 1; }
+    [[ "$output" == *"skip-ci"* ]] || { echo "no escape hatch in $f"; return 1; }
+  done
+}
+
+@test "all 8 worker prompts treat an empty check list as not-green" {
+  # "Did CI pass" cannot catch a suppressed run — there is nothing to check.
+  # Only "does a run exist for this exact SHA" can.
+  for f in "${ALL_WORKER_PROMPTS[@]}"; do
+    run worker_prompt "$f"
+    assert_success
+    [[ "$output" == *"empty check list is not a pass"* ]] || { echo "no empty-list caveat in $f"; return 1; }
+    [[ "$output" == *"gh run list -c"* ]] || { echo "no proof-of-run command in $f"; return 1; }
+  done
+}
+
+@test "all 5 reviewer prompts apply the same empty-vs-passing distinction" {
+  # A reviewer that cross-checks "CI green" off an empty list repeats the bug
+  # at one remove.
+  local reviewers=(
+    "$REPO_ROOT_REAL/.claude/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-gh/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-jira/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"
+    "$REPO_ROOT_REAL/kiro-gh/agents/reviewer.json"
+  )
+  for f in "${reviewers[@]}"; do
+    run worker_prompt "$f"
+    assert_success
+    [[ "$output" == *"empty check list is not a pass"* ]] || { echo "no empty-list caveat in $f"; return 1; }
+    [[ "$output" == *"headRefOid"* ]] || { echo "no head-SHA run check in $f"; return 1; }
+  done
+}
+
+@test "the #194 checklist bullets stay byte-identical across gh / jira / notion" {
+  # Covered by the block comparison above, but pinned explicitly: these two
+  # bullets are the ones a future edit is most likely to fix in one copy only.
+  for bullet in '- \*\*CI markers\*\*' '- \*\*Green\*\*'; do
+    ref=$(grep -E "^$bullet" "$REPO_ROOT_REAL/claude-gh/commands/worker.md")
+    for lo in claude-jira claude-notion claude-local; do
+      other=$(grep -E "^$bullet" "$REPO_ROOT_REAL/$lo/commands/worker.md")
+      [ "$ref" = "$other" ] || { echo "$lo diverges on $bullet"; return 1; }
+    done
+  done
 }

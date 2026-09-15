@@ -783,6 +783,64 @@ _rename_tab() {
   _session_set_fields "$f" "TAB=$new_name"
 }
 
+# Which repo does a legacy-`pm` backlog message belong to (#210)? Prints one of
+# `mine` / `foreign` / `unknown` for message $1 against reponame $2.
+#
+# #182 routed on `repo:` alone. cmd_send writes that field only when `--repo` was
+# passed, and nothing passes it: 0 of 163 documented `radio send` call sites, 0 of
+# 399 real messages in the mailbox. So the filter's inner branch never executed —
+# and because the untagged fall-through *adopts*, a guard that never ran was
+# indistinguishable from one that ran and said yes. The observed result was one
+# PM adopting 53 messages belonging to four other repos, with no warning, no
+# counter, and no log line, since `skipped` could only increment inside the dead
+# branch. A precondition that is never satisfied turns a guard into a no-op, and
+# a no-op that fails open looks exactly like correct behaviour (#206 was the same
+# class: a drift-shared region reading an `$AUTO_MODE` its kiro hosts never set).
+#
+# `from:` is the signal that actually fires: every message carries it, and it
+# encodes the repo by construction — `worker-<reponame>-<slug>`,
+# `reviewer-<reponame>-pr<N>`, `pm-<reponame>`. Direction is what makes it the
+# right field here: adoption candidates are worker→pm mail, so they are all
+# literally `to: pm` and the recipient carries nothing. (The mirror of #201's
+# dead-letter routing, where the sender is also the signal — there because the
+# mail is PM→worker and the PM that sent a ping is who needs the report.)
+#
+# The test is one-sided: only THIS pm's reponame is ever substituted into the
+# pattern, so the hyphen-splitting ambiguity `_resolve_pm_by_slug_split` works
+# around never arises — there is no second candidate to rank against. A sender
+# whose name is a genuinely ambiguous split (`worker-task-force-x` read by a PM
+# for repo `task`) resolves to `mine`, which is the pre-existing first-come
+# treatment for something no name can disambiguate, not a regression.
+#
+# `repo:` stays the higher-precedence arm for the day something starts passing
+# `--repo`; per #210 this does NOT change cmd_send to begin writing it (a wire
+# format change affecting every sender, and `from:` is already sufficient).
+_adopt_route() {
+  local f="$1" my_repo="$2" repo from
+  repo=$(_msg_field "$f" repo)
+  if [[ -n "$repo" ]]; then
+    repo=$(_sanitize_role_segment "$(basename "$repo")")
+    if [[ -n "$repo" ]]; then
+      [[ "$repo" == "$my_repo" ]] && { printf 'mine'; return 0; }
+      printf 'foreign'; return 0
+    fi
+  fi
+  from=$(_msg_field "$f" from)
+  case "$from" in
+    # Quoted so a reponame is matched literally; it is sanitized to [a-z0-9-]
+    # anyway, so it carries no glob metacharacters.
+    worker-"$my_repo"-*|reviewer-"$my_repo"-*|pm-"$my_repo")
+      printf 'mine'; return 0 ;;
+    # A repo-scoped sender naming someone else's repo. `?*` on both segments so
+    # only a name that genuinely encodes a repo counts as attributable — a
+    # pre-env `from: unknown`, a bare `pm`, or a slugless `worker-a` falls
+    # through to `unknown` rather than being read as a foreign repo.
+    worker-?*-?*|reviewer-?*-?*|pm-?*)
+      printf 'foreign'; return 0 ;;
+  esac
+  printf 'unknown'
+}
+
 # Legacy `pm` inbox adoption (#182). Post-#165 no role ever registers as the
 # literal `pm` again, so `mailbox/pm/inbox` is write-only: the pre-migration
 # backlog (the July "no session for pm" strandings) plus any env-less step-4
@@ -863,26 +921,22 @@ _adopt_legacy_pm_inbox() {
   dst=$(_inbox_dir "$role")
   mkdir -p "$dst"
 
-  local f base target tmp n=0 skipped=0 stamp msg_repo msg_repo_name
+  local f base target tmp n=0 skipped=0 unattributed=0 stamp
   stamp=$(_now)
   for f in "${legacy[@]}"; do
-    # Repo routing (#182 review #2): a message tagged `repo:` (cmd_send writes it
-    # from --repo) belongs to that repo's PM. Adopt it only when its repo
-    # basename matches THIS PM's reponame, or it carries no repo: field — a
-    # repo-less message is a genuinely global backlog entry (the pre-#165 `--to
-    # pm` sends that never set --repo), so first-come is correct. Leave a
-    # foreign-repo message for its own PM rather than misrouting it to whoever
-    # booted first. Skip the filter when this PM has no reponame (test/CI paths
-    # with no --repo): fall back to adopting everything, the pre-repo behavior.
+    # Repo routing (#182 review #2, repaired in #210). Leave a foreign-repo
+    # message in the legacy inbox for its own PM rather than misrouting it to
+    # whoever booted first. A message no name can attribute keeps the historical
+    # first-come treatment — it is the only available option — but is COUNTED and
+    # logged, so "adopted because unattributable" stops being indistinguishable
+    # from "adopted because it matched". Skip the filter entirely when this PM has
+    # no reponame (test/CI paths with no --repo): adopt everything, the pre-repo
+    # behavior.
     if [[ -n "$my_repo" ]]; then
-      msg_repo=$(_msg_field "$f" repo)
-      if [[ -n "$msg_repo" ]]; then
-        msg_repo_name=$(_sanitize_role_segment "$(basename "$msg_repo")")
-        if [[ "$msg_repo_name" != "$my_repo" ]]; then
-          skipped=$(( skipped + 1 ))
-          continue
-        fi
-      fi
+      case "$(_adopt_route "$f" "$my_repo")" in
+        foreign) skipped=$(( skipped + 1 )); continue ;;
+        unknown) unattributed=$(( unattributed + 1 )) ;;
+      esac
     fi
 
     base="${f##*/}"
@@ -921,6 +975,7 @@ _adopt_legacy_pm_inbox() {
   ADOPTED_LEGACY_N=$n
   (( n > 0 ))       && _log "adopt: migrated $n legacy pm message(s) into role=$role"
   (( skipped > 0 )) && _log "adopt: left $skipped foreign-repo message(s) for their own PM role=$role"
+  (( unattributed > 0 )) && _log "adopt: $unattributed message(s) named no repo (from: unattributable) — adopted first-come role=$role"
   return 0
 }
 

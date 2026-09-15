@@ -7,6 +7,12 @@ view is auto-generated and Obsidian-friendly.
 Copy this file to your project's `.claude/local-workflow.md`.
 Or run `task-init claude-local` in your project root to do this automatically.
 
+When `task-init` writes this file it wraps the template in
+`<!-- task-init:managed:start -->` / `<!-- task-init:managed:end -->` markers. Re-running
+`task-init` replaces only what is between them, so anything you add **below the end
+marker** — repo-specific conventions, what "Green" means in this repo — survives every
+upgrade.
+
 Then reference it from `CLAUDE.md` at your project root so every Claude Code
 session auto-loads it:
 

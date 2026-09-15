@@ -68,8 +68,14 @@ _install_file_write() {
   echo "✓ Wrote $label ($dest)"
 }
 
+# _install_file_prompt <src> <dest> <label> [writer]
+#
+# The [k]eep / [o]verwrite / [d]iff loop. `writer` names the function that
+# performs the overwrite (default: _install_file_write); lib/managed-region.sh
+# passes its own so the workflow doc's prompt path shares this loop instead of
+# growing a second copy of it.
 _install_file_prompt() {
-  local src="$1" dest="$2" label="$3"
+  local src="$1" dest="$2" label="$3" writer="${4:-_install_file_write}"
   local answer
   while true; do
     printf '%s exists at %s. [k]eep / [o]verwrite / [d]iff (default: keep): ' "$label" "$dest" >&2
@@ -85,7 +91,7 @@ _install_file_prompt() {
         return 0
         ;;
       o|O|overwrite)
-        _install_file_write "$src" "$dest" "$label"
+        "$writer" "$src" "$dest" "$label"
         return 0
         ;;
       d|D|diff)

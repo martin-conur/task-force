@@ -27,6 +27,11 @@ Overwrite policy when a target file already exists:
   (TTY default)    Per-file prompt: [k]eep / [o]verwrite / [d]iff
   (non-TTY)        Silently keep existing files (script-safe)
 
+The workflow doc is written between <!-- task-init:managed:start --> and
+<!-- task-init:managed:end --> markers. A re-run replaces only that region, so
+anything you add below the end marker survives --force. A doc predating those
+markers is backed up to <doc>.bak before the markers are added.
+
 When refreshing an existing workflow doc, previously-filled {SITE} / {KEY} /
 {BOARD} values are automatically preserved (this-run flags take precedence).
 
@@ -87,6 +92,13 @@ TEMPLATE="$SCRIPT_DIR/../steering/jira-workflow.example.md"
 LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/install-file.sh
 . "$LIB_DIR/install-file.sh"
+# region:managed-region-source
+# The workflow doc is installed through install_managed_file (#183), not
+# install_file: a re-run refreshes only the task-init-owned region and leaves
+# the user's own sections below the end marker alone.
+# shellcheck source=lib/managed-region.sh
+. "$LIB_DIR/managed-region.sh"
+# endregion:managed-region-source
 # shellcheck source=lib/preserve-placeholders.sh
 . "$LIB_DIR/preserve-placeholders.sh"
 # region:require-jq-source
@@ -173,7 +185,7 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
     cp "$TEMPLATE" "$TMP_RENDERED"
   fi
 
-  INSTALL_POLICY="$POLICY" install_file "$TMP_RENDERED" "$TARGET" "jira-workflow.md"
+  INSTALL_POLICY="$POLICY" install_managed_file "$TMP_RENDERED" "$TARGET" "jira-workflow.md"
 
   IMPORT_LINE="@.claude/jira-workflow.md"
   if [[ -f "$CLAUDE_MD" ]]; then

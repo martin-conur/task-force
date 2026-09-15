@@ -90,14 +90,32 @@ teardown() {
   assert_output --partial "USER EDIT"
 }
 
-@test "--force overwrites existing local-workflow.md" {
+@test "--force refreshes the template half of local-workflow.md" {
+  # Post-#183 the workflow doc is a managed region: --force rebuilds what is
+  # between the markers, so deleting a template heading is repaired…
   run "$KIRO_LOCAL_TASK_INIT"
   assert_success
-  echo "USER EDIT" >> "$TARGET_DIR/.kiro/steering/local-workflow.md"
+  local doc="$TARGET_DIR/.kiro/steering/local-workflow.md"
+  grep -v '^### When radio misbehaves$' "$doc" > "$doc.x"
+  mv "$doc.x" "$doc"
   run "$KIRO_LOCAL_TASK_INIT" --force
   assert_success
-  run cat "$TARGET_DIR/.kiro/steering/local-workflow.md"
-  refute_output --partial "USER EDIT"
+  run cat "$doc"
+  assert_output --partial "### When radio misbehaves"
+}
+
+@test "--force leaves content below the end marker alone (#183)" {
+  # …while an appended line lands below the end marker and must survive. This
+  # is the deletion that hit this repo three times: a hand-authored section in
+  # the workflow doc, gone on the next documented `task-init` re-run.
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  local doc="$TARGET_DIR/.kiro/steering/local-workflow.md"
+  echo "USER EDIT" >> "$doc"
+  run "$KIRO_LOCAL_TASK_INIT" --force
+  assert_success
+  run cat "$doc"
+  assert_output --partial "USER EDIT"
 }
 
 @test "--force + --restore is rejected" {

@@ -7,6 +7,12 @@ view is auto-generated and Obsidian-friendly.
 Copy this file to your project's `.kiro/steering/local-workflow.md`.
 Or run `task-init kiro-local` in your project root to do this automatically.
 
+When `task-init` writes this file it wraps the template in
+`<!-- task-init:managed:start -->` / `<!-- task-init:managed:end -->` markers. Re-running
+`task-init` replaces only what is between them, so anything you add **below the end
+marker** — repo-specific conventions, what "Green" means in this repo — survives every
+upgrade.
+
 Kiro auto-loads anything under `.kiro/steering/`, so every Kiro session in this
 repo will pick this file up.
 

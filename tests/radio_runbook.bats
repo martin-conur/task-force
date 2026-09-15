@@ -55,9 +55,14 @@ DOCUMENTED_GREPS=(
   'refusing to wipe'
 )
 
-# Print the runbook block (heading through EOF) of a workflow doc.
+# Print the runbook block of a workflow doc: the heading through the end of the
+# template. In a template that is EOF; in an installed doc (the dogfood copy)
+# the template ends at the task-init managed-region marker, and everything after
+# it is the repo's own content (#183) — which must not be compared against a
+# template that by definition has none.
 runbook_block() {
-  sed -n '/^### When radio misbehaves$/,$p' "$1"
+  sed -n '/^### When radio misbehaves$/,$p' "$1" \
+    | sed '/^<!-- task-init:managed:end -->$/,$d'
 }
 
 @test "the README carries the runbook with all six symptoms" {

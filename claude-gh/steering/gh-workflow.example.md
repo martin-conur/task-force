@@ -85,6 +85,43 @@ task-work spike-idea --no-launch
 
 - `--force` — skip all confirmation prompts
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
+
+`ci-guard` — the commit-msg guard `task-work` installs (#194)
+
+Every `task-work` run installs a `commit-msg` git hook that refuses a commit
+message containing a literal CI-skip marker — `[skip ci]`, `[ci skip]`,
+`[no ci]`, `[skip actions]`, `[actions skip]`. GitHub honours those **anywhere
+in the message**, not just the subject line, so an agent that merely *quotes*
+one while describing another commit suppresses its own workflow run. The
+failure leaves no artifact: no run is queued, so the PR shows no failing checks
+because it shows no checks, and "CI green" gets reported in good faith off an
+empty list. It happened twice in one hour before the guard existed, the second
+time to an agent that was correctly *explaining* the first.
+
+Git shares one hooks directory across a repo's worktrees, so the hook covers
+every commit in the repo, not just the worktree it was installed from. A
+pre-existing `commit-msg` hook is never clobbered: it is preserved as
+`commit-msg.local` and chained. Installation is idempotent.
+
+```bash
+ci-guard check [<rev|range>]   # scan committed messages (default: HEAD)
+ci-guard scan <file>|-         # scan a message file or stdin
+ci-guard install-hook [<dir>]  # (re)install the hook by hand
+```
+
+Writing *about* a marker is the legitimate case the guard has to accommodate —
+break it (`skip-ci`) or drop the brackets. `git commit --no-verify` bypasses
+the hook for a deliberate skip, and `TASK_FORCE_NO_CI_GUARD=1` disables the
+guard entirely.
+
+The companion habit: verifying CI means confirming a run **exists and passed**
+for the exact SHA. "Passing" and "never built" look identical in `gh pr view`.
+
+```bash
+gh run list -c "$(git rev-parse HEAD)" --limit 1 --json databaseId --jq 'length'
+# 0 => no run for this commit; "green" is not a claim you can make
+```
+
 ### PM ↔ worker messaging (radio)
 
 Radio is the **canonical** coordination channel between the PM and workers — every

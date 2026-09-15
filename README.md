@@ -73,7 +73,7 @@ cd ~/agentic-workflow
 ./install.sh all              # install all seven
 ```
 
-The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, and `task-init` into `~/.local/bin`.
+The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
 
 ### 3. Set up a project
 
@@ -668,7 +668,7 @@ radio send --to pm --intent spec-ready --issue 42
 
 PM's tab gets focused; on the next turn the PM picks it up and dispatches a worker for the same issue.
 
-**4. Worker implements.** In the worker tab the agent reads the spec, edits files, runs tests, and commits with the issue title as a prefix.
+**4. Worker implements.** In the worker tab the agent reads the spec, edits files, runs tests, and commits with the issue title as a prefix. The `commit-msg` hook `task-work` installed checks that message for a literal CI-skip marker first — see [CI-skip markers and the `ci-guard` hook](#ci-skip-markers-and-the-ci-guard-hook).
 
 **5. Worker opens the PR, bumps Status, pings PM.** Once the implementation is in, the worker opens the PR:
 
@@ -716,6 +716,75 @@ radio send --to worker-task-force-issue-42 --intent approved-and-merged --pr 42
 ```
 
 On its next turn the worker sees the ping, sets the project Status field to `Done`, and runs `task-done --remove-worktree` itself — removing the worktree and closing its own zellij tab. Done.
+
+### CI-skip markers and the `ci-guard` hook
+
+GitHub scans the **entire** head-commit message for its CI-skip markers, not
+just the subject line. An agent that merely *quotes* one while describing
+another commit suppresses its own workflow run — and the failure is the worst
+kind of quiet:
+
+```
+$ gh run list --branch task/kiro-radio-best-effort --json headSha,conclusion
+  00b91232  success     <- final head, merged
+  48b88ee9  success     <- amended, marker removed
+  76861921  failure     <- pre-amend head
+```
+
+`06afcf15`, the commit carrying three literal markers, **does not appear at
+all.** Not queued, not skipped-with-a-record, not cancelled. It was the PR head
+for nine minutes and GitHub never created a run for it. There is no artifact in
+the CI record, and absence is indistinguishable from "not looked at yet" when
+you're scanning a PR. Both workers this happened to reported "CI green" in good
+faith, off an empty check list.
+
+Awareness is not the fix — the second occurrence was written by an agent that
+was correctly *explaining* the first, in the commit message that suppressed its
+own run. So the guard is mechanical. Every `task-work` run installs a
+`commit-msg` git hook that refuses the commit:
+
+```
+$ git commit -m 'describe the [skip ci] commit'
+
+✗ ci-guard: CI-skip marker found in the commit message (.git/COMMIT_EDITMSG)
+    line 1: [skip ci]
+
+  GitHub reads the WHOLE commit message, not just the subject line, so
+  this commit would get ZERO workflow runs — no failing checks, no checks
+  at all. That is invisible in 'gh pr view'.
+
+  Writing *about* a marker? Break it, e.g.  skip-ci  (or drop the brackets).
+  Genuinely want to skip CI?                git commit --no-verify
+  Disable this guard entirely?              TASK_FORCE_NO_CI_GUARD=1
+```
+
+Git shares one hooks directory across a repo's worktrees, so the hook covers
+every commit in the repo, not only the worktree it was installed from — which
+matters, because the sync commit that triggered both occurrences was made on
+`main`. A pre-existing `commit-msg` hook is never clobbered: it's preserved as
+`commit-msg.local` and chained from the stub. Installation is idempotent, and
+the hook no-ops if `ci-guard` isn't on `PATH`, so uninstalling task-force never
+locks you out of committing.
+
+The guard is also a command in its own right:
+
+```bash
+ci-guard check [<rev|range>]   # scan committed messages (default: HEAD)
+ci-guard scan <file>|-         # scan a message file or stdin
+ci-guard install-hook [<dir>]  # (re)install the hook by hand
+```
+
+**The companion habit** — the worker and reviewer prompts now both carry it —
+is that verifying CI means confirming a run **exists and passed** for the exact
+SHA. "Did CI pass" cannot catch a suppressed run, because there is nothing to
+check:
+
+```bash
+gh run list -c "$(git rev-parse HEAD)" --limit 1 --json databaseId --jq 'length'
+# 0 => no run for this commit; "green" is not a claim you can make
+```
+
+An empty check list is a red flag, not a pass.
 
 ### Optional: dispatch a reviewer worker
 

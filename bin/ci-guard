@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ci-guard — refuse commit messages carrying a literal CI-skip marker.
+#
+# GitHub scans the *entire* head-commit message for its CI-skip markers, not
+# just the subject line. An agent that merely *quotes* one while describing
+# another commit suppresses its own workflow run — and the failure is silent
+# and artifact-free: no run is queued, so `gh pr view` shows no failing checks
+# because there are no checks at all. Both observed occurrences were reported
+# as "CI green" in good faith off an empty check list (#194).
+#
+# Awareness is not a sufficient fix: the second occurrence was written by an
+# agent that was correctly *explaining* the first. So this is mechanical —
+# `task-work` installs it as the repo's `commit-msg` hook, and the marker never
+# reaches a pushed commit.
+#
+# Usage:
+#   ci-guard commit-msg <file>   # git commit-msg hook mode (refuses the commit)
+#   ci-guard scan <file>|-       # scan a message file or stdin
+#   ci-guard check [<rev|range>] # scan committed messages (default: HEAD)
+#   ci-guard install-hook [dir]  # install self as <repo>'s commit-msg hook
+#
+# Exit status: 0 clean, 1 marker found, 2 usage/environment error.
+#
+# Escape hatches, in the order you should reach for them:
+#   * writing *about* a marker  -> break it: skip-ci, or drop the brackets
+#   * genuinely want to skip CI -> git commit --no-verify
+#   * disable the guard wholly  -> TASK_FORCE_NO_CI_GUARD=1
+
+# The five markers GitHub honours (docs: "Skipping workflow runs"). Matched
+# case-insensitively: GitHub's own matching is, and a false positive here costs
+# one reworded commit while a false negative costs a silently unverified PR.
+CI_GUARD_MARKERS=(
+  "[skip ci]"
+  "[ci skip]"
+  "[no ci]"
+  "[skip actions]"
+  "[actions skip]"
+)
+
+usage() {
+  sed -n '/^# Usage:/,/^# Exit status/p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+}
+
+# Print "<line-number>\t<marker>" for every marker occurrence on stdin.
+# Comment lines and the `--- >8 ---` scissors tail are skipped: git strips both
+# before the message is stored, so a marker there never reaches GitHub and
+# flagging it would fire on git's own commit template.
+ci_guard_scan_stream() {
+  local n=0 line lc marker
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    # Scissors: everything below is a diff git will discard (`commit --verbose`,
+    # or --cleanup=scissors).
+    [[ "$line" =~ ^#[[:space:]]-+[[:space:]]\>8[[:space:]]-+ ]] && break
+    [[ "$line" == \#* ]] && continue
+    lc=$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')
+    for marker in "${CI_GUARD_MARKERS[@]}"; do
+      if [[ "$lc" == *"$marker"* ]]; then
+        printf '%s\t%s\n' "$n" "$marker"
+      fi
+    done
+  done
+}
+
+# Render the refusal. $1 = context label, remaining stdin = scan hits.
+ci_guard_report() {
+  local context="$1" hits="$2" n marker
+  {
+    echo ""
+    echo "✗ ci-guard: CI-skip marker found in $context"
+    while IFS=$'\t' read -r n marker; do
+      [[ -n "$n" ]] || continue
+      echo "    line $n: $marker"
+    done <<<"$hits"
+    echo ""
+    echo "  GitHub reads the WHOLE commit message, not just the subject line, so"
+    echo "  this commit would get ZERO workflow runs — no failing checks, no checks"
+    echo "  at all. That is invisible in 'gh pr view'."
+    echo ""
+    echo "  Writing *about* a marker? Break it, e.g.  skip-ci  (or drop the brackets)."
+    echo "  Genuinely want to skip CI?                git commit --no-verify"
+    echo "  Disable this guard entirely?              TASK_FORCE_NO_CI_GUARD=1"
+    echo ""
+    echo "  To prove a commit was actually built, check a run exists for its SHA —"
+    echo "  'passing' and 'no run at all' both look green otherwise:"
+    echo "      gh run list -c \"\$(git rev-parse HEAD)\" --limit 1 --json databaseId --jq 'length'"
+    echo ""
+  } >&2
+}
+
+cmd_scan() {
+  local src="${1-}" context hits
+  [[ -n "$src" ]] || usage
+  if [[ "$src" == "-" ]]; then
+    context="the commit message (stdin)"
+    hits=$(ci_guard_scan_stream)
+  else
+    [[ -f "$src" ]] || { echo "ci-guard: no such file: $src" >&2; exit 2; }
+    context="the commit message ($src)"
+    hits=$(ci_guard_scan_stream <"$src")
+  fi
+  [[ -n "$hits" ]] || return 0
+  ci_guard_report "$context" "$hits"
+  return 1
+}
+
+cmd_commit_msg() {
+  [[ -n "${TASK_FORCE_NO_CI_GUARD:-}" ]] && return 0
+  local file="${1-}"
+  [[ -n "$file" ]] || usage
+  # A missing message file is git's problem, not ours — never block a commit
+  # over a guard-side surprise.
+  [[ -f "$file" ]] || return 0
+  cmd_scan "$file"
+}
+
+cmd_check() {
+  local rev="${1:-HEAD}" hits msg
+  git rev-parse --git-dir >/dev/null 2>&1 || { echo "ci-guard: not in a git repo" >&2; exit 2; }
+  if [[ "$rev" == *..* ]]; then
+    msg=$(git log --format=%B "$rev")
+  else
+    msg=$(git log -1 --format=%B "$rev")
+  fi
+  hits=$(printf '%s\n' "$msg" | ci_guard_scan_stream)
+  [[ -n "$hits" ]] || return 0
+  ci_guard_report "the commit message(s) of $rev" "$hits"
+  return 1
+}
+
+cmd_install_hook() {
+  # shellcheck source=lib/ci-guard.sh
+  source "$CI_GUARD_ROOT/lib/ci-guard.sh"
+  aw_install_ci_guard_hook "${1:-$(pwd)}"
+}
+
+# Resolve own path through symlinks so `install-hook` can find lib/.
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir=$(cd -P "$(dirname "$_src")" && pwd)
+  _src=$(readlink "$_src")
+  [[ $_src != /* ]] && _src="$_dir/$_src"
+done
+CI_GUARD_ROOT=$(dirname "$(cd -P "$(dirname "$_src")" && pwd)")
+
+case "${1-}" in
+  commit-msg)   shift; cmd_commit_msg "$@" ;;
+  scan)         shift; cmd_scan "$@" ;;
+  check)        shift; cmd_check "$@" ;;
+  install-hook) shift; cmd_install_hook "$@" ;;
+  -h|--help|"") usage ;;
+  *)            echo "ci-guard: unknown command: $1" >&2; usage ;;
+esac

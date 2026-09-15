@@ -22,6 +22,8 @@ ln -sf "$SCRIPT_DIR/../bin/task-pm" ~/.local/bin/task-pm
 echo "  ✓ Script: task-pm (canonical)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/radio" ~/.local/bin/radio
 echo "  ✓ Script: radio (PM↔worker mailbox CLI)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/ci-guard" ~/.local/bin/ci-guard
+echo "  ✓ Script: ci-guard (commit-msg CI-skip-marker guard)"; sleep 0.05
 # endregion:install-shared-symlinks
 ln -sf "$SCRIPT_DIR/bin/task-board" ~/.local/bin/task-board
 echo "  ✓ Script: task-board (local-tracker)"; sleep 0.05

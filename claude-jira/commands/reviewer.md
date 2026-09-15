@@ -32,10 +32,12 @@ $ARGUMENTS
    ```
    mcp__atlassian__getJiraIssue(cloudId: <from .claude/jira-workflow.md>, issueIdOrKey: "<KEY>")
    ```
-3. Read the PR:
+3. Read the PR — and confirm CI actually **ran** on its head commit. An empty check list is not a pass; it is the signature of a commit message carrying a literal CI-skip marker (`[skip ci]` and friends), which forges honour *anywhere* in the message, not just the subject line. Zero runs for the head SHA is a blocking finding, not a nit — "passing" and "never built" look identical in `gh pr view`:
    ```bash
    gh pr view <N> --comments
    gh pr diff <N>
+   gh run list -c "$(gh pr view <N> --json headRefOid --jq .headRefOid)" \
+     --limit 1 --json databaseId --jq 'length'   # 0 => no run for this commit; not green
    ```
 4. Cross-check the diff against the spec (if any). Note any deliverables the issue called for that are missing, partial, or implemented differently than specified — these are first-class findings, not nits.
 5. Run the `code-review` skill on the diff. The skill orchestrates sub-agents and produces correctness findings.

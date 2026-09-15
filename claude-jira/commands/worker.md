@@ -21,7 +21,11 @@ Workflow:
 - **Docs**: if model-facing or user-visible behavior changed, update the docs that describe it (README section, workflow/steering docs, etc.).
 - **Reuse**: grep for an existing helper before writing scaffolding; if a second copy of ~10+ lines appears, extract and share it instead of re-implementing.
 - **Spec comments**: re-read the spec in full, including any comments or notes added after the original body — implementation addenda often live there.
-- **Green**: run the repo's test suite, linters, and any consistency/drift checks; after pushing, confirm `gh pr checks` rather than claiming green.
+- **CI markers**: never let a CI-skip marker — `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]` — appear literally anywhere in a commit message. Forges read the *whole* message, not just the subject, so even quoting one while describing another commit suppresses your own run. Write it broken (`skip-ci`) or drop the brackets.
+- **Green**: run the repo's test suite, linters, and any consistency/drift checks; after pushing, confirm CI **ran and passed**. An empty check list is not a pass — it is the signature of a suppressed run, and it looks identical to "not started yet". Prove a run exists for the exact SHA before claiming green:
+  ```bash
+  gh run list -c "$(git rev-parse HEAD)" --limit 1 --json databaseId --jq 'length'   # 0 => no run; not green
+  ```
 
 8. Create a pull request first (before transitioning the issue), so a failed `gh pr create` doesn't strand the issue in "In Review" with no PR:
    - Find the base branch by running:

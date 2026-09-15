@@ -67,7 +67,7 @@ resolve_link() {
     rm -rf "$HOME/.local/bin"
     bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
 
-    for cmd in task-init task-work task-done task-pm radio; do
+    for cmd in task-init task-work task-done task-pm radio ci-guard; do
       [ -L "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink missing"; return 1; }
       [ -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink dangling"; return 1; }
     done
@@ -75,6 +75,10 @@ resolve_link() {
       || { echo "$impl: radio resolves to $(resolve_link radio)"; return 1; }
     [ "$(resolve_link task-pm)" = "$REPO_ROOT_REAL/bin/task-pm" ] \
       || { echo "$impl: task-pm resolves to $(resolve_link task-pm)"; return 1; }
+    # ci-guard is the commit-msg marker guard (#194) — the hook task-work
+    # installs execs it off PATH, so a missing link silently disarms it.
+    [ "$(resolve_link ci-guard)" = "$REPO_ROOT_REAL/bin/ci-guard" ] \
+      || { echo "$impl: ci-guard resolves to $(resolve_link ci-guard)"; return 1; }
 
     case "$impl" in
       claude-*|kiro-gh)

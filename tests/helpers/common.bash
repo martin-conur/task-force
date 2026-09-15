@@ -71,6 +71,32 @@ make_nojq_bin() {
   done
   printf '%s' "$d"
 }
+# The fd `script` should inherit on stdin (#207).
+#
+# `script` allocates the pty for its *child*, but it first calls tcgetattr() on
+# its own fd 0 to copy the invoking terminal's attributes onto it. What that fd
+# is decides whether it survives the call:
+#
+#   tty              tcgetattr succeeds                     -> fine
+#   pipe, /dev/null  ENOTTY, which `script` tolerates       -> fine
+#   socket           ENOTSOCK/EOPNOTSUPP, which it does not -> aborts with
+#                    "script: tcgetattr/ioctl: Operation not supported on socket"
+#
+# An agent harness (and anything else that wires a runner's stdin to a socket)
+# hands the suite the third row, so the pty tests fail for a reason that has
+# nothing to do with what they assert — and because the same harness hands out
+# a character device on other invocations, they fail only sometimes, which is
+# the worst version of it: it teaches whoever runs the suite to discount red.
+# So don't inherit fd 0 at all. Prefer a real terminal where the host has one;
+# fall back to /dev/null, which `script` tolerates and which still yields a
+# genuine pty for the child — `[[ -t 0 ]]` inside the command is TRUE either
+# way, so coverage of the #198 branch is not what is being traded here.
+pty_stdin() {
+  # stderr is silenced *before* the open is attempted: redirections apply
+  # left to right, so `: < /dev/tty 2>/dev/null` still prints the failure.
+  if : 2>/dev/null < /dev/tty; then printf '/dev/tty'; else printf '/dev/null'; fi
+}
+
 # Run `bash -c "$1"` with a real pty on stdin, so `[[ -t 0 ]]` inside the
 # command under test is TRUE (#198: the unregister guard now uses that test to
 # decide whether a skip is announced on stderr, and #187's tty bypass can only
@@ -84,15 +110,46 @@ make_nojq_bin() {
 # which channel a line came out on. Prints the child's output verbatim except
 # for the CR that a pty appends to every line, which is stripped so
 # assert_output --partial matches behave as they do off-pty.
+#
+# Guard the pty-dependent tests with `require_pty` rather than calling this
+# blind: on a host where no pty can be allocated at all, `script`'s own error
+# is what `run` captures, and it reads as the command under test failing.
 pty_run() {
-  local cmd="$1" out rc=0
+  local cmd="$1" out rc=0 stdin
+  stdin=$(pty_stdin)
   if script --version 2>/dev/null | grep -qi util-linux; then
-    out=$(script -qec "$cmd" /dev/null) || rc=$?
+    out=$(script -qec "$cmd" /dev/null <"$stdin") || rc=$?
   else
-    out=$(script -q /dev/null bash -c "$cmd") || rc=$?
+    out=$(script -q /dev/null bash -c "$cmd" <"$stdin") || rc=$?
   fi
+  # On the /dev/null arm `script` closes the pty's input immediately, and the
+  # pty echoes that EOF back as a literal "^D" followed by the two backspaces
+  # that would erase it on a screen. It is the terminal talking, not the child,
+  # so drop it rather than let it prefix assert_output matches.
+  out=${out#$'^D\b\b'}
   printf '%s' "$out" | tr -d '\r'
   return "$rc"
+}
+
+# `skip` with a stated reason when this host cannot give `script` a pty at all.
+# Call it at the top of a test, before `run pty_run …` — bats' `skip` has no
+# effect from inside `run`.
+#
+# The probe is the real thing, not a version check: it asks `script` for a pty
+# and requires the child to confirm it saw one on stdin. Anything short of that
+# skips, and the reason is printed — a silent skip would be worse than the
+# flake it replaces, since "not run" and "passed" then look identical (#207).
+# Both CI runners can allocate a pty, so the #198 tty branch stays genuinely
+# exercised where it counts; if you see this skip in CI, that is the bug.
+require_pty() {
+  local out rc=0
+  command -v script >/dev/null 2>&1 \
+    || skip "no \`script\` on PATH: cannot allocate a pty for the #198 tty branch"
+  out=$(pty_run '[ -t 0 ] && printf pty-ok' 2>&1) || rc=$?
+  case "$out" in
+    *pty-ok*) return 0 ;;
+  esac
+  skip "no pty available here (stdin=$(pty_stdin), script rc=$rc, said: ${out:-<nothing>}) -- the #198 tty branch is still exercised wherever one can be allocated, including both CI runners"
 }
 
 TASK_PM="$REPO_ROOT_REAL/bin/task-pm"

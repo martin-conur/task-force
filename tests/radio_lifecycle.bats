@@ -176,9 +176,12 @@ teardown() {
 # any stdin shape, and the refusal reaches the human on stderr rather than only
 # the log (without that last part the fix would trade a silent wipe for a silent
 # no-op, which is worse). See pty_run in tests/helpers/common.bash for the
-# util-linux / BSD `script` split.
+# util-linux / BSD `script` split, and require_pty for the guard that skips
+# these three with a stated reason on a host that cannot allocate a pty at all
+# (#207) rather than reporting `script`'s own failure as radio's.
 
 @test "unregister from a terminal refuses to wipe (#198)" {
+  require_pty
   "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
   assert [ -f "$sess" ]
@@ -203,6 +206,7 @@ teardown() {
   # --manual is the explicit opt-in that replaced the tty heuristic as
   # wipe-authority; it has to keep working from every stdin shape, terminal
   # included, or `task-done --manual` run by hand stops cleaning up.
+  require_pty
   "$RADIO" register --role worker-foo --tab w-foo --agent claude --loadout claude-gh
   local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
 
@@ -217,6 +221,7 @@ teardown() {
 }
 
 @test "unregister from a terminal explains itself on stderr, not just the log (#198)" {
+  require_pty
   "$RADIO" register --role worker-foo --tab w-foo --agent claude
 
   # stderr is redirected to a file INSIDE the pty'd command, so the assertion

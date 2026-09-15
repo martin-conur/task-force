@@ -806,7 +806,7 @@ To shift PR review off the PM's (Opus) tab and onto a cheaper Sonnet model, disp
 task-reviewer <pr-url-or-number> [<spec-identifier>]
 ```
 
-`task-reviewer` spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the `/reviewer` slash command (or the kiro `reviewer` agent) inside it on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6` by default — pre-set the env var to override). The PM's tab stays focused.
+`task-reviewer` spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the `/reviewer` slash command (or the kiro `reviewer` agent) inside it on Sonnet (`ANTHROPIC_MODEL=claude-sonnet-4-6` by default — pre-set the env var to override). The PM's tab stays focused. Add `Bash(task-reviewer *)` to the project's `.claude/settings.json` `permissions.allow` so the PM can dispatch a reviewer without a permission prompt.
 
 The reviewer:
 1. Reads the spec (passed as the second arg — issue number / URL for `claude-gh` / `kiro-gh`; Jira key for `claude-jira`; Notion page URL for `claude-notion`; local task slug or path for `claude-local`). On `claude-gh` / `kiro-gh` only, the wrapper also auto-detects from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive); non-gh loadouts require the spec identifier explicitly because PR bodies don't carry their tracker's linking convention.
@@ -814,8 +814,11 @@ The reviewer:
 3. Cross-checks the diff against the spec, then runs the `code-review` skill on top (claude variants — kiro stays prompt-driven).
 4. Posts **one** thorough PR comment with spec-compliance findings, code-review findings, and a verdict (`clean`, `clean-with-nits`, or `changes-requested`).
 5. Radios PM back with `review-complete-clean` or `review-complete-with-findings`.
+6. **Auto-destructs** — on the claude loadouts the reviewer's final action is `task-done --remove-worktree`, which removes the review worktree and closes its own tab. It is single-shot and self-cleaning: the analysis is durable in the PR comment, so nothing is lost when the tab goes. The kiro `reviewer` agents still idle with the tab open — clean those up by hand.
 
-PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates Status. The tab stays open showing the analysis; clean up the worktree later with `task-done --remove-worktree`.
+PM still decides whether to merge or request changes — the reviewer never approves, merges, closes, or mutates Status. Re-read a review with `gh pr view <N> --comments` rather than hunting for a tab that cleaned itself up. The one case a claude reviewer keeps its tab is a failed radio delivery: the verdict never reached PM, and that outcome is the one thing its PR comment does not record, so it holds open to say so.
+
+**Tight-PR norm.** The reviewer frames every finding as fix-in-this-PR rather than "defer to a follow-up", and the PM forwards all in-scope findings — blockers *and* nits — in a single `changes-requested` round. Only work genuinely out of the PR's scope gets deferred, and the PM grooms that into a ticket during the session instead of leaving it as a loose "later."
 
 ```bash
 task-reviewer 42                                              # claude-gh / kiro-gh: PR by number, auto-detect issue

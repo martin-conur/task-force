@@ -2,6 +2,12 @@
 
 Copy this file to your project's `.kiro/steering/notion-workflow.md` and fill in your Notion database IDs.
 
+When `task-init` writes this file it wraps the template in
+`<!-- task-init:managed:start -->` / `<!-- task-init:managed:end -->` markers. Re-running
+`task-init` replaces only what is between them, so anything you add **below the end
+marker** — repo-specific conventions, what "Green" means in this repo — survives every
+upgrade.
+
 ### Notion Database IDs
 
 <!-- Replace each placeholder with the real ID.

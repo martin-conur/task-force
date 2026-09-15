@@ -6,6 +6,12 @@ Copy this file to your project's `.claude/jira-workflow.md` and fill in your det
 @.claude/jira-workflow.md
 ```
 
+When `task-init` writes this file it wraps the template in
+`<!-- task-init:managed:start -->` / `<!-- task-init:managed:end -->` markers. Re-running
+`task-init` replaces only what is between them, so anything you add **below the end
+marker** — repo-specific conventions, what "Green" means in this repo — survives every
+upgrade.
+
 ### Jira
 
 - **Site**: `{SITE}`

@@ -3,6 +3,12 @@
 Copy this file to your project's `.kiro/steering/gh-workflow.md` and fill in your details.
 Or run `task-init kiro-gh` in your project root to do this automatically.
 
+When `task-init` writes this file it wraps the template in
+`<!-- task-init:managed:start -->` / `<!-- task-init:managed:end -->` markers. Re-running
+`task-init` replaces only what is between them, so anything you add **below the end
+marker** — repo-specific conventions, what "Green" means in this repo — survives every
+upgrade.
+
 ### GitHub CLI (`gh`)
 
 This workflow uses the [`gh` CLI](https://cli.github.com) for issue / project / PR I/O. Verify you're authenticated:

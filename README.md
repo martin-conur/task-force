@@ -113,6 +113,20 @@ This writes a workflow config (e.g. `.claude/gh-workflow.md` or `.kiro/steering/
 
 When the workflow doc is re-rendered, previously-filled `{OWNER}` / `{REPO}` / `{PROJECT}` / `{SITE}` / `{KEY}` / `{BOARD}` values are **carried forward automatically**. Precedence: this-run flag → existing-file value → `{PLACEHOLDER}`. So `task-init claude-gh --force` after you've already filled in your IDs does the right thing (refreshes the template, keeps your values).
 
+**The workflow doc is a managed region.** It is the one installed file you are actively encouraged to edit — repo-specific guidance belongs in it — and also the one a documented upgrade re-renders. So `task-init` writes it with a boundary inside:
+
+```markdown
+<!-- task-init:managed:start -->
+…the rendered template — task-init owns this and rebuilds it on every re-run…
+<!-- task-init:managed:end -->
+
+## Repo-specific notes      ← yours, forever
+```
+
+A re-run rebuilds only what is between the markers and copies everything outside them through verbatim. Anything you add below the end marker — what "Green" means in this repo, a pre-PR checklist, local conventions — survives `--force`. Because that refresh cannot touch your content, it no longer prompts about the workflow doc at all; `--restore` and the non-TTY default still leave the file completely alone.
+
+A doc written before this existed has no markers. The first re-run adopts it: if it is byte-identical to the template it is simply re-wrapped, and if you have edited it the old file is copied to `<doc>.bak` first, with a note telling you to move what you want to keep below the end marker. Nothing is deleted either way.
+
 Common use cases:
 
 ```bash

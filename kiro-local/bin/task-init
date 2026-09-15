@@ -24,6 +24,11 @@ Overwrite policy when a target file already exists:
   (TTY default)    Per-file prompt: [k]eep / [o]verwrite / [d]iff
   (non-TTY)        Silently keep existing files (script-safe)
 
+The workflow doc is written between <!-- task-init:managed:start --> and
+<!-- task-init:managed:end --> markers. A re-run replaces only that region, so
+anything you add below the end marker survives --force. A doc predating those
+markers is backed up to <doc>.bak before the markers are added.
+
 --force and --restore are mutually exclusive.
 EOF
   exit 1
@@ -72,6 +77,13 @@ TEMPLATE="$SCRIPT_DIR/../steering/local-workflow.example.md"
 LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/install-file.sh
 . "$LIB_DIR/install-file.sh"
+# region:managed-region-source
+# The workflow doc is installed through install_managed_file (#183), not
+# install_file: a re-run refreshes only the task-init-owned region and leaves
+# the user's own sections below the end marker alone.
+# shellcheck source=lib/managed-region.sh
+. "$LIB_DIR/managed-region.sh"
+# endregion:managed-region-source
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -87,7 +99,7 @@ TASKS_DIR="$REPO_ROOT/tasks"
 mkdir -p "$REPO_ROOT/.kiro/steering"
 
 if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
-  INSTALL_POLICY="$POLICY" install_file "$TEMPLATE" "$TARGET" "local-workflow.md"
+  INSTALL_POLICY="$POLICY" install_managed_file "$TEMPLATE" "$TARGET" "local-workflow.md"
 fi
 
 if [[ "$SCOPE" != "workflow" && "$SCOPE" != "hooks" ]]; then

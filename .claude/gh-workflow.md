@@ -1,7 +1,17 @@
+<!-- task-init:managed:start -->
+<!-- Managed by `task-init`: everything between these markers is replaced on
+     every re-run. Put repo-specific notes below the end marker. -->
+
 ## GitHub Projects Workflow (Claude Code)
 
 Copy this file to your project's `.claude/gh-workflow.md` and fill in your details.
 Or run `task-init claude-gh` in your project root to do this automatically.
+
+When `task-init` writes this file it wraps the template in
+`<!-- task-init:managed:start -->` / `<!-- task-init:managed:end -->` markers. Re-running
+`task-init` replaces only what is between them, so anything you add **below the end
+marker** — repo-specific conventions, what "Green" means in this repo — survives every
+upgrade.
 
 Then reference it from `CLAUDE.md` at your project root so every Claude Code session auto-loads it:
 
@@ -53,26 +63,6 @@ The worker reads these three values and updates the project item's Status field 
 ### Commit Convention
 
 Use the issue title as prefix: `<Issue title>: <short description>`
-
-### Pre-PR checklist (this repo)
-
-The `/worker` pre-PR checklist is deliberately repo-generic (it ships downstream
-verbatim via `task-init`). In **this** repo it resolves to:
-
-- **Changelog** — add an entry under `## [Unreleased]` in `CHANGELOG.md`
-  ([Keep a Changelog](https://keepachangelog.com) format). Include the
-  **"Upgrading: re-run `task-init <loadout>`"** note whenever installer-written
-  artifacts change (radio hooks, the copied `commands/*.md`, `settings.json`);
-  say so explicitly when no re-run is needed.
-- **Docs** — a model-facing or user-visible change also updates the README
-  section, the four `steering/*.example.md` templates, and the loadout workflow
-  docs (`.claude/*-workflow.md`). See PRs #172–#175 for the findings this
-  checklist encodes; #163 / #164 / #168 for the doc-beat precedent.
-- **Reuse / drift** — logic shared across loadouts lives behind `# region:`
-  sentinels guarded by `tools/check-drift.sh`; extract rather than copy a second
-  time, and add a sentinel + manifest entry when you do.
-- **Green** — run `./run_tests.sh`, `tools/check-drift.sh`, and `shellcheck -x`
-  on changed shell files; confirm `gh pr checks` after pushing.
 
 ### Shell Commands
 
@@ -292,3 +282,31 @@ the agent drain a queued message at the end of its current turn, the
 `UserPromptSubmit` hook puts the unread summary in front of it at the next
 prompt, and a fresh `SessionStart` register reports whatever queued while the
 role was offline. A failed wake is a latency problem here, not a lost message.
+
+<!-- task-init:managed:end -->
+
+## Repo-specific notes
+
+<!-- Everything below the end marker above is yours — `task-init` never
+     rewrites it. Repo-specific guidance belongs here: what "Green" means in
+     this repo, the pre-PR checklist it resolves to, local conventions. -->
+
+### Pre-PR checklist (this repo)
+
+The `/worker` pre-PR checklist is deliberately repo-generic (it ships downstream
+verbatim via `task-init`). In **this** repo it resolves to:
+
+- **Changelog** — add an entry under `## [Unreleased]` in `CHANGELOG.md`
+  ([Keep a Changelog](https://keepachangelog.com) format). Include the
+  **"Upgrading: re-run `task-init <loadout>`"** note whenever installer-written
+  artifacts change (radio hooks, the copied `commands/*.md`, `settings.json`);
+  say so explicitly when no re-run is needed.
+- **Docs** — a model-facing or user-visible change also updates the README
+  section, the four `steering/*.example.md` templates, and the loadout workflow
+  docs (`.claude/*-workflow.md`). See PRs #172–#175 for the findings this
+  checklist encodes; #163 / #164 / #168 for the doc-beat precedent.
+- **Reuse / drift** — logic shared across loadouts lives behind `# region:`
+  sentinels guarded by `tools/check-drift.sh`; extract rather than copy a second
+  time, and add a sentinel + manifest entry when you do.
+- **Green** — run `./run_tests.sh`, `tools/check-drift.sh`, and `shellcheck -x`
+  on changed shell files; confirm `gh pr checks` after pushing.

@@ -212,17 +212,42 @@ types `radio check` and waits for your Enter); worth it if you type long
 prompts into the PM box, since an incoming wake would otherwise submit whatever
 is half-typed there. `--also` aliases inherit the primary PM's setting.
 
+### Reviewer role (single-shot, self-cleaning)
+
 To dispatch a one-shot reviewer worker for a PR, run
-`task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab.
-It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
+`task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab
+(add `Bash(task-reviewer *)` to your project's `.claude/settings.json`
+`permissions.allow` so the PM dispatches hands-off without a permission
+prompt). It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
 `/reviewer` agent on Sonnet (cheaper than the PM's Opus default), cross-checks
 the PR against the spec issue (passed as the second arg, or auto-detected from
-the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line, case-insensitive), runs the `code-review` skill on
-the diff, posts a single thorough PR comment via `gh pr comment`, and radios
-PM back with `review-complete-clean` or `review-complete-with-findings`. PM
-still owns the merge decision — the reviewer never approves, merges, or
-mutates status. The reviewer tab stays open showing the analysis; clean up
-with `task-done --remove-worktree` when done.
+the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line,
+case-insensitive), runs the `code-review` skill on the diff, posts **one**
+thorough PR comment via `gh pr comment` carrying its full analysis + verdict,
+and radios PM back with `review-complete-clean` or
+`review-complete-with-findings`. Then it **auto-destructs**:
+`task-done --remove-worktree` removes its worktree and closes its tab. It does
+NOT idle waiting to be closed, and there is no manual cleanup left for anyone.
+The analysis lives in the PR comment, not the tab — re-read a review any time
+with `gh pr view <N> --comments`. PM still owns the merge decision — the
+reviewer never approves, merges, or mutates status — and reads the verdict on
+its next `radio check`.
+
+The one exception to self-destruct is a failed radio delivery: when the verdict
+never reached PM (`WARNING — no session for pm-…`, or queued with a failed
+wake), the reviewer holds its tab open to say so, because that outcome is the
+one thing its PR comment does not record. A reviewer tab you still see is a
+reviewer that could not reach PM.
+
+### Tight-PR norm — minimize deferrals
+
+Default to landing each PR **complete**. The reviewer frames every finding as
+fix-in-this-PR (never "defer to a follow-up" for in-scope work), and the PM
+forwards **all** in-scope findings — blockers *and* nits — in a single
+`changes-requested` round rather than trailing a backlog of deferred items. The
+only thing that gets deferred is work genuinely out of the PR's scope (a separate
+subsystem, a large refactor) — and the PM grooms that into a ticket during the
+session, not left as a loose "later."
 
 If a worker tab dies unexpectedly (or Claude resumes a session without
 re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale.

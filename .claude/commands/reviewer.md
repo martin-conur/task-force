@@ -13,7 +13,7 @@ You are a single-shot PR reviewer worker. `task-reviewer` spawned this tab with 
 4. Run the `code-review` skill on the diff.
 5. Post **one** substantive PR comment with the full analysis (spec compliance + code-review findings + verdict).
 6. Radio PM back with `review-complete-clean` or `review-complete-with-findings` and a short summary.
-7. Idle — the tab stays open so the user can scroll through the analysis. Do NOT auto-cleanup.
+7. **Auto-destruct.** Your analysis lives in the PR comment (durable) — the tab does not need to stay open. Immediately after the PR comment is posted AND PM is radioed, run `task-done --remove-worktree` as your final action to remove this review worktree and close the tab. Do NOT idle.
 
 Refer to the project's `.claude/gh-workflow.md` for GitHub owner/repo conventions. Use the `gh` CLI for PR + issue I/O: `gh issue view`, `gh pr view`, `gh pr diff`, `gh pr comment`. Read-only `gh` patterns are pre-allowed in `.claude/settings.json`; mutations stay confirmation-gated.
 
@@ -45,6 +45,8 @@ $ARGUMENTS
    - **Spec compliance** (omit if diff-only) — did the PR deliver what the issue asked for? List anything missing or off-spec.
    - **Code-review findings** — correctness, security, edge cases, anything substantive from the skill's output.
    - **Verdict** — `clean`, `clean-with-nits`, or `changes-requested`. Be explicit.
+
+   **Tight-PR norm — prefer fix-in-this-PR over deferral.** Frame every finding as something the worker should fix *in this PR*, not as a follow-up ticket, whenever the fix is feasible within the PR's scope. Do NOT suggest "defer to a follow-up" / "track separately" for anything in-scope — that's a deferral the team is trying to avoid. Only flag a deferral when the work is genuinely out of this PR's scope (a separate subsystem, a large refactor), and say so explicitly — PM will decide whether to groom it into a ticket. Default: tight PR, everything fixed before merge.
 7. Post the comment:
    ```bash
    gh pr comment <N> -b "<full analysis>"
@@ -56,7 +58,9 @@ $ARGUMENTS
    radio send --to pm --intent review-complete-with-findings --pr <N> --body "<one-line summary>"
    ```
    Check `radio send`'s stdout: `delivered` / `queued — pm is busy` means the verdict reached PM. But `radio: WARNING — no session for pm-…` (or `WARNING — pm-… looks dead …`) means PM isn't running, and `queued — pm is idle but wake failed …` means it's queued with no auto-redelivery — in those cases say so to the user instead of assuming the verdict was delivered.
-9. Idle. The tab stays open so the user can scroll back through the analysis. They'll close the tab manually when done; `task-done --remove-worktree` cleans up the review worktree if they want.
+9. **Auto-destruct.** Run `task-done --remove-worktree` as your final action — it removes this review worktree and closes the tab, and `--remove-worktree` skips the confirmation prompt, so it needs no input from you. PM reads your verdict from the PR comment + the radio ping (on its next `radio check`), never from this tab, so there is nothing to keep open. Self-cleaning is mandatory, not optional.
+
+   **The one thing that is not in the PR comment** is step 8's delivery outcome. If `radio send` reported anything other than a landed delivery — `WARNING — no session for pm-…`, `WARNING — pm-… looks dead …`, or `queued — pm is idle but wake failed …` — that warning exists nowhere but this tab, and destroying it would strand the verdict unread. In that case only: say so to the user, and hold the tab until they have seen it. Otherwise, destruct.
 
 ### Authority boundaries
 

@@ -49,6 +49,7 @@ DOCUMENTED_GREPS=(
   'no tab binding for'
   'arrived during the drain turn'
   'no new message since the block'
+  'gc: dead-lettered'
   'BLOCKED_IDS'
   'AUTO_SUBMIT=1'
   'refusing to wipe'
@@ -59,7 +60,7 @@ runbook_block() {
   sed -n '/^### When radio misbehaves$/,$p' "$1"
 }
 
-@test "the README carries the runbook with all five symptoms" {
+@test "the README carries the runbook with all six symptoms" {
   run cat "$REPO_ROOT_REAL/README.md"
   assert_success
   assert_output --partial "### When radio misbehaves"
@@ -67,12 +68,13 @@ runbook_block() {
   assert_output --partial "sitting unsubmitted in its prompt box."
   assert_output --partial "A role keeps disappearing from"
   assert_output --partial "I ran \`radio unregister\` and nothing happened."
+  assert_output --partial "never cleaned up its worktree."
   assert_output --partial "idling for a message that's in its own inbox."
   # The four sub-sections the ticket asks for.
   assert_output --partial "#### Symptom → cause → check"
   assert_output --partial "#### Reading the log"
   assert_output --partial "#### What \`radio unregister\` does, and doesn't"
-  assert_output --partial "#### Undelivered mail is never dropped"
+  assert_output --partial "#### Undelivered mail is never deleted"
 }
 
 @test "every workflow doc carries the runbook section" {
@@ -121,7 +123,7 @@ runbook_block() {
   for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}"; do
     for s in 'unregister role=' 'unregister: proceeding' 'unregister: skipping' \
              'tab_id_src=' 'no tab binding for' 'arrived during the drain turn' \
-             'BLOCKED_IDS' 'AUTO_SUBMIT=1'; do
+             'BLOCKED_IDS' 'AUTO_SUBMIT=1' 'gc: dead-lettered'; do
       run grep -cF -- "$s" "$f"
       assert_success
       refute_output "0"
@@ -233,15 +235,28 @@ runbook_block() {
   done
 }
 
-@test "the runbook states that undelivered mail is never deleted" {
+@test "the runbook states that undelivered mail is never deleted, and names dead-letter/" {
+  # #201 replaced the "there is no dead-letter queue" claim with one: the
+  # promise that survives is that nothing unread is ever deleted, only moved.
   for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}"; do
-    run grep -cF 'dead-letter queue' "$f"
+    run grep -cF 'Undelivered mail is never deleted' "$f"
+    assert_success
+    refute_output "0"
+    run grep -cF '~/.task-force/radio/dead-letter/' "$f"
+    assert_success
+    refute_output "0"
+    run grep -cF 'archive, not a delete' "$f"
+    assert_success
+    refute_output "0"
+    # The stale claim must be gone everywhere, or the docs contradict the code.
+    run grep -cF 'no dead-letter queue' "$f"
+    assert_output "0"
+  done
+  # And bin/radio backs both halves: a live role's inbox is still gated by
+  # _inbox_empty, and the dead-role path archives rather than removes.
+  for s in '_inbox_empty' '_dead_letter_inbox' 'DEAD_LETTER_DIR'; do
+    run grep -cF -- "$s" "$REPO_ROOT_REAL/bin/radio"
     assert_success
     refute_output "0"
   done
-  # And bin/radio backs the claim: gc's whole-dir reclaim is gated on an
-  # empty inbox, and only processed/ is swept by TTL.
-  run grep -cF '_inbox_empty' "$REPO_ROOT_REAL/bin/radio"
-  assert_success
-  refute_output "0"
 }

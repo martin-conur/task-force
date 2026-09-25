@@ -181,8 +181,11 @@ when its `from:` names this repo — `worker-<reponame>-<slug>`,
 booted first, and `radio`'s log records the count left behind. Mail no name can
 attribute (`from: unknown`, sent before the role env existed) is still adopted
 first-come, and the log says so rather than staying silent (#210). Empty
-inbox prints nothing. (claude loadouts only — Kiro's hook stdout isn't
-injected; see #146.)
+inbox prints nothing. (This beat works on kiro too — its `agentSpawn` hook is
+the same entrypoint, and kiro injects hook stdout as well. The long-standing
+claim that it does not came from hooks that were never running at all: they were
+written to `.kiro/hooks/`, which kiro-cli does not read. Fixed in #218; what kiro
+still lacks — a prompt-hook inbox summary and a Stop drain — is #221.)
 
 Full command form:
 

@@ -8,12 +8,15 @@ Usage: task-init [--workflow | --commands | --hooks] [--force | --restore] [--he
 Set up the current repo for the kiro-notion workflow:
   - Create .kiro/steering/notion-workflow.md from the bundled template
   - Install pm, planner, worker agents into .kiro/agents/
-  - Write radio PM↔worker messaging hooks into .kiro/hooks/
+  - Merge radio PM↔worker messaging hooks into .kiro/agents/*.json
 
 Scope (which categories of files to touch):
   --workflow       Workflow doc only
-  --commands       Agents only
-  --hooks          Radio hooks (.kiro/hooks/*.json) only
+  --commands       Agents only (radio hooks ride along — see below)
+  --hooks          Synonym for --commands. kiro-cli reads hooks from the
+                   `hooks` field of each agent config, so the hooks and the
+                   agents are the same set of files (#218). Kept so existing
+                   scripts calling `task-init --hooks` keep working.
   (none)           All of the above (default)
 
 Overwrite policy when a target file already exists:
@@ -112,6 +115,10 @@ TEMPLATE="$SCRIPT_DIR/../steering/notion-workflow.example.md"
 LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/install-file.sh
 . "$LIB_DIR/install-file.sh"
+# region:require-jq-source
+# shellcheck source=lib/require-jq.sh
+. "$LIB_DIR/require-jq.sh"
+# endregion:require-jq-source
 # region:managed-region-source
 # The workflow doc is installed through install_managed_file (#183), not
 # install_file: a re-run refreshes only the task-init-owned region and leaves
@@ -135,7 +142,7 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   INSTALL_POLICY="$POLICY" install_managed_file "$TEMPLATE" "$TARGET" "notion-workflow.md"
 fi
 
-if [[ "$SCOPE" != "workflow" && "$SCOPE" != "hooks" ]]; then
+if [[ "$SCOPE" != "workflow" ]]; then
   AGENTS_DIR="$REPO_ROOT/.kiro/agents"
   AGENTS_SRC=$(cd "$SCRIPT_DIR/.." && pwd)/agents
   mkdir -p "$AGENTS_DIR"
@@ -146,54 +153,159 @@ if [[ "$SCOPE" != "workflow" && "$SCOPE" != "hooks" ]]; then
   done
 fi
 
-# -------- radio hooks (one shell-command hook per agent lifecycle event) ----
-# Writes 3 hook files into <repo>/.kiro/hooks/ so the worker / PM agent
-# self-registers with the radio mailbox on startup and signals busy/idle around
-# every user prompt. Each hook is rendered into a tempfile and installed via
-# install_file so it honors the same --force / --restore / --prompt / keep
-# policy used for the workflow doc and agent files — re-init UX stays uniform.
+# -------- radio hooks (merged into the agent configs kiro-cli actually reads) -
+# kiro-cli reads hooks from the `hooks` field of an *agent config*
+# (<repo>/.kiro/agents/<name>.json), never from <repo>/.kiro/hooks/ — that
+# directory is the Kiro *IDE*'s agent-hooks location, a different product.
+# task-force wrote all three radio hooks there from the start, so none of them
+# had ever run: no role registered, no state ever flipped, and every `radio
+# send` to a kiro role degraded to "no session — message queued" (#218).
+#
+# Verified against kiro-cli 2.24.0: the accepted entry shape is {"command": …}
+# (the shape its own bundled default.json uses); the {"trigger":…,"action":…}
+# wire form task-force used to write is rejected by `kiro-cli agent validate`,
+# as is the `agentStop` trigger name. The valid triggers are agentSpawn,
+# userPromptSubmit, preToolUse, postToolUse and stop — and `stop` fires once
+# per turn, which is what lets `radio ready` return the role to idle.
+#
+# The merge runs on every in-scope invocation regardless of the overwrite
+# policy, deliberately: the hooks block is task-init-owned, the rest of the
+# agent config is the user's. An existing kiro repo whose customized
+# worker.json the policy keeps still has to come out of this with working
+# hooks — that upgrade path is the whole point. Pre-existing non-radio hooks
+# are preserved; the merge is idempotent (an entry is added only when no
+# command on that trigger already starts with "radio ").
 _radio_install_hooks() {
-  local hooks_dir="$REPO_ROOT/.kiro/hooks"
+  local agents_dir="$REPO_ROOT/.kiro/agents"
   local loadout="kiro-notion"
-  mkdir -p "$hooks_dir"
 
-  _write_hook() {
-    local name="$1" trigger="$2" command="$3"
-    local target="$hooks_dir/${name}.json"
-    local tmp
-    tmp=$(mktemp)
-    cat >"$tmp" <<EOF
-{
-  "version": "1.0",
-  "name": "${name}",
-  "trigger": {"type": "${trigger}"},
-  "action": {"type": "shellCommand", "command": "${command}"},
-  "enabled": true
+# region:require-jq-call
+  require_jq_1_6 || exit 1
+# endregion:require-jq-call
+
+# region:kiro-radio-hook-cmds
+  # \${TASK_FORCE_LOADOUT:-$loadout} lets per-role launchers (e.g. task-reviewer
+  # exporting TASK_FORCE_LOADOUT=reviewer) override the LOADOUT= field in the
+  # session file without rewiring task-init. Plain task-pm / task-work sessions
+  # don't set the env var, so they keep the loadout default ($loadout).
+  local register_cmd="radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout \${TASK_FORCE_LOADOUT:-$loadout}"
+  # Plain `radio busy`, not `radio prompt-hook`. Not for the reason this line
+  # used to give — kiro *does* inject hook stdout into the model's context
+  # (confirmed by nonce control test, #218), so prompt-hook's inbox summary
+  # would in fact land. Switching it is a notification-path behaviour change
+  # deliberately held out of the registration fix; #221 carries that call.
+  local busy_cmd="radio busy"
+  # `radio ready` alone, not `radio ready && radio check`: the old pairing was
+  # wired to the invalid `agentStop` trigger and never ran. `radio check`'s
+  # listing is not what a hook should emit unprompted every turn, and whether
+  # kiro honours Stop-hook block JSON (#163's drain) is a separate contract
+  # from stdout injection and is untested — #221.
+  local ready_cmd="radio ready"
+# endregion:kiro-radio-hook-cmds
+
+  if [[ ! -d "$agents_dir" ]]; then
+    echo "Warning: $agents_dir does not exist; no agent to merge radio hooks into" >&2
+    return 0
+  fi
+
+# region:kiro-radio-hooks-jq-merge
+  local target tmp merged=0
+  for target in "$agents_dir"/*.json; do
+    [[ -f "$target" ]] || continue
+    tmp="${target}.tmp.$$"
+    if ! jq \
+      --arg spawn "$register_cmd" \
+      --arg ups   "$busy_cmd" \
+      --arg stop  "$ready_cmd" \
+      '
+      def add_radio(arr; cmd):
+        if (arr // []) | any((.command // "") | startswith("radio ")) then arr
+        else (arr // []) + [{command: cmd}]
+        end;
+      # `agentStop` is not a valid kiro-cli trigger — an agent config carrying
+      # one fails to load wholesale, taking every other hook with it. Drop any
+      # radio-owned entry there; leave anything we did not write alone rather
+      # than silently editing a key that is not ours.
+      def drop_radio(arr):
+        [ (arr // [])[] | select(((.command // "") | startswith("radio ")) | not) ];
+      .hooks //= {}
+      | .hooks.agentSpawn       = add_radio(.hooks.agentSpawn;       $spawn)
+      | .hooks.userPromptSubmit = add_radio(.hooks.userPromptSubmit; $ups)
+      | .hooks.stop             = add_radio(.hooks.stop;             $stop)
+      | .hooks.agentStop        = drop_radio(.hooks.agentStop)
+      | if (.hooks.agentStop | length) == 0 then del(.hooks.agentStop) else . end
+      ' "$target" >"$tmp"; then
+      rm -f "$tmp"
+      echo "Warning: could not merge radio hooks into $target (invalid JSON?)" >&2
+      continue
+    fi
+    mv -f "$tmp" "$target"
+    merged=$((merged + 1))
+  done
+# endregion:kiro-radio-hooks-jq-merge
+
+# region:kiro-radio-stray-hook-verify
+  # A radio-prefixed command that isn't the one we install blocks add_radio from
+  # installing the right one, so the repo would keep a stale hook while
+  # task-init prints success — the same trap #172 found on the claude side.
+  # Warn loudly rather than silently rewriting a command someone chose.
+  local stray="" one
+  for target in "$agents_dir"/*.json; do
+    [[ -f "$target" ]] || continue
+    one=$(jq -r \
+      --arg spawn "$register_cmd" --arg ups "$busy_cmd" --arg stop "$ready_cmd" \
+      --arg name "${target##*/}" '
+      def stray(arr; evt; expected):
+        [ (arr // [])[] | .command // ""
+          | select(startswith("radio ") and . != expected)
+          | "\($name) \(evt): \(.) — replace with: \(expected)" ];
+      ( stray(.hooks.agentSpawn;       "agentSpawn";       $spawn)
+      + stray(.hooks.userPromptSubmit; "userPromptSubmit"; $ups)
+      + stray(.hooks.stop;             "stop";             $stop)
+      ) | .[]
+      ' "$target" 2>/dev/null || true)
+    if [[ -n "$one" ]]; then stray+="$one"$'\n'; fi
+  done
+  if [[ -n "$stray" ]]; then
+    {
+      echo "WARNING: an agent config has a radio hook task-init could not upgrade:"
+      printf '%s' "$stray" | sed '/./s/^/  /'
+    } >&2
+  fi
+# endregion:kiro-radio-stray-hook-verify
+
+  echo "✓ Merged radio hooks into $merged agent config(s) in $agents_dir"
+
+# region:kiro-radio-legacy-hooks-sweep
+  # Remove the inert .kiro/hooks/*.json files earlier task-init runs wrote.
+  # Only the three radio-owned names, and only when the content is recognisably
+  # ours — a user's own IDE hooks in that directory are not ours to delete.
+  # Left behind, they are worse than clutter: the workflow doc points readers at
+  # them as the thing that keeps the session file accurate (#218).
+  local legacy_dir="$REPO_ROOT/.kiro/hooks" legacy swept=0
+  for legacy in radio-register radio-busy radio-ready; do
+    [[ -f "$legacy_dir/$legacy.json" ]] || continue
+    grep -q '"shellCommand"' "$legacy_dir/$legacy.json" 2>/dev/null || continue
+    grep -q '"radio ' "$legacy_dir/$legacy.json" 2>/dev/null || continue
+    rm -f "$legacy_dir/$legacy.json"
+    swept=$((swept + 1))
+  done
+  if (( swept > 0 )); then
+    echo "✓ Removed $swept inert radio hook file(s) from $legacy_dir (kiro-cli never read them — #218)"
+    if rmdir "$legacy_dir" 2>/dev/null; then
+      echo "  (removed the now-empty $legacy_dir)"
+    fi
+  fi
+# endregion:kiro-radio-legacy-hooks-sweep
+
+  # Note: kiro has no session-end trigger (`stop` fires per turn, not on session
+  # close), so the Claude SessionEnd → `radio unregister` beat still has no kiro
+  # analog. The worker happy path stays covered by task-done, which invokes
+  # `radio unregister --manual` before removing the worktree (#94); everything
+  # else is `radio orphans` (#98).
 }
-EOF
-    INSTALL_POLICY="$POLICY" install_file "$tmp" "$target" "hook: $name"
-    rm -f "$tmp"
-  }
 
-  _write_hook "radio-register" "agentSpawn" \
-    "radio register --role \$TASK_FORCE_ROLE --tab \$ZELLIJ_TAB --repo \$(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${loadout}"
-  # Plain `radio busy`, not `radio prompt-hook` (#190): prompt-hook's value is
-  # the inbox summary it prints, and kiro discards hook stdout (#146), so wiring
-  # it here would cost a subshell per prompt and deliver nothing. Kiro agents
-  # poll instead — every kiro-*/agents/*.json prompt opens with a standing
-  # `radio check` instruction. Revisit if kiro ever gains context injection.
-  _write_hook "radio-busy"     "userPromptSubmit" "radio busy"
-  # kiro intentionally keeps the legacy Stop wiring: Claude Code's
-  # `radio stop-hook` block-JSON mechanism (#163) has no kiro agentStop
-  # equivalent. Revisit with kiro parity (#146).
-  _write_hook "radio-ready"    "agentStop"        "radio ready && radio check"
-  # Note: kiro has no session-end trigger (agentStop fires per-turn, not on
-  # session close), so the Claude SessionEnd → `radio unregister` beat has
-  # no direct kiro analog. The worker happy path is still covered: task-done
-  # invokes `radio unregister` before removing the worktree (issue #94).
-}
-
-if [[ "$SCOPE" != "workflow" && "$SCOPE" != "commands" ]]; then
+if [[ "$SCOPE" != "workflow" ]]; then
   _radio_install_hooks
 fi
 

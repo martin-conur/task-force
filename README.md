@@ -382,7 +382,7 @@ Spawn workers with `task-work tasks/NNN-slug.md`. Same Kiro shortcuts as `kiro-n
 
 ## PM ↔ worker messaging (radio)
 
-Once you've installed a Claude loadout, `task-init` auto-installs **radio** — a low-latency mailbox CLI under `~/.task-force/radio/` that lets the PM agent and worker agents ping each other directly. No human courier, seconds-level wake-up when the recipient tab is idle, queue-and-defer when busy. The `kiro-*` loadouts install the corresponding hooks under `.kiro/hooks/` instead — with weaker delivery guarantees; see [kiro delivery is best-effort](#kiro-delivery-is-best-effort).
+Once you've installed a Claude loadout, `task-init` auto-installs **radio** — a low-latency mailbox CLI under `~/.task-force/radio/` that lets the PM agent and worker agents ping each other directly. No human courier, seconds-level wake-up when the recipient tab is idle, queue-and-defer when busy. The `kiro-*` loadouts merge the corresponding hooks into each `.kiro/agents/*.json` instead — with weaker delivery guarantees; see [kiro delivery](#kiro-delivery-pull-first-with-one-backstop).
 
 Radio is the **canonical** coordination channel between the planner, PM, and workers — every role transition in the workflow runs through it. The PM / planner / worker prompts shell out to `radio send` at every documented handoff point.
 
@@ -431,7 +431,7 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 | `delivered — woke <role> (tab_id=N)` | The recipient was idle and reachable; `radio check` was written to its pane. |
 | `queued — <role> is busy; it will drain on its next Stop` | Recipient mid-turn; the stop-hook flush picks it up. (`awaiting` recipients get their own line — drain is via prompt-hook on the next prompt.) |
 | `queued — <role> is idle but wake failed (<reason>); …surface on its next prompt/register` | Idle but unreachable (no zellij / no tab / not zellij-registered / stale or unreachable tab / no pane / write failed); no auto-redelivery until the recipient is next prompted or re-registers. |
-| `queued — <role> …; it polls its own inbox — the message surfaces when it next runs radio check` | The recipient is a **kiro** agent. It has no Stop drain, no prompt-hook injection, and no register backlog report (see [kiro delivery is best-effort](#kiro-delivery-is-best-effort)), so every queued outcome — busy, awaiting, wake-failed — ends in this clause instead of naming a hook it doesn't have. |
+| `queued — <role> …; it polls its own inbox — the message surfaces when it next runs radio check` | The recipient is a **kiro** agent. It has no Stop drain and no prompt-hook inbox summary (see [kiro delivery](#kiro-delivery-pull-first-with-one-backstop)), so every queued outcome — busy, awaiting, wake-failed — ends in this clause instead of naming a hook it doesn't have. |
 | `WARNING — no session for <role>; …nobody is listening` | No session file — the role isn't running. Also `WARNING — <role> looks dead …` when a non-idle session's heartbeat is >1h stale (see `radio orphans`). |
 
 Because `radio send` now writes to stdout, anything **capturing** its output must discard it (`radio send … >/dev/null`).
@@ -447,32 +447,63 @@ Because `radio send` now writes to stdout, anything **capturing** its output mus
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 | `PostToolUse`     | `radio busy`                  | State flip only — deliberately NOT `prompt-hook`; it fires after every tool call, and the inbox summary belongs at prompt time, not sprayed mid-turn |
 
-For the kiro loadouts the equivalent wiring lives in `.kiro/hooks/` and runs off Kiro's triggers — but it is **not** equivalent in effect. See below.
+For the kiro loadouts the equivalent wiring is merged into the `hooks` field of each `.kiro/agents/*.json` and runs off kiro-cli's triggers — but it is **not** equivalent in effect. See below.
 
-### kiro delivery is best-effort
+### kiro delivery: pull-first, with one backstop
 
-Every claude backstop above works by putting text into the model's context from a hook. Kiro doesn't inject hook stdout at all (#146), so none of them land:
+Until #218 this section described something stricter, and for the wrong reason. The
+three kiro hooks were written to `<repo>/.kiro/hooks/*.json` — the **Kiro IDE**'s
+agent-hooks directory, not a path `kiro-cli` reads — so *none of them had ever run*.
+No kiro role registered, no state ever flipped, and every `radio send` to one
+degraded to `no session … message queued`. What looked like a weak delivery
+guarantee was no wiring at all.
 
-| kiro hook | Command | What actually happens |
-|-----------|---------|------------------------|
-| `agentSpawn` | `radio register …` | Claims the session file. The #168 offline-backlog summary it prints is **discarded** — the agent never sees it. |
-| `userPromptSubmit` | `radio busy` | State flip only. Deliberately not `prompt-hook`: its inbox summary would be discarded too. |
-| `agentStop` | `radio ready && radio check` | State flip, then a `radio check` whose output goes to the **hook subshell**, not the model. There is no kiro analogue of Stop-hook block JSON, so an idle kiro role with unread mail stays idle. |
-| — | *(no session-end trigger)* | Nothing unregisters on tab close except `task-done`. |
+They now live in the `hooks` field of each `.kiro/agents/*.json`, which is where
+kiro-cli actually looks:
 
-So for a kiro recipient the zellij `write-chars` wake is the *only* push path, and it is best-effort — a missed wake has nothing behind it. Three consequences worth stating plainly:
+| kiro hook | Command | What happens |
+|-----------|---------|--------------|
+| `agentSpawn` | `radio register …` | Claims the session file — and its #168 offline-backlog summary **does** reach the model: kiro injects hook stdout. |
+| `userPromptSubmit` | `radio busy` | State flip only. Not `prompt-hook` — that is a deliberate hold, not a limitation (#221). |
+| `stop` | `radio ready` | State flip back to idle, once per turn. No block-and-drain: whether kiro honours Stop-hook block JSON is a separate contract from stdout injection and is untested (#221). |
+| — | *(no session-end trigger)* | Unchanged: nothing unregisters on tab close except `task-done`. `radio orphans` is the cleanup (#98). |
 
-- **Kiro agents pull.** Every kiro agent prompt in `kiro-*/agents/*.json` carries a standing instruction to run `radio check` at the top of every turn and `radio read <id>` anything listed. That poll, not a hook, is what makes delivery eventually happen.
-- **`radio send` says so.** No outcome line ever promises a kiro recipient a Stop drain, a prompt-hook, or a register report; all of them end in `it polls its own inbox — the message surfaces when it next runs radio check`.
-- **Dispatch kiro workers with `--auto` so the one push path can finish.** `task-work --auto` opts the worker into the CR (auto-submit) wake-up, so a wake that lands is acted on instead of sitting in the prompt box for a human Enter. Until #206 kiro's `task-work` parsed no `--auto` flag at all, which made the keypress mandatory — a kiro worker's only push path could not self-complete. The flag changes nothing else: it adds no backstop behind a *missed* wake, and it does **not** touch kiro's permission model (that is still `-a/--trust-all`).
+**kiro does inject hook stdout into the model's context.** This README asserted the
+opposite for months, citing an issue that was about something else entirely. The
+claim came from never observing injection — which had the same single cause as
+everything above. Verified on kiro-cli 2.24.0 with a nonce control: a
+`userPromptSubmit` hook echoed a random value never present in the prompt, and the
+model reproduced it exactly.
 
-Reaching real parity (a context-injecting kiro hook, a heartbeat-driven unregister) is tracked separately in #146 / #127; this is the honest description of what ships today.
+So kiro has **one** of claude's three context-injecting backstops today — the
+register report — and the other two are open questions rather than dead ends:
+
+- **Kiro agents still pull.** Every prompt in `kiro-*/agents/*.json` carries a
+  standing instruction to run `radio check` at the top of each turn. With no
+  prompt-hook summary and no Stop drain, that poll is still what closes the gap for
+  an idle role, and it is still the honest primary mechanism.
+- **The zellij wake works.** It always did — the logs show `send: woke … via tab_id=N`
+  for kiro roles on the rare occasions a session file existed. Registration, not the
+  wake, was the defect.
+- **Dispatch kiro workers with `--auto` so the push path can finish.** `task-work --auto`
+  opts the worker into the CR (auto-submit) wake-up, so a wake that lands is acted on
+  instead of sitting in the prompt box for a human Enter (#206). It does **not** touch
+  kiro's permission model — that is still `-a/--trust-all`.
+
+Re-deriving what kiro can now support — prompt-hook, the Stop drain, and whether
+#190's "declare kiro best-effort" decision still holds — is tracked in **#221**.
+A heartbeat-driven unregister for the missing session-end trigger is #127.
+
+> **Upgrading:** this wiring is installer-written. An existing kiro project must
+> re-run `task-init kiro-<tracker>` to get it; nothing self-applies. The re-run also
+> removes the inert `.kiro/hooks/radio-*.json` files, leaving any hook of your own
+> in that directory alone.
 
 ### Idle workers don't auto-act
 
 A queued message arriving at an idle worker won't kick it into motion on its own — the worker only sees the message on its **next turn** (a human keystroke or its own next prompt). When that turn comes, the `UserPromptSubmit` hook (`radio prompt-hook`) injects a summary of the pending inbox into the model's context, so the backlog surfaces even if every send-time wake attempt failed. This is deliberate for workers: radio is **notification + queue**, not auto-action. If you want fully autonomous handoffs, dispatch the worker with `task-work --auto` and bake all the instructions into the issue body — that also opts the worker into the CR (auto-submit) wake-up, so a live ping drains without a keystroke. A PM launched with `task-pm` has that opt-in on by default (#189).
 
-On kiro that injection doesn't happen, so the worker's *own* `radio check` at the top of its next turn is what surfaces the backlog — same "next turn" latency, one less safety net. `task-work --auto` works there too (#206), but it only buys the auto-submit — the three context-injecting backstops are still claude-only.
+On kiro the `userPromptSubmit` hook is a plain `radio busy` with no inbox summary, so the worker's *own* `radio check` at the top of its next turn is what surfaces the backlog — same "next turn" latency, one less safety net. Its `agentSpawn` register report *does* land (kiro injects hook stdout), so a backlog that accumulated while the role was offline surfaces on the next fresh start. `task-work --auto` works there too (#206), buying the auto-submit.
 
 ### Session state and self-heal
 
@@ -636,12 +667,13 @@ backlog in the summary it injects.
 Every backstop in the list above — the Stop-hook drain, the prompt-hook injection, the
 register backlog report — works by putting hook stdout into the model's context, which
 kiro does not do. For a kiro recipient the zellij keystroke is the **only** push path,
-and a missed wake has nothing behind it; what makes delivery eventually happen is the
-agent's own `radio check` poll at the top of each turn. Diagnose a kiro role by its
-`AGENT=` line (`grep AGENT ~/.task-force/radio/sessions/<role>.info`) and read
-[kiro delivery is best-effort](#kiro-delivery-is-best-effort) before concluding anything
+and a missed wake to an *idle* role has only the agent's own `radio check` poll behind
+it. Diagnose a kiro role by its `AGENT=` line
+(`grep AGENT ~/.task-force/radio/sessions/<role>.info`) and read
+[kiro delivery](#kiro-delivery-pull-first-with-one-backstop) before concluding anything
 is broken — a queued message with no drain is the documented behaviour there, not a
-failure.
+failure. Note that a kiro role with **no session file at all** is a different thing and
+*is* a bug post-#218: its `agentSpawn` hook should have registered it.
 
 ---
 

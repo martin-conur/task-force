@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-25
+
 ### Fixed
 
 - **kiro radio was never wired up at all: the hooks were written to a directory `kiro-cli` does not read, so no kiro role had ever registered (#218).** `task-init` wrote `radio-register` / `radio-busy` / `radio-ready` into `<repo>/.kiro/hooks/*.json`. That is the **Kiro IDE**'s agent-hooks location; `kiro-cli` — what the loadouts actually launch — reads hooks from the `hooks` field of each agent config, and the string `.kiro/hooks` does not appear in its binary. So none of the three had ever run: no `agentSpawn` register, no `userPromptSubmit` state flip, no idle flip at end of turn. Every `radio send` to a kiro role returned `no session … message queued`, in both directions, and every handoff needed a human courier. Six months of logs contain exactly one `agent=kiro` register line, and it was hand-typed (its `--loadout` and `--repo` are empty, which the hook never leaves blank). Two further defects were folded into the same shape: `agentStop`, the trigger `radio-ready` used, is **not a valid kiro-cli trigger** — an agent config carrying one fails to load wholesale — and the `{"trigger":…,"action":{"type":"shellCommand",…}}` entry form is rejected inside an agent config, which takes `{"command": …}`. All three hooks now merge into `.kiro/agents/*.json` on `agentSpawn` / `userPromptSubmit` / `stop` (verified per-turn against kiro-cli 2.24.0). The merge runs regardless of the overwrite policy and only adds an entry when no command on that trigger already starts with `radio `, so a repo whose customized agent file is *kept* still comes out with working hooks — that upgrade path is the point — while pre-existing non-radio hooks survive. A re-run also sweeps the inert `.kiro/hooks/radio-*.json` it used to write, leaving any hook of your own in that directory alone. What was never broken: the zellij wake itself, which the logs show working on kiro whenever a session file happened to exist.
@@ -180,7 +182,8 @@ First feature release since `v0.0.1`. Highlights: two new local-tracking loadout
 - Test temp-dir cleanups moved to bats `teardown()` so they fire even on assertion failure (#64)
 - Bats suite at **460 tests** across 7 loadouts × 2 OS
 
-[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/martin-conur/task-force/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/martin-conur/task-force/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/martin-conur/task-force/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/martin-conur/task-force/compare/v0.1.0...v0.2.0

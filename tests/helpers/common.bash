@@ -172,6 +172,25 @@ setup_repo() {
   git -C "$MAIN_REPO" commit -q -m "init"
 }
 
+# Seeds .kiro/agents/*.json, modelling a repo that has been task-init'd for a
+# kiro loadout. The kiro launchers refuse to spawn when the agent they name does
+# not resolve (#218): kiro-cli does not fail on an unresolvable --agent, it falls
+# back to a hookless built-in, which is precisely how radio came to be dead on
+# kiro. Call this from any test that runs a kiro task-work / task-reviewer.
+#
+# Opt-in rather than folded into setup_repo on purpose: several task-init tests
+# assert that .kiro/agents does NOT exist for a given scope, and a shared fixture
+# that pre-creates it makes those assertions vacuous.
+# Usage: setup_kiro_agents [repo_dir]   (defaults to $MAIN_REPO)
+setup_kiro_agents() {
+  local dir="${1:-$MAIN_REPO}" a
+  mkdir -p "$dir/.kiro/agents"
+  for a in worker pm planner reviewer; do
+    printf '{"name":"%s","description":"test fixture","prompt":"","tools":[],"allowedTools":[]}\n' \
+      "$a" > "$dir/.kiro/agents/$a.json"
+  done
+}
+
 # Creates a git worktree + .info file, simulating what task-work would do.
 # Usage: setup_worktree <slug> [base_branch]
 setup_worktree() {

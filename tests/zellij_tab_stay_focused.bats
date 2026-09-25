@@ -18,6 +18,7 @@ ZELLIJ_TAB_LIB="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)/lib/zellij-ta
 
 setup() {
   setup_repo
+  setup_kiro_agents   # kiro launchers preflight the agent (#218)
   setup_stubs
   cd "$MAIN_REPO"
   # shellcheck source=../lib/zellij-tab.sh

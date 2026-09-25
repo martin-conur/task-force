@@ -1078,6 +1078,49 @@ _queue_offline() {
   assert [ -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.agent" ]
 }
 
+@test "a COLD register recovers TAB_ID from \$INFO_FILE when the zellij lookup misses (#218)" {
+  # #188 wired _info_file_tab_id into the re-seed path only; cmd_register kept
+  # just the #117 preserve-from-existing-.info branch. So a *first* register with
+  # no prior session file and a missed zellij lookup wrote TAB_ID= empty — the one
+  # state that makes a role permanently unwakeable, because cmd_send then queues
+  # with no wake attempt at all.
+  #
+  # That gap sat squarely on #218's critical path: once kiro roles register at
+  # all, the first register any of them performs is a cold one.
+  setup_repo
+  setup_worktree w-foo
+  printf 'TAB_ID=%s\n' 41 >> "$WORKTREE_BASE/.w-foo.info"
+  local sess="$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert [ ! -f "$sess" ]
+
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && '$RADIO' register --role worker-foo --tab w-foo --repo '$WORKTREE_BASE/w-foo' --agent kiro --loadout kiro-gh"
+  assert_success
+  run cat "$sess"
+  assert_output --partial "TAB_ID=41"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab_id_src=info-file"
+}
+
+@test "a cold register ignores a non-numeric \$INFO_FILE TAB_ID rather than writing garbage (#218)" {
+  setup_repo
+  setup_worktree w-foo
+  printf 'TAB_ID=%s\n' not-a-number >> "$WORKTREE_BASE/.w-foo.info"
+
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && '$RADIO' register --role worker-foo --tab w-foo --repo '$WORKTREE_BASE/w-foo' --agent kiro --loadout kiro-gh"
+  assert_success
+  run cat "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  refute_output --partial "not-a-number"
+}
+
+@test "a cold register with no binding anywhere logs the unwakeable state distinctly (#218)" {
+  setup_repo
+  run bash -c "cd '$MAIN_REPO' && '$RADIO' register --role worker-foo --tab w-foo --repo '$MAIN_REPO' --agent kiro --loadout kiro-gh"
+  assert_success
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab_id_src=none"
+  assert_output --partial "no tab binding for worker-foo"
+}
+
 @test "re-seed recovers TAB_ID from \$INFO_FILE when the zellij lookup misses (#188)" {
   # The zellij-miss path used to write TAB_ID= empty, which cmd_send reports as
   # "not zellij-registered" and queues with no wake attempt — permanently, for

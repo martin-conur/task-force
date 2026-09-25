@@ -217,7 +217,13 @@ teardown() {
 @test "project-level agents are copies of kiro-gh/agents/" {
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  run cmp -s "$REPO_ROOT_REAL/kiro-gh/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  # Identical to the shipped source *except* for the radio hooks merged in at
+  # install time (#218) — the source files deliberately carry no hooks block, so
+  # the loadout name and the ${TASK_FORCE_LOADOUT:-…} override live in exactly
+  # one place (task-init) rather than being duplicated across ten agent files.
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-gh/agents/pm.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
   assert_success
 }
 
@@ -227,7 +233,13 @@ teardown() {
   run "$KIRO_GH_TASK_INIT" --force
   assert_success
   assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
-  run cmp -s "$REPO_ROOT_REAL/kiro-gh/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  # Identical to the shipped source *except* for the radio hooks merged in at
+  # install time (#218) — the source files deliberately carry no hooks block, so
+  # the loadout name and the ${TASK_FORCE_LOADOUT:-…} override live in exactly
+  # one place (task-init) rather than being duplicated across ten agent files.
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-gh/agents/pm.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
   assert_success
 }
 
@@ -237,7 +249,13 @@ teardown() {
   run "$KIRO_GH_TASK_INIT" --force
   assert_success
   assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
-  run cmp -s "$REPO_ROOT_REAL/kiro-gh/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  # Identical to the shipped source *except* for the radio hooks merged in at
+  # install time (#218) — the source files deliberately carry no hooks block, so
+  # the loadout name and the ${TASK_FORCE_LOADOUT:-…} override live in exactly
+  # one place (task-init) rather than being duplicated across ten agent files.
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-gh/agents/pm.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
   assert_success
 }
 
@@ -267,32 +285,115 @@ teardown() {
 # radio hooks: .kiro/hooks/*.json
 # ---------------------------------------------------------------------------
 
-@test "writes 3 radio hook files into .kiro/hooks/" {
+@test "merges the 3 radio hooks into every agent config, where kiro-cli reads them (#218)" {
+  # NOT .kiro/hooks/*.json: that is the Kiro IDE's directory, which kiro-cli
+  # never reads. Writing there is what made radio dead on kiro — the hooks
+  # parsed fine and simply never ran.
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  for name in radio-register radio-busy radio-ready; do
-    assert [ -f "$TARGET_DIR/.kiro/hooks/${name}.json" ]
+  assert [ ! -d "$TARGET_DIR/.kiro/hooks" ]
+  for agent in pm planner worker reviewer; do
+    run jq -r '[.hooks.agentSpawn[0].command, .hooks.userPromptSubmit[0].command, .hooks.stop[0].command] | @tsv' \
+      "$TARGET_DIR/.kiro/agents/$agent.json"
+    assert_success
+    assert_output --partial "radio register"
+    assert_output --partial "radio busy"
+    assert_output --partial "radio ready"
   done
 }
 
-@test "radio-register hook embeds the loadout name (env-overridable) and uses agentSpawn" {
+@test "never emits the agentStop trigger, which kiro-cli rejects outright (#218)" {
+  # An agent config carrying agentStop fails to load *wholesale*, taking every
+  # other hook with it — so this is not cosmetic.
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  run cat "$TARGET_DIR/.kiro/hooks/radio-register.json"
-  assert_output --partial "agentSpawn"
+  for agent in pm planner worker reviewer; do
+    run jq -e '.hooks | has("agentStop")' "$TARGET_DIR/.kiro/agents/$agent.json"
+    assert_failure
+  done
+}
+
+@test "the merge is idempotent — a second run does not duplicate entries (#218)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq -r '[.hooks.agentSpawn, .hooks.userPromptSubmit, .hooks.stop] | map(length) | @tsv' \
+    "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output "1	1	1"
+}
+
+@test "hooks are merged even when the policy KEEPS a customized agent config (#218)" {
+  # The upgrade path that matters: every existing kiro repo has agent files
+  # already, so a merge gated behind install_file's overwrite policy would
+  # leave them hookless forever — radio would stay dead for exactly the users
+  # who already had it broken.
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  jq '.prompt = "CUSTOMIZED" | del(.hooks)' "$TARGET_DIR/.kiro/agents/worker.json" > "$TARGET_DIR/w.tmp"
+  mv "$TARGET_DIR/w.tmp" "$TARGET_DIR/.kiro/agents/worker.json"
+
+  run "$KIRO_GH_TASK_INIT"   # non-TTY => keep existing files
+  assert_success
+  run jq -r '.prompt' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output "CUSTOMIZED"
+  run jq -r '.hooks.agentSpawn[0].command' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output --partial "radio register"
+}
+
+@test "a pre-existing non-radio hook on the same trigger is preserved (#218)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  jq '.hooks.agentSpawn = [{"command":"./my-own.sh"}]' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/p.tmp"
+  mv "$TARGET_DIR/p.tmp" "$TARGET_DIR/.kiro/agents/pm.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.agentSpawn | map(.command) | @tsv' "$TARGET_DIR/.kiro/agents/pm.json"
+  assert_output --partial "./my-own.sh"
+  assert_output --partial "radio register"
+}
+
+@test "sweeps the inert .kiro/hooks/radio-*.json a previous task-init wrote, keeping foreign hooks (#218)" {
+  mkdir -p "$TARGET_DIR/.kiro/hooks"
+  for name in radio-register radio-busy radio-ready; do
+    printf '{"version":"1.0","name":"%s","trigger":{"type":"agentSpawn"},"action":{"type":"shellCommand","command":"radio busy"},"enabled":true}\n' \
+      "$name" > "$TARGET_DIR/.kiro/hooks/${name}.json"
+  done
+  printf '{"version":"1.0","name":"mine","trigger":{"type":"agentSpawn"},"action":{"type":"shellCommand","command":"./lint.sh"},"enabled":true}\n' \
+    > "$TARGET_DIR/.kiro/hooks/mine.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  for name in radio-register radio-busy radio-ready; do
+    assert [ ! -f "$TARGET_DIR/.kiro/hooks/${name}.json" ]
+  done
+  # Not ours, not deleted — and the directory survives because it is non-empty.
+  assert [ -f "$TARGET_DIR/.kiro/hooks/mine.json" ]
+}
+
+@test "radio-register hook embeds the loadout name (env-overridable) on agentSpawn" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.agentSpawn[0].command' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_success
   # The hook uses ${TASK_FORCE_LOADOUT:-kiro-gh} so per-role launchers like
   # task-reviewer can override LOADOUT= without re-running task-init.
   assert_output --partial "--loadout \${TASK_FORCE_LOADOUT:-kiro-gh}"
   assert_output --partial "--agent kiro"
 }
 
-@test "radio-ready hook calls 'radio ready && radio check' on agentStop" {
+@test "radio-ready is a bare radio-ready on the per-turn stop trigger (#218)" {
+  # `radio check` is gone from this hook: it was paired here only because the
+  # old wiring had no other way to look at the inbox, and its listing is not
+  # something a hook should print unprompted every turn. `stop` fires once per
+  # turn (verified against kiro-cli 2.24.0), which is what makes `radio ready`
+  # here enough to return the role to idle.
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  run cat "$TARGET_DIR/.kiro/hooks/radio-ready.json"
-  assert_output --partial "agentStop"
-  assert_output --partial "radio ready"
-  assert_output --partial "radio check"
+  run jq -r '.hooks.stop[0].command' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_success
+  assert_output "radio ready"
 }
 
 # ---------------------------------------------------------------------------

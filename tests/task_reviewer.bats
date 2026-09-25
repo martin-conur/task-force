@@ -21,6 +21,7 @@ load helpers/common
 
 setup() {
   setup_repo
+  setup_kiro_agents   # the kiro reviewer preflights its agent (#218)
   setup_stubs
   cd "$MAIN_REPO"
   # Default: PR exists; tests that need "no PR" unset this.

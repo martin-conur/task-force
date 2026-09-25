@@ -1,13 +1,20 @@
 #!/usr/bin/env bats
-# kiro loadouts declare radio delivery best-effort (#190, option B).
+# kiro loadouts lead with the agent's own inbox poll (#190 option B, as amended
+# by #218).
 #
-# Kiro discards hook stdout (#146), so none of claude's three pull paths exist
-# there: no Stop-hook block-and-drain (#163), no prompt-hook inbox injection
-# (#164), no register backlog report (#168). The zellij keystroke wake is the
-# only push path, and nothing is behind it. What replaces those backstops is a
-# standing instruction in every kiro agent prompt to poll its own inbox, plus
-# docs that say so instead of implying parity. These tests pin both halves —
-# they are the thing that would silently rot.
+# kiro has one of claude's three pull paths: the register backlog report (#168),
+# whose stdout does reach the model. It lacks the Stop-hook block-and-drain
+# (#163) and the prompt-hook inbox injection (#164) — both because it is wired
+# with plain `radio busy` / `radio ready`, which is an un-taken decision (#221)
+# rather than a platform limit. The original reason given here — that kiro
+# discards hook stdout — was false: it injects it. Nobody had observed injection
+# because the hooks were written to `.kiro/hooks/`, which kiro-cli never reads,
+# so none of them had ever run (#218).
+#
+# What covers the remaining gap is a standing instruction in every kiro agent
+# prompt to poll its own inbox, plus docs that say so instead of implying
+# parity. These tests pin both halves — they are the thing that would silently
+# rot, as the injection claim itself did.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -86,8 +93,8 @@ poll_block() {
     assert [ -f "$f" ]
     run cat "$f"
     assert_success
-    assert_output --partial "Delivery here is best-effort"
-    assert_output --partial "does not inject hook output"
+    assert_output --partial "Delivery here is pull-first"
+    assert_output --partial "no block-and-drain"
     assert_output --partial "no session-end trigger"
     assert_output --partial "radio orphans"
   done
@@ -106,7 +113,7 @@ poll_block() {
 @test "the README documents the kiro asymmetry rather than implying parity" {
   run cat "$REPO_ROOT_REAL/README.md"
   assert_success
-  assert_output --partial "### kiro delivery is best-effort"
-  assert_output --partial "Kiro doesn't inject hook stdout at all"
-  assert_output --partial "**Kiro agents pull.**"
+  assert_output --partial "### kiro delivery: pull-first, with one backstop"
+  assert_output --partial "**kiro does inject hook stdout into the model's context.**"
+  assert_output --partial "**Kiro agents still pull.**"
 }

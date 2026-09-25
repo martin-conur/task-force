@@ -8,6 +8,7 @@ load helpers/common
 
 setup() {
   setup_repo
+  setup_kiro_agents   # kiro launchers preflight the agent (#218)
   setup_stubs
   cd "$MAIN_REPO"
   # kiro-local needs a tasks/ dir for board regen. Create it.

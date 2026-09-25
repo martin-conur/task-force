@@ -1010,9 +1010,10 @@ cmd_register() {
   # only unique within one server lifetime; persisting the session name lets a
   # later send/rename detect a TAB_ID that outlived a restart via the identity
   # check in _live_tab_id. Empty outside zellij / when unresolved.
-  local tab_id="" zsession="${ZELLIJ_SESSION_NAME:-}"
+  local tab_id="" tab_id_src=none zsession="${ZELLIJ_SESSION_NAME:-}"
   if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
     tab_id=$(_zellij_tab_id_by_name "$tab" || true)
+    [[ -z "$tab_id" ]] || tab_id_src=zellij
   fi
 
   # Worktree-proof repo name (#165 RC-2): derive the MAIN repo name from --repo
@@ -1086,6 +1087,7 @@ cmd_register() {
     fi
     if [[ -n "$existing_tab_id" ]]; then
       tab_id="$existing_tab_id"
+      tab_id_src=session-preserved
       # Preserve the recorded ZELLIJ_SESSION too, not just the id (#167 review
       # #3). Stamping the *current* session name onto a *preserved* (old) id
       # would launder the stale binding — recorded==current forever, defeating
@@ -1093,7 +1095,26 @@ cmd_register() {
       zsession=$(_session_field "$f" ZELLIJ_SESSION || true)
       _log "register: zellij list-tabs miss for tab=$tab — preserving existing TAB_ID=$tab_id session=$zsession role=$role"
     else
-      _log "register: could not resolve tab_id for tab=$tab (zellij list-tabs returned no match)"
+      # Cold register (no prior .info to preserve from) with a zellij lookup
+      # miss used to stop here and write TAB_ID= empty — the one state that
+      # makes a role permanently unwakeable, since cmd_send then queues with no
+      # wake attempt at all. $INFO_FILE is the same authoritative fallback the
+      # re-seed path has used since #188; it was simply never wired in here,
+      # and _ensure_session_file was the only caller of _info_file_tab_id.
+      #
+      # This is on the critical path for kiro (#218): with registration newly
+      # working, the *first* register a kiro role ever performs is a cold one,
+      # so the gap would have swallowed exactly the sessions that fix creates.
+      # Unlike the preserve branch above, the recorded id is current — task-work
+      # wrote it at tab creation for this server — so zsession stays the live
+      # ZELLIJ_SESSION_NAME rather than being read back off a stale file.
+      tab_id=$(_info_file_tab_id "$repo" "$tab")
+      if [[ -n "$tab_id" ]]; then
+        tab_id_src=info-file
+        _log "register: zellij list-tabs miss for tab=$tab — recovered TAB_ID=$tab_id from \$INFO_FILE role=$role"
+      else
+        _log "register: could not resolve tab_id for tab=$tab (zellij list-tabs returned no match, no TAB_ID in \$INFO_FILE)"
+      fi
     fi
   fi
 
@@ -1153,7 +1174,13 @@ cmd_register() {
     _reseed_aliases "$role"
   fi
 
-  _log "register role=$role tab=$tab tab_id=$tab_id agent=$agent loadout=$loadout repo_name=$repo_name"
+  _log "register role=$role tab=$tab tab_id=$tab_id tab_id_src=$tab_id_src agent=$agent loadout=$loadout repo_name=$repo_name"
+  # Same distinct, greppable line the re-seed path emits (#188): an empty
+  # TAB_ID is the only outcome that leaves the role unwakeable, so it must not
+  # hide inside the generic register line.
+  if [[ "$tab_id_src" == none ]]; then
+    _log "register: no tab binding for $role (zellij lookup miss, no TAB_ID in \$INFO_FILE) — TAB_ID left empty; sends to it will queue with no wake"
+  fi
 
   # Legacy `pm` inbox adoption (#182): before the drain summary below, a fresh
   # pm-<reponame> register migrates any orphaned literal-`pm` backlog into this
@@ -1222,9 +1249,10 @@ cmd_register() {
   # redelivery. Nothing else surfaces that backlog at startup: the stop-hook
   # flush needs a Stop event and the prompt-hook injection needs a user
   # prompt, but register runs from SessionStart — whose stdout IS injected
-  # into the model's context (claude loadouts only; Kiro's hook stdout isn't
-  # injected, so this beat no-ops there — same #146 divergence as the stop-
-  # and prompt-hook beats). Printing the backlog summary here puts it in front
+  # into the model's context. This beat works on kiro too: its agentSpawn hook
+  # is the same entrypoint and kiro injects hook stdout as well (verified by
+  # nonce control, #218/#221 — the long-standing claim that it does not came
+  # from hooks that were never running at all). Printing the backlog summary here puts it in front
   # of the agent on its very first turn, closing the offline→online gap — the
   # companion to the stop-hook flush (busy case) and prompt-hook injection
   # (idle case).
@@ -1824,12 +1852,18 @@ cmd_prompt_hook() {
 # claude's hooks pull for it three independent ways: the Stop hook blocks and
 # drains a busy role (#163), the UserPromptSubmit hook injects the inbox summary
 # on the next prompt (#164), and a fresh SessionStart register reports the
-# offline backlog (#168). kiro is wired with none of them — its hook stdout
-# never reaches the model (#146) — so every situation collapses to the same
-# honest answer there: the agent polls its own inbox, and a message waits until
-# it next runs `radio check` at the top of a turn (#190, option B). Note this
-# makes `register` disappear from the kiro wording too: `cmd_register`'s backlog
-# summary rides the same dropped stdout, so promising it was never true either.
+# offline backlog (#168). kiro has only the third: its agentSpawn register does
+# reach the model (kiro injects hook stdout — #218/#221), but it is wired with
+# plain `radio busy` rather than `prompt-hook`, and its `stop` hook does a bare
+# state flip with no block-and-drain. Neither of those is a hard limitation any
+# more, just an un-taken decision (#221) — but until one is taken, a *queued*
+# message has no hook behind it, so every situation still collapses to the same
+# honest answer: the agent polls its own inbox, and the message waits until it
+# next runs `radio check` at the top of a turn (#190, option B).
+#
+# The register report is deliberately not named in the wording below: it fires
+# on a fresh session start, which is not something the sender can count on
+# happening, so promising it at send time would overstate the guarantee.
 #
 # $1 = recipient's AGENT session field (empty on pre-#151 sessions → treated as
 #      claude, the historical default). $2 = situation.

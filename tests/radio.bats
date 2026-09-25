@@ -226,11 +226,12 @@ teardown() {
 }
 
 @test "send to a kiro recipient softens the redelivery promise (no prompt-hook there) (#166, #190)" {
-  # kiro has neither prompt-hook nor register-drain injection (#146), so the
-  # wake-failed line must not promise either. #190 dropped "register" from the
-  # kiro wording too — cmd_register's backlog summary rides the same discarded
-  # stdout, so it was never a real redelivery path there. All that is left is
-  # the agent's own poll.
+  # kiro is wired with plain `radio busy`, not prompt-hook, so the wake-failed
+  # line must not promise a prompt-hook drain. "register" stays out of the kiro
+  # wording too — cmd_register's backlog summary *does* reach a kiro model since
+  # #218 (kiro injects hook stdout; #221), but it only fires on a fresh session
+  # start, which the sender cannot count on. All the sender can promise is the
+  # agent's own poll.
   unset ZELLIJ
   "$RADIO" register --role pm --tab pm --agent kiro
   TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent review-requested --body "PR up"
@@ -259,7 +260,9 @@ teardown() {
 }
 
 @test "send to an AWAITING kiro recipient does not promise prompt-hook (#190)" {
-  # kiro drops hook stdout (#146), so prompt-hook injection never happens there.
+  # kiro is wired with plain `radio busy` rather than prompt-hook (#221), so no
+  # inbox summary is injected at prompt time there — whatever kiro does with
+  # hook stdout, which since #218 is inject it.
   export ZELLIJ=fake-session
   "$RADIO" register --role pm --tab pm --agent kiro
   TASK_FORCE_ROLE=pm "$RADIO" awaiting

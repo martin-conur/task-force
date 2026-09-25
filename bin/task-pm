@@ -24,6 +24,8 @@ AW_ROOT=$(dirname "$BIN_DIR")
 source "$AW_ROOT/lib/detect-impl.sh"
 # shellcheck source=lib/repo-name.sh
 source "$AW_ROOT/lib/repo-name.sh"
+# shellcheck source=lib/kiro-agent.sh
+source "$AW_ROOT/lib/kiro-agent.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 
@@ -128,6 +130,15 @@ case "$REPO_NAME" in
     echo "       rename the repository directory to [a-z0-9-] so the PM can register." >&2
     exit 1 ;;
 esac
+# Same fail-fast placement, and for the same reason as the REPO_NAME check
+# above (#165 RC-6): a PM that renames its tab and *then* fails runs sessionless.
+# kiro-cli does not fail on an unresolvable --agent, it falls back to a hookless
+# built-in, so without this the PM launches, never registers, and every worker
+# report queues against a mailbox nobody is reading (#218).
+if [[ "$AGENT" == kiro ]]; then
+  aw_require_kiro_agent pm "$REPO_ROOT" "task-init ${IMPL}" || exit 1
+fi
+
 cd "$REPO_ROOT"
 
 if [[ -n "${ZELLIJ:-}" ]]; then

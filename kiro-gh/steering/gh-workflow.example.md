@@ -139,25 +139,30 @@ When a worker finishes its task and has nothing pending, the `radio ready` step
 runs automatically via the `agentStop` hook — you don't need to invoke it
 manually.
 
-**Delivery here is best-effort — kiro agents pull, they don't receive.** The
-hooks under `.kiro/hooks/` keep each role's session file accurate, but kiro
-does not inject hook output into the agent's context, so nothing a hook prints
-ever reaches the model: `agentSpawn`'s offline-backlog summary is discarded,
-`userPromptSubmit` is a plain `radio busy` with no inbox summary, and
-`agentStop`'s `radio check` writes to the hook subshell rather than the agent.
-There is also no kiro equivalent of the Stop-hook block that makes a busy agent
-drain its queue before going idle. That leaves the zellij keystroke wake — one
-best-effort push with no fallback behind it.
+**Delivery here is pull-first — kiro agents mostly fetch rather than receive.**
+The radio hooks live in the `hooks` field of each `.kiro/agents/*.json`, which is
+where kiro-cli reads them. Before #218 they were written to `.kiro/hooks/`
+instead — the Kiro *IDE*'s directory, which kiro-cli does not read — so none of
+them ran at all: no role registered, and every `radio send` to a kiro role
+returned `no session … message queued`. If you are on an older install, re-run
+`task-init` to pick up the fix; nothing self-applies.
 
-So the agents poll instead: every agent in `.kiro/agents/` carries a standing
+What you get now: `agentSpawn` registers the role, and its offline-backlog
+summary **does** reach the model — kiro injects hook stdout (the long-standing
+claim that it doesn't was an artifact of hooks that never ran). `userPromptSubmit`
+is a plain `radio busy` with no inbox summary, and `stop` is a bare `radio ready`
+with no block-and-drain, so a message that queues mid-session has no hook behind
+it. Whether to wire those two up is #221, not a limitation.
+
+So the agents still poll: every agent in `.kiro/agents/` carries a standing
 instruction to run `radio check` at the start of each turn and `radio read <id>`
 whatever it lists. If you are waiting on a handoff that seems not to have
 arrived, prompt the recipient tab — its next turn starts with a check.
 
-There is likewise no session-end trigger (`agentStop` fires per turn, not on
-session close), so closing a tab leaves its session file behind still
-advertising `STATE=idle`, and senders will keep trying to wake a tab that is
-gone. `task-done` unregisters on the worker happy path; for everything else,
+There is still no session-end trigger (`stop` fires per turn, not on session
+close), so closing a tab leaves its session file behind still advertising
+`STATE=idle`, and senders will keep trying to wake a tab that is gone.
+`task-done` unregisters on the worker happy path; for everything else,
 `radio orphans` is the cleanup step — see below.
 
 Full command form:

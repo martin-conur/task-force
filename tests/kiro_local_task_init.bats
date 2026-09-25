@@ -186,7 +186,13 @@ teardown() {
 @test "project-level agents are copies of kiro-local/agents/" {
   run "$KIRO_LOCAL_TASK_INIT"
   assert_success
-  run cmp -s "$REPO_ROOT_REAL/kiro-local/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  # Identical to the shipped source *except* for the radio hooks merged in at
+  # install time (#218) — the source files deliberately carry no hooks block, so
+  # the loadout name and the ${TASK_FORCE_LOADOUT:-…} override live in exactly
+  # one place (task-init) rather than being duplicated across ten agent files.
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-local/agents/pm.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
   assert_success
 }
 
@@ -196,7 +202,13 @@ teardown() {
   run "$KIRO_LOCAL_TASK_INIT" --force
   assert_success
   assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
-  run cmp -s "$REPO_ROOT_REAL/kiro-local/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  # Identical to the shipped source *except* for the radio hooks merged in at
+  # install time (#218) — the source files deliberately carry no hooks block, so
+  # the loadout name and the ${TASK_FORCE_LOADOUT:-…} override live in exactly
+  # one place (task-init) rather than being duplicated across ten agent files.
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-local/agents/pm.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
   assert_success
 }
 
@@ -206,7 +218,13 @@ teardown() {
   run "$KIRO_LOCAL_TASK_INIT" --force
   assert_success
   assert [ ! -L "$TARGET_DIR/.kiro/agents/pm.json" ]
-  run cmp -s "$REPO_ROOT_REAL/kiro-local/agents/pm.json" "$TARGET_DIR/.kiro/agents/pm.json"
+  # Identical to the shipped source *except* for the radio hooks merged in at
+  # install time (#218) — the source files deliberately carry no hooks block, so
+  # the loadout name and the ${TASK_FORCE_LOADOUT:-…} override live in exactly
+  # one place (task-init) rather than being duplicated across ten agent files.
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-local/agents/pm.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
   assert_success
 }
 
@@ -230,4 +248,64 @@ teardown() {
   run "$KIRO_LOCAL_TASK_INIT"
   assert_failure
   assert_output --partial "not in a git repo"
+}
+
+# ---------------------------------------------------------------------------
+# Radio hooks (#218) — these three loadouts had no hook coverage at all before,
+# which is how the register command drifted between them unnoticed.
+# ---------------------------------------------------------------------------
+
+@test "merges the 3 radio hooks into every agent config, where kiro-cli reads them (#218)" {
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  assert [ ! -d "$TARGET_DIR/.kiro/hooks" ]
+  for agent in pm planner worker; do
+    run jq -r '[.hooks.agentSpawn[0].command, .hooks.userPromptSubmit[0].command, .hooks.stop[0].command] | @tsv' \
+      "$TARGET_DIR/.kiro/agents/$agent.json"
+    assert_success
+    assert_output --partial "radio register"
+    assert_output --partial "radio busy"
+    assert_output --partial "radio ready"
+  done
+}
+
+@test "radio-register embeds the loadout name env-overridably (#218)" {
+  # kiro-local hard-coded its loadout where kiro-gh used the override form. The three
+  # copies were never drift-guarded, so nothing caught it; they are now.
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  run jq -r '.hooks.agentSpawn[0].command' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output --partial "--loadout \${TASK_FORCE_LOADOUT:-kiro-local}"
+  assert_output --partial "--agent kiro"
+}
+
+@test "never emits the agentStop trigger, which kiro-cli rejects outright (#218)" {
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  run jq -e '.hooks | has("agentStop")' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_failure
+}
+
+@test "hooks are merged even when the policy KEEPS a customized agent config (#218)" {
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  jq '.prompt = "CUSTOMIZED" | del(.hooks)' "$TARGET_DIR/.kiro/agents/worker.json" > "$TARGET_DIR/w.tmp"
+  mv "$TARGET_DIR/w.tmp" "$TARGET_DIR/.kiro/agents/worker.json"
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  run jq -r '.prompt' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output "CUSTOMIZED"
+  run jq -r '.hooks.agentSpawn[0].command' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output --partial "radio register"
+}
+
+@test "sweeps the inert .kiro/hooks/radio-*.json a previous task-init wrote (#218)" {
+  mkdir -p "$TARGET_DIR/.kiro/hooks"
+  for name in radio-register radio-busy radio-ready; do
+    printf '{"version":"1.0","name":"%s","trigger":{"type":"agentSpawn"},"action":{"type":"shellCommand","command":"radio busy"},"enabled":true}\n' \
+      "$name" > "$TARGET_DIR/.kiro/hooks/${name}.json"
+  done
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  assert [ ! -d "$TARGET_DIR/.kiro/hooks" ]
 }

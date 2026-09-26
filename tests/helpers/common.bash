@@ -56,6 +56,7 @@ KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.
 # pin a loadout by prefixing `AW_IMPL=<impl>` on the `run` invocation; the
 # kiro-gh task-reviewer is still a per-loadout file (kiro parity is #146).
 RADIO="$REPO_ROOT_REAL/bin/radio"
+TASK_CONFIG="$REPO_ROOT_REAL/bin/task-config"
 # Captured Claude Code SessionEnd hook payloads (#187). Tests feed these to
 # `radio unregister` on stdin instead of hand-building JSON — see
 # tests/fixtures/hook-payloads/README.md for provenance and counts.
@@ -116,7 +117,30 @@ pty_stdin() {
 # blind: on a host where no pty can be allocated at all, `script`'s own error
 # is what `run` captures, and it reads as the command under test failing.
 pty_run() {
-  local cmd="$1" out rc=0 stdin
+  local cmd="$1" input="${2-}" out rc=0 stdin
+  # With a second argument, that text is fed to the pty as the child's stdin — so
+  # `[[ -t 0 ]]` inside the command stays TRUE *and* a `read` prompt gets an
+  # answer. `script`'s own fd 0 is then a pipe, which yields the ENOTTY it
+  # tolerates rather than the socket ENOTSUPP it does not.
+  #
+  # The trailing sleep is load-bearing, not a fudge. When the writer closes
+  # immediately, BSD `script` notices EOF on its own stdin and sends ^D into the
+  # pty *ahead of* the bytes it had buffered — verified: the child's `read`
+  # returns failure with an empty answer while the pty echoes "^Dy". Holding the
+  # pipe open past the write orders the data before the EOF, so the answer lands
+  # whether or not the child has reached its prompt yet. It is a fixed cost per
+  # call, not a race: the data is queued in the tty before the child is asked
+  # for anything, and the sleep only delays the EOF that follows it.
+  if [[ $# -ge 2 ]]; then
+    if script --version 2>/dev/null | grep -qi util-linux; then
+      out=$({ printf '%s' "$input"; sleep 1; } | script -qec "$cmd" /dev/null) || rc=$?
+    else
+      out=$({ printf '%s' "$input"; sleep 1; } | script -q /dev/null bash -c "$cmd") || rc=$?
+    fi
+    out=${out#$'^D\b\b'}
+    printf '%s' "$out" | tr -d '\r'
+    return "$rc"
+  fi
   stdin=$(pty_stdin)
   if script --version 2>/dev/null | grep -qi util-linux; then
     out=$(script -qec "$cmd" /dev/null <"$stdin") || rc=$?

@@ -73,7 +73,7 @@ cd ~/agentic-workflow
 ./install.sh all              # install all seven
 ```
 
-The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-board`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
+The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-board`, `task-config`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
 
 ### 3. Set up a project
 
@@ -177,7 +177,7 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
-`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last.
+`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-pm`, `radio`, `ci-guard` and `task-config` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why that command in particular cannot be a dispatcher.)
 
 When you run one of them inside a project, the dispatcher detects the impl by looking at which workflow doc is present:
 
@@ -212,6 +212,97 @@ Error: task-board is only available on the local-tracking loadouts
 ```
 
 Every loadout links it anyway, on purpose: a command that explains itself beats one that is silently missing. Before #215 only the two `*-local` installers linked `task-board`, each straight at its own copy — so it was absent everywhere else, and installing both local loadouts left whichever ran last owning the symlink.
+
+---
+
+## `task-config` — which loadout is this repo on, and switching it
+
+`task-config` is the one task-force command that is deliberately **not** a dispatcher. `task-work` / `task-done` / `task-board` dispatch because they act *within* a loadout; `task-config` acts *across* them, has to know about a loadout the repo is not on, and has to keep working when detection is ambiguous — which is exactly when you reach for it. So it is a canonical single copy, like `task-pm` and `radio`.
+
+### `task-config show`
+
+```
+$ task-config show
+  loadout   : claude-gh
+  assistant : claude
+  tracker   : gh  (owner=martin-conur repo=task-force project=1)
+  config    : .claude/gh-workflow.md
+  owns      : .claude/commands/pm.md
+              .claude/commands/planner.md
+              .claude/commands/worker.md
+              .claude/commands/reviewer.md
+              CLAUDE.md  (the @.claude/gh-workflow.md import line)
+              .claude/settings.json  (radio hooks + seeded allow-list)
+```
+
+**`show` never refuses.** The two states every other command treats as fatal are output here, because describing them is the whole point:
+
+```
+$ task-config show                 # a repo with no loadout
+  loadout   : none
+
+No loadout configured in /path/to/repo; run task-init to pick one:
+  task-init            # interactive picker
+  task-init claude-gh  # or name one: claude-jira claude-notion claude-gh …
+```
+
+```
+$ task-config show                 # a repo with two
+Ambiguous: 2 loadouts are configured in /path/to/repo.
+Every task-force dispatcher refuses in this state.
+  … a full block for each match …
+Pick one, then remove the other:
+  task-config set loadout <name> --impl <the-one-to-replace>
+```
+
+Both exit non-zero, so a script can still branch on it. Before this, the only way to find the *second* workflow doc behind `Error: multiple agentic-workflow impls detected` was to know which seven paths to stat.
+
+### `task-config set`
+
+```bash
+task-config set assistant kiro            # same tracker, swap claude → kiro
+task-config set tracker local             # same assistant, swap the tracker
+task-config set loadout claude-notion     # swap both at once
+```
+
+Five steps, every time: detect the current loadout, carry the tracker settings off its workflow doc, remove its artifacts, hand the settings to `<new-loadout>/bin/task-init --force`, report what moved. Step 4 is a delegation, not a reimplementation — `task-init` already knows how to render every template, preserve placeholders and merge hooks idempotently, and a second copy of that here would be a second thing to keep in step.
+
+`--dry-run` prints the plan and changes nothing; otherwise a TTY run confirms first, and `--yes` skips the prompt. In an ambiguous repo, `--impl <name>` says which loadout to replace.
+
+**Settings carry across a `set assistant`, and cannot across a `set tracker`.** claude and kiro render the same template shape per tracker, so `owner` / `repo` / `project` move over cleanly on a `gh` repo. Different *trackers* share no fields at all, so there is nothing to carry and `task-init` prompts for the new ones exactly as on a first install. That asymmetry is correct rather than a gap.
+
+**One real gap, on notion.** Carry-over works by handing `task-init` the old values as flags, and the notion loadouts have no settings flags at all — only `--force` / `--restore` / `--workflow` / `--commands` / `--hooks` / `--help-ids`. So `task-config show` *reads* the Notion IDs out of a notion workflow doc and prints them, but a `claude-notion ↔ kiro-notion` switch cannot carry them, and you have to paste them into the new doc yourself. That is the worst tracker for it: the IDs are opaque strings that cannot be derived from a URL, which is why `task-init claude-notion --help-ids` exists. **#225** adds the flags; once it lands, notion carry-over works through this same code path with no change to `task-config`. Run `task-config show` before switching a notion repo and keep the output, or copy the three bullets out of the old doc first.
+
+`kiro-jira` is refused by name, because the assistant × tracker grid has exactly one hole (#92):
+
+```
+$ task-config set tracker jira          # in a kiro-gh repo
+Error: there is no 'kiro-jira' loadout.
+       The assistant × tracker grid has one hole: jira is not
+       available on kiro (#92). Everything else exists.
+```
+
+### What a switch removes, and what it leaves alone
+
+Removal is the inverse of `task-init`'s idempotent merge (#183, #212): it takes out **only** task-init's own entries, and deletes a file only when nothing else was in it.
+
+| Artifact | What removal does |
+|---|---|
+| `.claude/<t>-workflow.md` / `.kiro/steering/<t>-workflow.md` | deleted — it is the detection key, so leaving it is the multi-match state this exists to avoid. Repo-specific sections below the managed-region end marker (#183) are copied to `<doc>.bak` first, the way `task-init`'s own adoption path does it |
+| `.claude/commands/{pm,planner,worker,reviewer}.md` | deleted only where the file still matches the copy your loadout ships. One you have edited is kept — and keeps its directory. A command of your own beside them is never touched |
+| `.kiro/agents/{pm,planner,worker,reviewer}.json` | the radio hooks are stripped first, then the file is deleted only if what remains matches the shipped agent config. A customized one keeps your edits and loses only our hooks |
+| `.kiro/hooks/radio-*.json` (inert, pre-#218) | deleted, and only the ones recognisably radio's |
+| `CLAUDE.md` | the `@.claude/<t>-workflow.md` line is stripped; the file survives with your own content, and is deleted only if that line was all it held |
+| `.claude/settings.json` | the radio hook entries (matched as `(.command // "") \| startswith("radio ")`, the same test task-init's merge uses on itself) and the seeded allow-list literals are stripped; your own hooks, allow entries, `deny`, `model` and everything else stay |
+| `tasks/` (local loadouts) | the `README.md` / `_board.md` scaffolding goes; **your backlog stays**, and the run says how many files it kept |
+| `.gitignore` (local loadouts) | only the `.git/task-force/` line is removed |
+| `.claude/`, `.kiro/`, `.claude/commands/`, … | reclaimed only once removal has actually emptied them |
+
+The role files get the most care because they are the likeliest place a switch could destroy work. `task-init` installs them through `install_file`, whose `keep` / `prompt` policies let an existing file survive a re-run — and on kiro it then merges the radio hooks *into* whatever survived (#218, #222), so an agent config can be your work carrying our entries. So removal never deletes a role file it cannot prove is `task-init`'s own, and errs toward keeping: a file that doesn't match the shipped copy — because you edited it, or because the checkout has moved on since you installed — is kept, with a line saying so rather than silently.
+
+One accepted imprecision: the seeded allow-list is matched as a literal set, so a permission you independently wanted *and* task-init also seeds (`Read`, `Bash(ls *)`) goes away with a switch. `--dry-run` is the mitigation. A provenance manifest was weighed and rejected — `task-config` only ever removes one *named* loadout's artifacts, never "everything task-init ever did to this repo", so the set is derivable from the loadout name alone.
+
+The removal engine lives in `lib/loadout-artifacts.sh` rather than inside `task-config`, because `task-remove` (#220) is its second consumer.
 
 ---
 
@@ -927,6 +1018,7 @@ writing to the live mailbox.
 | `kiro_local_task_init.bats`       | `kiro-local/bin/task-init` — `tasks/` scaffolding, `.kiro/steering/local-workflow.md`, agents |
 | `task_board.bats`                 | Shared `task-board` script — frontmatter parsing, sidecar overlay, `_board.md` regen |
 | `task_board_dispatcher.bats`      | Root `bin/task-board` — local-loadout dispatch, `--repo`-driven detection, refusal on gh/jira/notion |
+| `task_config.bats`                | `bin/task-config` — `show` on all seven loadouts + the zero/ambiguous states, `set` round trips, user-content survival, `--dry-run` inertness |
 | `task_done.bats`                  | `task-done` across combos — cleanup, PR, guards |
 | `radio_home_isolation.bats`       | The suite's own radio-home isolation — nothing lands under `$HOME/.task-force` |
 

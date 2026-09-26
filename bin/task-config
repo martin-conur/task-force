@@ -1,0 +1,389 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-config — show, or switch, a repo's assistant × tracker (#219).
+#
+# A *canonical* script, like bin/task-pm and bin/radio — deliberately NOT a
+# dispatcher into <loadout>/bin/. task-work / task-done / task-board dispatch
+# because they act *within* one loadout. task-config acts *across* them: it has
+# to work when detection is ambiguous (that is precisely when you reach for it),
+# and it has to know about a loadout the repo is not on, so a per-loadout copy
+# would make no sense.
+#
+# What it does NOT do is write any artifact itself. Step 4 of a switch is
+# `<new-loadout>/bin/task-init --force`, handed the settings carried off the old
+# workflow doc. task-init already knows how to render every template, preserve
+# placeholders and merge hooks idempotently; a second implementation of that
+# here would be a second thing to keep in step.
+
+usage() {
+  cat <<'EOF'
+Usage: task-config [show]
+       task-config set assistant <claude|kiro>          [--dry-run] [--yes]
+       task-config set tracker   <gh|jira|notion|local> [--dry-run] [--yes]
+       task-config set loadout   <name>                 [--dry-run] [--yes]
+
+show (the default)
+  Print which loadout this repo is on, its assistant and tracker axes, the
+  tracker's settings, and the paths that carry them. Zero loadouts and two-or-
+  more loadouts are *described*, not refused: this is the command you reach for
+  when a repo is in a confusing state. Both exit non-zero.
+
+set
+  Switch one axis (or both) without stranding the old loadout's artifacts:
+
+    1. detect the current loadout and compute the target
+    2. carry the tracker settings off the old workflow doc
+    3. remove the old loadout's artifacts
+    4. run <target>/bin/task-init --force with the carried settings
+    5. report what moved
+
+  Settings carry across a `set assistant` because claude and kiro render the
+  same template shape per tracker. A `set tracker` has nothing to carry —
+  different trackers have entirely different fields — so task-init prompts for
+  the new ones exactly as it does on a first install.
+
+Options
+  --dry-run   Print the plan and change nothing.
+  --yes       Skip the confirmation prompt (implied when stdin is not a TTY).
+  --impl N    Treat the repo as being on loadout N instead of detecting it.
+              The way out of an ambiguous repo: pick the one to remove.
+  -h, --help  This.
+
+Examples
+  task-config
+  task-config set assistant kiro
+  task-config set tracker local --dry-run
+  task-config set loadout claude-notion --yes
+EOF
+  exit 0
+}
+
+# Resolve own path through symlinks -> AW_ROOT (the task-force checkout).
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+. "$AW_ROOT/lib/detect-impl.sh"
+# shellcheck source=lib/tracker-settings.sh
+. "$AW_ROOT/lib/tracker-settings.sh"
+# shellcheck source=lib/loadout-artifacts.sh
+. "$AW_ROOT/lib/loadout-artifacts.sh"
+
+ASSISTANTS=(claude kiro)
+TRACKERS=(gh jira notion local)
+
+DRY_RUN=false
+ASSUME_YES=false
+SUBCMD=""
+AXIS=""
+VALUE=""
+PINNED_IMPL=""
+
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)  usage ;;
+    --dry-run)  DRY_RUN=true; shift ;;
+    --yes|-y)   ASSUME_YES=true; shift ;;
+    --impl)     [[ $# -ge 2 ]] || { echo "Error: --impl requires a value" >&2; exit 1; }
+                PINNED_IMPL="$2"; shift 2 ;;
+    --impl=*)   PINNED_IMPL="${1#--impl=}"; shift ;;
+    -*)         echo "Error: unknown option: $1" >&2; exit 1 ;;
+    *)          ARGS+=("$1"); shift ;;
+  esac
+done
+
+SUBCMD="${ARGS[0]:-show}"
+AXIS="${ARGS[1]:-}"
+VALUE="${ARGS[2]:-}"
+
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; exit 1; }
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# ---------------------------------------------------------------------------
+# detection
+# ---------------------------------------------------------------------------
+
+# Populates MATCHES with every loadout configured in the repo, honouring
+# --impl / $AW_IMPL as a pin. Never errors on zero or many: the callers differ
+# in what they do about it.
+MATCHES=()
+_collect_matches() {
+  local pin="${PINNED_IMPL:-${AW_IMPL:-}}" m
+  MATCHES=()
+  if [[ -n "$pin" ]]; then
+    if ! aw_all_impls | grep -qFx "$pin"; then
+      echo "Error: unknown loadout '$pin'" >&2
+      echo "       known: $(_impl_list)" >&2
+      exit 1
+    fi
+    MATCHES=("$pin")
+    return 0
+  fi
+  while IFS= read -r m; do
+    [[ -n "$m" ]] && MATCHES+=("$m")
+  done < <(aw_detect_matches "$REPO_ROOT")
+  return 0
+}
+
+_rel() { printf '%s' "${1#"$REPO_ROOT"/}"; }
+
+# The loadout names on one line, for an error message or a hint.
+_impl_list() { aw_all_impls | tr '\n' ' ' | sed 's/ *$//'; }
+
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+# One loadout's block. Same shape whether it is the only match or one of
+# several, so an ambiguous repo reads as "here are two of these" rather than as
+# a different kind of output.
+_show_one() {
+  local loadout="$1" doc tracker settings line first=true
+  doc=$(la_workflow_doc "$REPO_ROOT" "$loadout")
+  tracker=$(la_tracker "$loadout")
+
+  # `owns` is a list whose first item carries the label; everything after it is
+  # indented under it. One emitter keeps that from being four copies of the
+  # same if.
+  _owns() {
+    if [[ "$first" == true ]]; then
+      printf '  owns      : %s\n' "$1"; first=false
+    else
+      printf '              %s\n' "$1"
+    fi
+  }
+
+  settings=$(tf_tracker_extract "$doc" "$tracker" | tr '\n' ' ')
+  settings="${settings% }"
+
+  printf '  loadout   : %s\n' "$loadout"
+  printf '  assistant : %s\n' "$(la_assistant "$loadout")"
+  if [[ -n "$settings" ]]; then
+    printf '  tracker   : %s  (%s)\n' "$tracker" "$settings"
+  elif [[ "$tracker" == local ]]; then
+    printf '  tracker   : local  (no settings — the backlog is tasks/)\n'
+  else
+    printf '  tracker   : %s  (unset — fill in %s)\n' "$tracker" "$(_rel "$doc")"
+  fi
+  printf '  config    : %s\n' "$(_rel "$doc")"
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    [[ "$line" == "$(_rel "$doc")" ]] && continue
+    _owns "$line"
+  done < <(la_owned_paths "$REPO_ROOT" "$loadout")
+
+  if [[ "$(la_assistant "$loadout")" == claude ]]; then
+    if [[ -f "$REPO_ROOT/CLAUDE.md" ]] \
+      && grep -qxF -- "@.claude/$tracker-workflow.md" "$REPO_ROOT/CLAUDE.md"; then
+      _owns "CLAUDE.md  (the @.claude/$tracker-workflow.md import line)"
+    fi
+    if [[ -f "$REPO_ROOT/.claude/settings.json" ]]; then
+      _owns ".claude/settings.json  (radio hooks + seeded allow-list)"
+    fi
+  fi
+
+  if [[ "$tracker" == local ]] && [[ -f "$REPO_ROOT/.gitignore" ]] \
+    && grep -qxF -- '.git/task-force/' "$REPO_ROOT/.gitignore"; then
+    _owns ".gitignore  (the .git/task-force/ entry)"
+  fi
+}
+
+cmd_show() {
+  _collect_matches
+  case "${#MATCHES[@]}" in
+    0)
+      printf '  loadout   : none\n'
+      printf '\nNo loadout configured in %s; run task-init to pick one:\n' "$REPO_ROOT"
+      printf '  task-init            # interactive picker\n'
+      printf '  task-init claude-gh  # or name one: %s\n' "$(_impl_list)"
+      return 1 ;;
+    1)
+      _show_one "${MATCHES[0]}"
+      return 0 ;;
+    *)
+      # aw_detect_impl refuses outright here, and so every dispatcher does.
+      # `show` is the one command that has to describe the state instead, and
+      # name every match — otherwise the only way to find the second one is to
+      # know which paths to stat.
+      printf 'Ambiguous: %s loadouts are configured in %s.\n' "${#MATCHES[@]}" "$REPO_ROOT"
+      printf 'Every task-force dispatcher refuses in this state.\n\n'
+      local m
+      for m in "${MATCHES[@]}"; do
+        _show_one "$m"
+        printf '\n'
+      done
+      printf 'Pick one, then remove the other:\n'
+      printf '  task-config set loadout <name> --impl <the-one-to-replace>\n'
+      return 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# set
+# ---------------------------------------------------------------------------
+
+_in_list() {
+  local needle="$1"; shift
+  local x
+  for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done
+  return 1
+}
+
+cmd_set() {
+  local axis="$1" value="$2"
+  [[ -n "$axis" && -n "$value" ]] || { echo "Error: set needs an axis and a value (see --help)" >&2; exit 1; }
+
+  _collect_matches
+  case "${#MATCHES[@]}" in
+    0)
+      echo "Error: no loadout configured in $REPO_ROOT — there is nothing to switch from." >&2
+      echo "       Run: task-init $( [[ "$axis" == loadout ]] && printf '%s' "$value" || printf '<loadout>' )" >&2
+      exit 1 ;;
+    1) ;;
+    *)
+      echo "Error: ${#MATCHES[@]} loadouts are configured in $REPO_ROOT:" >&2
+      printf '         - %s\n' "${MATCHES[@]}" >&2
+      echo "       Pass --impl <name> to say which one to replace, or run" >&2
+      echo "       task-config show for the full picture." >&2
+      exit 1 ;;
+  esac
+
+  local current="${MATCHES[0]}" target
+  local cur_assistant cur_tracker
+  cur_assistant=$(la_assistant "$current")
+  cur_tracker=$(la_tracker "$current")
+
+  case "$axis" in
+    assistant)
+      _in_list "$value" "${ASSISTANTS[@]}" || {
+        echo "Error: unknown assistant '$value' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
+      target="$value-$cur_tracker" ;;
+    tracker)
+      _in_list "$value" "${TRACKERS[@]}" || {
+        echo "Error: unknown tracker '$value' — known: ${TRACKERS[*]}" >&2; exit 1; }
+      target="$cur_assistant-$value" ;;
+    loadout)
+      target="$value" ;;
+    *)
+      echo "Error: unknown axis '$axis' — expected assistant, tracker or loadout" >&2
+      exit 1 ;;
+  esac
+
+  if [[ "$target" == "$current" ]]; then
+    echo "Already on $current — nothing to do."
+    return 0
+  fi
+
+  # Validate the target exists on disk. This is what refuses kiro-jira: the
+  # 2×4 assistant × tracker grid has exactly one hole (#92), and the only
+  # honest way to know is to look.
+  local target_init="$AW_ROOT/$target/bin/task-init"
+  if [[ ! -x "$target_init" ]]; then
+    local t_assistant t_tracker
+    t_assistant=$(la_assistant "$target")
+    t_tracker=$(la_tracker "$target")
+    echo "Error: there is no '$target' loadout." >&2
+    if _in_list "$t_assistant" "${ASSISTANTS[@]}" && _in_list "$t_tracker" "${TRACKERS[@]}"; then
+      echo "       The assistant × tracker grid has one hole: $t_tracker is not" >&2
+      echo "       available on $t_assistant (#92). Everything else exists." >&2
+    fi
+    echo "       Available: $(_impl_list)" >&2
+    exit 1
+  fi
+
+  local old_doc
+  old_doc=$(la_workflow_doc "$REPO_ROOT" "$current")
+
+  # Settings carry only when the tracker is unchanged — see the asymmetry note
+  # in the usage text and in lib/tracker-settings.sh.
+  local carry=() carried_desc="nothing to carry" tok
+  if [[ "$(la_tracker "$target")" == "$cur_tracker" ]]; then
+    while IFS= read -r tok; do
+      [[ -n "$tok" ]] && carry+=("$tok")
+    done < <(tf_tracker_init_flags "$old_doc" "$cur_tracker")
+    if ((${#carry[@]})); then
+      carried_desc=$(tf_tracker_extract "$old_doc" "$cur_tracker" | tr '\n' ' ')
+      carried_desc="${carried_desc% }"
+    else
+      carried_desc="nothing filled in on the old doc"
+    fi
+  else
+    carried_desc="nothing — $cur_tracker and $(la_tracker "$target") share no settings; task-init will ask"
+  fi
+
+  printf '%s → %s\n' "$current" "$target"
+  printf '  carrying  : %s\n' "$carried_desc"
+
+  # Preview the plan when it is a preview — a --dry-run, or the moment before a
+  # confirmation prompt. On a confirmed or --yes run la_remove narrates the same
+  # steps in the past tense as it performs them, and printing both would just be
+  # the same list twice.
+  local preview=false
+  if [[ "$DRY_RUN" == true ]]; then preview=true
+  elif [[ "$ASSUME_YES" != true && -t 0 ]]; then preview=true
+  fi
+  if [[ "$preview" == true ]]; then
+    printf '\nremoving %s:\n' "$current"
+    la_plan "$REPO_ROOT" "$current"
+    printf '\ninstalling %s:\n' "$target"
+    printf '  %s --force%s\n' "${target_init#"$AW_ROOT"/}" \
+      "$( ((${#carry[@]})) && printf ' %s' "${carry[*]}" )"
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    printf '\n--dry-run: nothing was changed.\n'
+    return 0
+  fi
+
+  if [[ "$ASSUME_YES" != true && -t 0 ]]; then
+    local reply=""
+    # EOF on the prompt (the terminal went away mid-question) has to read as
+    # "no", not as an unexplained non-zero exit from `read` under set -e.
+    if ! read -rp $'\nProceed? [y/N] ' reply; then reply=""; fi
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) echo "Aborted; nothing was changed."; return 1 ;;
+    esac
+  fi
+
+  printf '\n'
+  la_remove "$REPO_ROOT" "$current"
+  printf '\n'
+  # Removal has already happened by here, so a failing install leaves the repo
+  # with no loadout at all — the one state where saying nothing would be worst:
+  # the next `task-work` would report "no impl configured" and give no hint that
+  # a half-finished switch is why.
+  if ! "$target_init" --force ${carry[@]+"${carry[@]}"}; then
+    {
+      echo
+      echo "Error: $current was removed, but installing $target failed."
+      echo "       This repo has no loadout right now. Finish the switch with:"
+      echo "         task-init $target${carry[*]:+ ${carry[*]}}"
+    } >&2
+    exit 1
+  fi
+
+  printf '\n%s → %s done.\n' "$current" "$target"
+  if [[ "$(la_tracker "$target")" != "$cur_tracker" ]] \
+    && [[ -n "$(tf_tracker_fields "$(la_tracker "$target")")" ]]; then
+    printf 'Fill in the new tracker settings in %s.\n' \
+      "$(_rel "$(la_workflow_doc "$REPO_ROOT" "$target")")"
+  fi
+  printf 'Verify with: task-config show\n'
+  return 0
+}
+
+case "$SUBCMD" in
+  show) cmd_show ;;
+  set)  cmd_set "$AXIS" "$VALUE" ;;
+  *)    echo "Error: unknown subcommand '$SUBCMD' — expected show or set" >&2; exit 1 ;;
+esac

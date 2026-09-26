@@ -99,8 +99,16 @@ LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/managed-region.sh
 . "$LIB_DIR/managed-region.sh"
 # endregion:managed-region-source
-# shellcheck source=lib/preserve-placeholders.sh
-. "$LIB_DIR/preserve-placeholders.sh"
+# region:tracker-settings-source
+# The tracker-settings table — which settings a tracker carries, the flag that
+# sets each one, and the regex that reads it back out of a rendered workflow doc
+# — lives in lib/tracker-settings.sh (#219). It sources
+# lib/preserve-placeholders.sh itself. bin/task-config reads the same table, so
+# `task-config show` and `task-config set` cannot drift out of step with what
+# the installer wrote.
+# shellcheck source=lib/tracker-settings.sh
+. "$LIB_DIR/tracker-settings.sh"
+# endregion:tracker-settings-source
 # region:require-jq-source
 # shellcheck source=lib/require-jq.sh
 . "$LIB_DIR/require-jq.sh"
@@ -118,27 +126,11 @@ CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 
 mkdir -p "$REPO_ROOT/.claude"
 
-# Backticks in the regex patterns match the literal backticks rendered in the
-# markdown workflow doc (`SITE`). shellcheck would otherwise warn SC2016.
-# shellcheck disable=SC2016
-_preserve_placeholders() {
-  local existing="$1"
-  [[ -f "$existing" ]] || return 0
-  local v
-  if [[ "$SITE_VIA_FLAG" == false && -z "$SITE" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Site\*\*: `([^`]+)`.*' '{SITE}')
-    if [[ -n "$v" ]]; then SITE="$v"; fi
-  fi
-  if [[ "$KEY_VIA_FLAG" == false && -z "$KEY" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Project key\(s\)\*\*: `([^`]+)`.*' '{KEY}')
-    if [[ -n "$v" ]]; then KEY="$v"; fi
-  fi
-  if [[ "$BOARD_VIA_FLAG" == false && -z "$BOARD" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Board name\*\*: `([^`]+)`.*' '{BOARD}')
-    if [[ -n "$v" ]]; then BOARD="$v"; fi
-  fi
-  return 0
-}
+# Fill SITE / KEY / BOARD from an existing workflow doc for every value the
+# caller did not pass a flag for. The extraction lives in
+# lib/tracker-settings.sh so bin/task-config reads the doc through the same
+# regexes that wrote it (#219).
+_preserve_placeholders() { tf_preserve_jira "$1"; }
 
 if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   _preserve_placeholders "$TARGET"

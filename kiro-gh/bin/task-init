@@ -116,8 +116,16 @@ LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/managed-region.sh
 . "$LIB_DIR/managed-region.sh"
 # endregion:managed-region-source
-# shellcheck source=lib/preserve-placeholders.sh
-. "$LIB_DIR/preserve-placeholders.sh"
+# region:tracker-settings-source
+# The tracker-settings table — which settings a tracker carries, the flag that
+# sets each one, and the regex that reads it back out of a rendered workflow doc
+# — lives in lib/tracker-settings.sh (#219). It sources
+# lib/preserve-placeholders.sh itself. bin/task-config reads the same table, so
+# `task-config show` and `task-config set` cannot drift out of step with what
+# the installer wrote.
+# shellcheck source=lib/tracker-settings.sh
+. "$LIB_DIR/tracker-settings.sh"
+# endregion:tracker-settings-source
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
@@ -130,27 +138,14 @@ TARGET="$REPO_ROOT/.kiro/steering/gh-workflow.md"
 
 mkdir -p "$REPO_ROOT/.kiro/steering"
 
-# Backticks in the regex patterns match the literal backticks rendered in the
-# markdown workflow doc (`OWNER`). shellcheck would otherwise warn SC2016.
-# shellcheck disable=SC2016
-_preserve_placeholders() {
-  local existing="$1"
-  [[ -f "$existing" ]] || return 0
-  local v
-  if [[ "$OWNER_VIA_FLAG" == false && -z "$OWNER" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Owner\*\*: `([^`]+)`.*' '{OWNER}')
-    if [[ -n "$v" ]]; then OWNER="$v"; fi
-  fi
-  if [[ "$REPO_VIA_FLAG" == false && -z "$REPO" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Repo\*\*: `([^`]+)`.*' '{REPO}')
-    if [[ -n "$v" ]]; then REPO="$v"; fi
-  fi
-  if [[ "$PROJECT_VIA_FLAG" == false && -z "$PROJECT" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Project number\*\*: `([^`]+)`.*' '{PROJECT}')
-    if [[ -n "$v" ]]; then PROJECT="$v"; fi
-  fi
-  return 0
-}
+# region:tracker-preserve-gh
+# Fill OWNER / REPO / PROJECT from an existing workflow doc for every value the
+# caller did not pass a flag for. The extraction itself lives in
+# lib/tracker-settings.sh so bin/task-config reads the doc through the same
+# regexes that wrote it (#219); interactive prompts still run after this, so the
+# user can override whatever was carried forward.
+_preserve_placeholders() { tf_preserve_gh "$1"; }
+# endregion:tracker-preserve-gh
 
 if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   _preserve_placeholders "$TARGET"
@@ -218,6 +213,27 @@ if [[ "$SCOPE" != "workflow" ]]; then
     INSTALL_POLICY="$POLICY" install_file "$agent" "$agent_target" "agent: $agent_name"
   done
 fi
+
+# region:radio-legacy-hook-guard
+# True only for a .kiro/hooks/<name>.json that radio itself wrote: it carries
+# both the "shellCommand" wrapper the pre-#218 installer used and a radio command
+# inside it. A hook of the user's own in that directory is not ours to touch.
+#
+# Deliberately duplicated rather than shared, and guarded because of it: the kiro
+# installers sweep these files when they install (#218/#222), lib/loadout-artifacts.sh
+# removes them when a loadout is taken out (#219), and the installers do not
+# source that lib. Extracting it would mean reworking a region that #220 and #221
+# both queue against, so the copies stay — byte-identical and drift-guarded, so
+# editing one without the other is caught instead of silently diverging, which is
+# the failure that produced the ${TASK_FORCE_LOADOUT:-} drift #222 had to clean up.
+_tf_is_legacy_radio_hook() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  grep -q '"shellCommand"' "$f" 2>/dev/null || return 1
+  grep -q '"radio ' "$f" 2>/dev/null || return 1
+  return 0
+}
+# endregion:radio-legacy-hook-guard
 
 # -------- radio hooks (merged into the agent configs kiro-cli actually reads) -
 # kiro-cli reads hooks from the `hooks` field of an *agent config*
@@ -350,9 +366,7 @@ _radio_install_hooks() {
   # them as the thing that keeps the session file accurate (#218).
   local legacy_dir="$REPO_ROOT/.kiro/hooks" legacy swept=0
   for legacy in radio-register radio-busy radio-ready; do
-    [[ -f "$legacy_dir/$legacy.json" ]] || continue
-    grep -q '"shellCommand"' "$legacy_dir/$legacy.json" 2>/dev/null || continue
-    grep -q '"radio ' "$legacy_dir/$legacy.json" 2>/dev/null || continue
+    _tf_is_legacy_radio_hook "$legacy_dir/$legacy.json" || continue
     rm -f "$legacy_dir/$legacy.json"
     swept=$((swept + 1))
   done

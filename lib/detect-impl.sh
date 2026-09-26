@@ -6,6 +6,9 @@
 # Exports:
 #   aw_parse_impl_flag "$@"     -> populates AW_PARSED_IMPL and AW_REMAINING_ARGS
 #   aw_detect_impl <flag-impl>  -> prints the impl name to stdout (or returns 1)
+#   aw_all_impls                -> every valid impl name, one per line
+#   aw_impl_workflow_doc <root> <impl> -> the workflow doc that marks that impl
+#   aw_detect_matches <root>    -> every impl configured in <root>, one per line
 #
 # Resolution order for the impl:
 #   1. --impl <name> flag (consumed by aw_parse_impl_flag — not passed through)
@@ -33,6 +36,40 @@ aw_parse_impl_flag() {
   done
 }
 
+# The canonical impl list, in the order detection reports matches. Everything
+# that needs to know "which loadouts exist" reads it from here (#219) —
+# bin/task-config and lib/loadout-artifacts.sh included — so adding a combo is
+# one edit rather than a hunt for hard-coded sevens.
+aw_all_impls() {
+  printf '%s\n' \
+    claude-jira claude-notion claude-gh claude-local \
+    kiro-notion kiro-gh kiro-local
+}
+
+# The workflow doc whose presence marks a repo as using <impl>. This is the
+# detection key, and also the file `task-config show` reads tracker settings
+# out of.
+aw_impl_workflow_doc() {
+  local root="$1" impl="$2" tracker="${2##*-}"
+  case "${impl%%-*}" in
+    claude) printf '%s/.claude/%s-workflow.md' "$root" "$tracker" ;;
+    kiro)   printf '%s/.kiro/steering/%s-workflow.md' "$root" "$tracker" ;;
+    *)      return 1 ;;
+  esac
+}
+
+# Every impl configured in <root>, one per line. Zero, one or many — the caller
+# decides what to do about it. aw_detect_impl treats anything but one as an
+# error; `task-config show` treats all three as output (#219).
+aw_detect_matches() {
+  local root="$1" impl doc
+  while IFS= read -r impl; do
+    doc=$(aw_impl_workflow_doc "$root" "$impl") || continue
+    [[ -f "$doc" ]] && printf '%s\n' "$impl"
+  done < <(aw_all_impls)
+  return 0
+}
+
 # Detect impl by inspecting the current git repo. Echoes the impl name on
 # success, returns non-zero (and prints to stderr) on any error.
 #
@@ -48,14 +85,10 @@ aw_detect_impl() {
     repo_root=$(git rev-parse --show-toplevel 2>/dev/null) \
       || { echo "Error: not in a git repo" >&2; return 1; }
 
-    local matches=()
-    [[ -f "$repo_root/.claude/jira-workflow.md"          ]] && matches+=("claude-jira")
-    [[ -f "$repo_root/.claude/notion-workflow.md"        ]] && matches+=("claude-notion")
-    [[ -f "$repo_root/.claude/gh-workflow.md"            ]] && matches+=("claude-gh")
-    [[ -f "$repo_root/.claude/local-workflow.md"         ]] && matches+=("claude-local")
-    [[ -f "$repo_root/.kiro/steering/notion-workflow.md" ]] && matches+=("kiro-notion")
-    [[ -f "$repo_root/.kiro/steering/gh-workflow.md"     ]] && matches+=("kiro-gh")
-    [[ -f "$repo_root/.kiro/steering/local-workflow.md"  ]] && matches+=("kiro-local")
+    local matches=() _m
+    while IFS= read -r _m; do
+      [[ -n "$_m" ]] && matches+=("$_m")
+    done < <(aw_detect_matches "$repo_root")
 
     case "${#matches[@]}" in
       0)
@@ -72,13 +105,11 @@ aw_detect_impl() {
     esac
   fi
 
-  case "$impl" in
-    claude-jira|claude-notion|claude-gh|claude-local|kiro-notion|kiro-gh|kiro-local) ;;
-    *)
-      echo "Error: unknown impl '$impl'" >&2
-      echo "Valid impls: claude-jira, claude-notion, claude-gh, claude-local, kiro-notion, kiro-gh, kiro-local" >&2
-      return 1 ;;
-  esac
+  if ! aw_all_impls | grep -qFx "$impl"; then
+    echo "Error: unknown impl '$impl'" >&2
+    echo "Valid impls: $(aw_all_impls | paste -sd, - | sed 's/,/, /g')" >&2
+    return 1
+  fi
 
   printf '%s\n' "$impl"
 }

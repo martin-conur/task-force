@@ -71,6 +71,54 @@ task-work spike-idea --no-launch
 - `--force` — skip all confirmation prompts
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
+`task-config show` / `task-config set` — which loadout this repo is on, and how to switch it (#219)
+
+`task-config show` prints the assistant, the tracker, that tracker's settings and
+the paths carrying them. Unlike every other task-force command it never refuses:
+a repo with **no** loadout and a repo with **two** are both *described* (each
+still exits non-zero), because a confusing repo is exactly when you reach for it.
+
+```bash
+task-config show
+task-config set assistant claude   # same tracker, swap the assistant
+task-config set tracker local      # same assistant, swap the tracker
+task-config set loadout kiro-gh    # swap both at once
+```
+
+A `set` detects the current loadout, carries the tracker settings off its
+workflow doc, removes that loadout's artifacts, then delegates the install to
+`<new-loadout>/bin/task-init --force`. It never writes an artifact itself.
+`--dry-run` prints the plan and changes nothing; a TTY run confirms first, and
+`--yes` skips the prompt. In an ambiguous repo, `--impl <name>` says which
+loadout to replace.
+
+Removal takes out **only** task-init's own entries. An agent config is deleted
+only once its radio hooks are stripped and what remains still matches the copy
+the loadout ships — a `.kiro/agents/<role>.json` you have **edited** keeps your
+edits and loses just our hooks, because task-init's `keep` policy means it merges
+those hooks into a file that may be yours (#218/#222). Any inert pre-#218
+`.kiro/hooks/radio-*.json` goes; an agent or hook of your own beside them is never
+touched, and keeps its directory. On the local loadouts the `tasks/` scaffolding
+goes but **your backlog does not** (the run says how many files it kept), and a
+directory is reclaimed only once removal has actually emptied it. The workflow doc
+itself has to go — it is the detection key — but repo-specific sections below the
+managed-region end marker are copied to `<doc>.bak` first.
+
+Settings carry across a `set assistant` — claude and kiro render the same
+template shape per tracker — and cannot across a `set tracker`, because different
+trackers share no fields at all, so `task-init` prompts for the new ones exactly
+as on a first install. `kiro-jira` is refused by name: the assistant × tracker
+grid has exactly one hole (#92).
+
+One gap to know about before you switch **this** loadout: carry-over works by
+handing `task-init` the old values as flags, and the notion loadouts have no
+settings flags at all. So `task-config show` reads and prints this repo's Notion
+database IDs, but a `claude-notion ↔ kiro-notion` switch cannot carry them — you
+paste them into the new doc yourself. Notion is the worst tracker for that, since
+the IDs are opaque strings no URL yields (the reason for `--help-ids`). **#225**
+adds the flags, after which carry-over works with no change to `task-config`. Run
+`task-config show` first and keep the output.
+
 `ci-guard` — the commit-msg guard `task-work` installs (#194)
 
 Every `task-work` run installs a `commit-msg` git hook that refuses a commit

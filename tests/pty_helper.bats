@@ -109,3 +109,20 @@ sys.exit(subprocess.run(sys.argv[1:], stdin=a.fileno()).returncode)
   assert_output --partial "script"
   refute_output --partial "require_pty-returned-without-skipping"
 }
+
+@test "pty_run's input argument answers a read prompt on the pty (#219)" {
+  require_pty
+  # The ordering trap this form exists to dodge: with the writer closed at once,
+  # BSD `script` pushes ^D into the pty ahead of the bytes it buffered, and the
+  # child's `read` fails with an empty answer.
+  run pty_run '[ -t 0 ] || exit 9; read -rp "Q? " r; printf "GOT=[%s]" "$r"' $'hello\n'
+  assert_success
+  assert_output --partial "GOT=[hello]"
+}
+
+@test "pty_run with no input argument leaves the child at EOF (the pre-#219 behaviour)" {
+  require_pty
+  run pty_run 'if read -rp "Q? " r; then printf "GOT=[%s]" "$r"; else printf "EOF"; fi'
+  assert_success
+  assert_output --partial "EOF"
+}

@@ -66,7 +66,7 @@ resolve_link() {
     rm -rf "$HOME/.local/bin"
     bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
 
-    for cmd in task-init task-work task-done task-board task-pm radio ci-guard; do
+    for cmd in task-init task-work task-done task-board task-config task-pm radio ci-guard; do
       [ -L "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink missing"; return 1; }
       [ -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink dangling"; return 1; }
     done
@@ -85,6 +85,11 @@ resolve_link() {
     # installs execs it off PATH, so a missing link silently disarms it.
     [ "$(resolve_link ci-guard)" = "$REPO_ROOT_REAL/bin/ci-guard" ] \
       || { echo "$impl: ci-guard resolves to $(resolve_link ci-guard)"; return 1; }
+    # task-config is canonical rather than dispatching (#219): it acts *across*
+    # loadouts and has to keep working when detection is ambiguous, so there is
+    # no per-loadout copy for a link to point at by mistake.
+    [ "$(resolve_link task-config)" = "$REPO_ROOT_REAL/bin/task-config" ] \
+      || { echo "$impl: task-config resolves to $(resolve_link task-config)"; return 1; }
 
     case "$impl" in
       claude-*|kiro-gh)

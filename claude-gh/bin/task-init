@@ -113,8 +113,16 @@ LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/managed-region.sh
 . "$LIB_DIR/managed-region.sh"
 # endregion:managed-region-source
-# shellcheck source=lib/preserve-placeholders.sh
-. "$LIB_DIR/preserve-placeholders.sh"
+# region:tracker-settings-source
+# The tracker-settings table — which settings a tracker carries, the flag that
+# sets each one, and the regex that reads it back out of a rendered workflow doc
+# — lives in lib/tracker-settings.sh (#219). It sources
+# lib/preserve-placeholders.sh itself. bin/task-config reads the same table, so
+# `task-config show` and `task-config set` cannot drift out of step with what
+# the installer wrote.
+# shellcheck source=lib/tracker-settings.sh
+. "$LIB_DIR/tracker-settings.sh"
+# endregion:tracker-settings-source
 # region:require-jq-source
 # shellcheck source=lib/require-jq.sh
 . "$LIB_DIR/require-jq.sh"
@@ -132,31 +140,14 @@ CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 
 mkdir -p "$REPO_ROOT/.claude"
 
-# Loadout-specific placeholder extractor. Fills in OWNER / REPO / PROJECT from
-# an existing workflow file when the user did not pass a flag and the variable
-# is still empty (interactive prompts run after this so the user can still
-# override).
-# Backticks in the regex patterns match the literal backticks rendered in the
-# markdown workflow doc (`OWNER`). shellcheck would otherwise warn SC2016.
-# shellcheck disable=SC2016
-_preserve_placeholders() {
-  local existing="$1"
-  [[ -f "$existing" ]] || return 0
-  local v
-  if [[ "$OWNER_VIA_FLAG" == false && -z "$OWNER" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Owner\*\*: `([^`]+)`.*' '{OWNER}')
-    if [[ -n "$v" ]]; then OWNER="$v"; fi
-  fi
-  if [[ "$REPO_VIA_FLAG" == false && -z "$REPO" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Repo\*\*: `([^`]+)`.*' '{REPO}')
-    if [[ -n "$v" ]]; then REPO="$v"; fi
-  fi
-  if [[ "$PROJECT_VIA_FLAG" == false && -z "$PROJECT" ]]; then
-    v=$(extract_existing_value "$existing" '^- \*\*Project number\*\*: `([^`]+)`.*' '{PROJECT}')
-    if [[ -n "$v" ]]; then PROJECT="$v"; fi
-  fi
-  return 0
-}
+# region:tracker-preserve-gh
+# Fill OWNER / REPO / PROJECT from an existing workflow doc for every value the
+# caller did not pass a flag for. The extraction itself lives in
+# lib/tracker-settings.sh so bin/task-config reads the doc through the same
+# regexes that wrote it (#219); interactive prompts still run after this, so the
+# user can override whatever was carried forward.
+_preserve_placeholders() { tf_preserve_gh "$1"; }
+# endregion:tracker-preserve-gh
 
 # Only do prompts / detect / placeholder preservation when we're actually going
 # to render the workflow.

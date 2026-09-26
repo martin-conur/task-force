@@ -220,6 +220,27 @@ EOF
   fi
 fi
 
+# region:radio-legacy-hook-guard
+# True only for a .kiro/hooks/<name>.json that radio itself wrote: it carries
+# both the "shellCommand" wrapper the pre-#218 installer used and a radio command
+# inside it. A hook of the user's own in that directory is not ours to touch.
+#
+# Deliberately duplicated rather than shared, and guarded because of it: the kiro
+# installers sweep these files when they install (#218/#222), lib/loadout-artifacts.sh
+# removes them when a loadout is taken out (#219), and the installers do not
+# source that lib. Extracting it would mean reworking a region that #220 and #221
+# both queue against, so the copies stay — byte-identical and drift-guarded, so
+# editing one without the other is caught instead of silently diverging, which is
+# the failure that produced the ${TASK_FORCE_LOADOUT:-} drift #222 had to clean up.
+_tf_is_legacy_radio_hook() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  grep -q '"shellCommand"' "$f" 2>/dev/null || return 1
+  grep -q '"radio ' "$f" 2>/dev/null || return 1
+  return 0
+}
+# endregion:radio-legacy-hook-guard
+
 # -------- radio hooks (merged into the agent configs kiro-cli actually reads) -
 # kiro-cli reads hooks from the `hooks` field of an *agent config*
 # (<repo>/.kiro/agents/<name>.json), never from <repo>/.kiro/hooks/ — that
@@ -351,9 +372,7 @@ _radio_install_hooks() {
   # them as the thing that keeps the session file accurate (#218).
   local legacy_dir="$REPO_ROOT/.kiro/hooks" legacy swept=0
   for legacy in radio-register radio-busy radio-ready; do
-    [[ -f "$legacy_dir/$legacy.json" ]] || continue
-    grep -q '"shellCommand"' "$legacy_dir/$legacy.json" 2>/dev/null || continue
-    grep -q '"radio ' "$legacy_dir/$legacy.json" 2>/dev/null || continue
+    _tf_is_legacy_radio_hook "$legacy_dir/$legacy.json" || continue
     rm -f "$legacy_dir/$legacy.json"
     swept=$((swept + 1))
   done

@@ -637,6 +637,17 @@ JSON
   assert_success
   assert_output --partial "loadout   : kiro-gh"
   assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+
+  # Describing is not the same as asserting. The block must say the pinned loadout
+  # is not here — otherwise `tracker : gh  (unset — fill in <path>)` reads as
+  # "kiro-gh IS configured, the values just aren't filled in", which invites the
+  # reader to go edit a file that does not exist.
+  assert_output --partial "NOT configured here"
+  # And the annotation must NOT appear for a loadout that really is configured.
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "loadout   : claude-gh"
+  refute_output --partial "NOT configured here"
 }
 
 @test "set: an unknown --impl value is refused" {

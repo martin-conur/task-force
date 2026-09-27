@@ -90,10 +90,14 @@ workflow doc, removes that loadout's artifacts, then delegates the install to
 `<new-loadout>/bin/task-init --force`. It never writes an artifact itself.
 `--dry-run` prints the plan and changes nothing; a TTY run confirms first, and
 `--yes` skips the prompt. In an ambiguous repo, `--impl <name>` says which
-loadout to replace — and an `--impl` (or `$AW_IMPL`) naming a loadout that is
-**not** configured in this repo is refused rather than believed: before #227 a
-`set` took the pinned name at face value and installed the target *beside* the
-untouched old loadout, producing the very two-loadout state it exists to prevent.
+loadout to replace. A **`set`** whose `--impl` (or `$AW_IMPL`) names a loadout that
+is **not** configured in this repo is refused rather than believed: before #227 the
+pinned name was taken at face value and the target installed *beside* the untouched
+old loadout, producing the very two-loadout state it exists to prevent. `show` never
+refuses, so it annotates instead —
+`loadout   : kiro-gh  (NOT configured here — pinned via --impl / $AW_IMPL)` — because
+with no doc to read, its `tracker` line would otherwise say `unset — fill in <path>`
+and invite you to edit a file that does not exist.
 
 Removal takes out **only** task-init's own entries. An agent config is deleted
 only once its radio hooks are stripped and what remains still matches the copy

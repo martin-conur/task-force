@@ -269,7 +269,19 @@ Five steps, every time: detect the current loadout, carry the tracker settings o
 
 `--dry-run` prints the plan and changes nothing; otherwise a TTY run confirms first, and `--yes` skips the prompt. In an ambiguous repo, `--impl <name>` says which loadout to replace.
 
-An `--impl` — or an ambient `$AW_IMPL` — naming a loadout that is **not** configured in this repo is refused rather than believed. `aw_all_impls` answers "is this a loadout name" and says nothing about what the repo has, so before #227 the pinned name was taken at face value and every value below it derived from that name instead of from reality: `task-config set tracker notion --impl kiro-gh` on a claude-gh repo removed kiro-gh's nonexistent artifacts and installed kiro-notion *beside* the untouched `.claude/gh-workflow.md` — two loadouts configured, which is the ambiguous state this command exists to prevent.
+An `--impl` — or an ambient `$AW_IMPL` — naming a loadout that is **not** configured in this repo is refused by `set` rather than believed. `aw_all_impls` answers "is this a loadout name" and says nothing about what the repo has, so before #227 the pinned name was taken at face value and every value below it derived from that name instead of from reality: `task-config set tracker notion --impl kiro-gh` on a claude-gh repo removed kiro-gh's nonexistent artifacts and installed kiro-notion *beside* the untouched `.claude/gh-workflow.md` — two loadouts configured, which is the ambiguous state this command exists to prevent.
+
+`show` is the deliberate exception, and does **not** refuse: it is the command you reach for when a repo is confusing, so a refusal would break the one contract that makes it useful. It annotates instead, because describing is not the same as asserting:
+
+```
+$ task-config show --impl kiro-gh    # in a claude-gh repo
+  loadout   : kiro-gh  (NOT configured here — pinned via --impl / $AW_IMPL)
+  assistant : kiro
+  tracker   : gh  (unset — fill in .kiro/steering/gh-workflow.md)
+  config    : .kiro/steering/gh-workflow.md
+```
+
+Without that first-line annotation the `tracker` line reads as "kiro-gh *is* configured, the values just aren't filled in" — an affirmative invitation to go edit a file that does not exist, in the one command whose whole job is telling you what is configured.
 
 **Settings carry across a `set assistant`, and cannot across a `set tracker`.** claude and kiro render the same template shape per tracker, so `owner` / `repo` / `project` move over cleanly on a `gh` repo. Different *trackers* share no fields at all, so there is nothing to carry and `task-init` prompts for the new ones exactly as on a first install. That asymmetry is correct rather than a gap.
 

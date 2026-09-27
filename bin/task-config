@@ -154,7 +154,21 @@ _show_one() {
   settings=$(tf_tracker_extract "$doc" "$tracker" | tr '\n' ' ')
   settings="${settings% }"
 
-  printf '  loadout   : %s\n' "$loadout"
+  # A pinned loadout is the only one that can reach here unconfigured — the
+  # detected matches are, by definition, the ones whose workflow doc exists. Saying
+  # so on the loadout line is what keeps the rest of the block from reading as
+  # fiction: with no doc to extract from, `tracker` falls to its else branch and
+  # prints "unset — fill in <path>", which on its own reads as "this loadout IS
+  # configured, someone just hasn't filled in the values" — an affirmative
+  # invitation to go edit a file that does not exist, in the one command whose whole
+  # job is telling you what is configured (#227). `show` still never refuses and
+  # still mutates nothing; it just stops asserting something untrue.
+  if [[ -f "$doc" ]]; then
+    printf '  loadout   : %s\n' "$loadout"
+  else
+    # shellcheck disable=SC2016  # $AW_IMPL names the env var to the reader; it must not expand
+    printf '  loadout   : %s  (NOT configured here — pinned via --impl / $AW_IMPL)\n' "$loadout"
+  fi
   printf '  assistant : %s\n' "$(la_assistant "$loadout")"
   if [[ -n "$settings" ]]; then
     printf '  tracker   : %s  (%s)\n' "$tracker" "$settings"

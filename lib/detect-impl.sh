@@ -85,10 +85,17 @@ aw_impl_list() { aw_all_impls | tr '\n' ' ' | sed 's/ *$//'; }
 # aw_detect_matches does — takes SIGPIPE on its *next* write and pipefail reports
 # the pipeline as failed even though the match succeeded. It therefore misfires
 # only when there are two or more items and the match is not the last one, i.e.
-# exactly in the ambiguous repo that --impl exists for. (aw_detect_impl below still
-# has that shape against aw_all_impls, where a single printf smaller than the pipe
-# buffer lands before grep can exit — it works, but by accident of buffering, not
-# by construction.)
+# exactly in the ambiguous repo that --impl exists for.
+#
+# All three call sites in this file use this helper, deliberately including
+# aw_detect_impl's, where the producer is aw_all_impls — seven names in one printf,
+# far smaller than the pipe buffer, so `grep -q` can never exit before the write
+# completes and the fragile shape could not actually fire there. It was converted
+# anyway: "works by accident of buffering" is not a property to leave in a file
+# every dispatcher on all seven loadouts sources, and the trigger is not size but
+# someone later making aw_all_impls emit per line, at which point every dispatcher
+# starts rejecting valid impls. One shape everywhere also means nobody has to
+# work out which of three call sites was the safe one.
 _aw_list_has() {
   local needle="$1" line
   while IFS= read -r line; do
@@ -196,7 +203,7 @@ aw_detect_impl() {
     esac
   fi
 
-  if ! aw_all_impls | grep -qFx "$impl"; then
+  if ! _aw_list_has "$impl" "$(aw_all_impls)"; then
     echo "Error: unknown impl '$impl'" >&2
     echo "Valid impls: $(aw_all_impls | paste -sd, - | sed 's/,/, /g')" >&2
     return 1

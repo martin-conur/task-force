@@ -73,7 +73,7 @@ cd ~/agentic-workflow
 ./install.sh all              # install all seven
 ```
 
-The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-board`, `task-config`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
+The installer drops slash commands / agents into your AI tool's config and links `task-work`, `task-done`, `task-init`, `task-board`, `task-config`, `task-remove`, `task-pm`, `radio`, and `ci-guard` into `~/.local/bin`.
 
 ### 3. Set up a project
 
@@ -177,7 +177,7 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
-`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-pm`, `radio`, `ci-guard` and `task-config` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why that command in particular cannot be a dispatcher.)
+`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-pm`, `radio`, `ci-guard`, `task-config` and `task-remove` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why those last two in particular cannot be dispatchers.)
 
 When you run one of them inside a project, the dispatcher detects the impl by looking at which workflow doc is present:
 
@@ -235,7 +235,7 @@ $ task-config show
               .claude/settings.json  (radio hooks + seeded allow-list)
 ```
 
-**`show` never refuses.** The two states every other command treats as fatal are output here, because describing them is the whole point:
+**`show` never refuses — it describes and signals.** The states every other command treats as fatal are output here, because describing them is the whole point:
 
 ```
 $ task-config show                 # a repo with no loadout
@@ -268,6 +268,24 @@ task-config set loadout claude-notion     # swap both at once
 Five steps, every time: detect the current loadout, carry the tracker settings off its workflow doc, remove its artifacts, hand the settings to `<new-loadout>/bin/task-init --force`, report what moved. Step 4 is a delegation, not a reimplementation — `task-init` already knows how to render every template, preserve placeholders and merge hooks idempotently, and a second copy of that here would be a second thing to keep in step.
 
 `--dry-run` prints the plan and changes nothing; otherwise a TTY run confirms first, and `--yes` skips the prompt. In an ambiguous repo, `--impl <name>` says which loadout to replace.
+
+An `--impl` — or an ambient `$AW_IMPL` — naming a loadout that is **not** configured in this repo is refused by `set` rather than believed. `aw_all_impls` answers "is this a loadout name" and says nothing about what the repo has, so before #227 the pinned name was taken at face value and every value below it derived from that name instead of from reality: `task-config set tracker notion --impl kiro-gh` on a claude-gh repo removed kiro-gh's nonexistent artifacts and installed kiro-notion *beside* the untouched `.claude/gh-workflow.md` — two loadouts configured, which is the ambiguous state this command exists to prevent.
+
+`show` is the deliberate exception, and does **not** refuse: it is the command you reach for when a repo is confusing, so a refusal would break the one contract that makes it useful. It annotates and signals instead, because describing is not the same as asserting:
+
+```
+$ task-config show --impl kiro-gh    # in a claude-gh repo
+  loadout   : kiro-gh  (NOT configured here — pinned via --impl / $AW_IMPL)
+  assistant : kiro
+  tracker   : gh  (unset — fill in .kiro/steering/gh-workflow.md)
+  config    : .kiro/steering/gh-workflow.md
+$ echo $?
+1
+```
+
+Without that first-line annotation the `tracker` line reads as "kiro-gh *is* configured, the values just aren't filled in" — an affirmative invitation to go edit a file that does not exist, in the one command whose whole job is telling you what is configured.
+
+The non-zero exit is the **third** instance of the same describe-but-signal rule the no-loadout and ambiguous cases follow, and was the only one of the three exiting 0 — so `task-config show --impl X && do_something` proceeded on a phantom, which is the same success-signal-for-work-that-did-not-happen shape as the `--impl` bug the guard above exists for. The annotation and the exit status are driven by the same doc-existence test, so the line printed and the status returned cannot drift apart.
 
 **Settings carry across a `set assistant`, and cannot across a `set tracker`.** claude and kiro render the same template shape per tracker, so `owner` / `repo` / `project` move over cleanly on a `gh` repo. Different *trackers* share no fields at all, so there is nothing to carry and `task-init` prompts for the new ones exactly as on a first install. That asymmetry is correct rather than a gap.
 
@@ -302,7 +320,47 @@ The role files get the most care because they are the likeliest place a switch c
 
 One accepted imprecision: the seeded allow-list is matched as a literal set, so a permission you independently wanted *and* task-init also seeds (`Read`, `Bash(ls *)`) goes away with a switch. `--dry-run` is the mitigation. A provenance manifest was weighed and rejected — `task-config` only ever removes one *named* loadout's artifacts, never "everything task-init ever did to this repo", so the set is derivable from the loadout name alone.
 
-The removal engine lives in `lib/loadout-artifacts.sh` rather than inside `task-config`, because `task-remove` (#220) is its second consumer.
+The removal engine lives in `lib/loadout-artifacts.sh` rather than inside `task-config`, because [`task-remove`](#task-remove--take-task-force-back-out-of-a-repo) is its second consumer.
+
+---
+
+## `task-remove` — take task-force back out of a repo
+
+`task-remove` is that second consumer: the same removal walk with no install after it. Canonical rather than dispatching, for `task-config`'s reasons.
+
+```bash
+task-remove --dry-run              # the plan, changing nothing
+task-remove                        # TTY: previews, then asks
+task-remove --yes                  # no prompt
+task-remove --purge --dry-run      # what the override would additionally take
+task-remove --impl kiro-gh --yes   # in an ambiguous repo, just that one
+```
+
+Two situations want it. **The project is done** and the workflow config is dead weight. Or — the one that actually stings — **a PR against a repo that doesn't use task-force**: you `task-init`'d someone else's repo to work in it, and the diff would otherwise carry `.claude/commands/`, a `settings.json` hook merge, a `CLAUDE.md` import line and a workflow doc the upstream maintainer never asked for. The old workaround for that (commit `task-init`'s output as one commit, `git revert` it before opening the PR) is cheap and exact, and still works; it degrades once anything else has touched `.claude/settings.json` since that commit, or when the init was never isolated into a commit in the first place.
+
+It removes exactly what [a switch removes](#what-a-switch-removes-and-what-it-leaves-alone) — same table, same keep-bias, same `<doc>.bak` — plus one artifact a switch has no business touching: the **`commit-msg` ci-guard hook** `task-work` installs (#194). Where the chain-install preserved a pre-existing hook as `commit-msg.local`, that name is put back. Only a hook carrying task-force's own marker is removed, so a `commit-msg` of yours — or husky's, via `core.hooksPath` — is named and left alone. Git shares one hooks directory across every worktree of a repo, so this is a repo-wide removal made from whichever worktree you are standing in, and the run says so.
+
+With no `--impl`, **every** loadout detected in the repo is removed. "Take task-force out" means all of it, and leaving one behind is the multi-match state every dispatcher refuses on. An `--impl` / `$AW_IMPL` naming a loadout that is not configured here is refused: it would otherwise walk a loadout that isn't there, remove nothing, and still print `task-force removed from <root>` — and for the strip-before-a-PR case that success line is the only thing you would check before shipping every artifact you meant to take out (#227).
+
+### What `task-remove` deliberately does not touch
+
+| | Why |
+|---|---|
+| `~/.local/bin/task-*` symlinks, the shell-rc `PATH` line | That is the **global** install, shared by every repo on this machine. Removing it because one project ended would break every other project. A `--global` flag is a separate ask; until then, `rm` the symlinks and the rc line by hand |
+| live worktrees, `~/.task-force` radio state | `task-done --remove-worktree` already owns worktree teardown and mailbox sweeping |
+| your `CLAUDE.md`, `settings.json`, `.gitignore` and `tasks/` backlog | Only task-init's own entries come out of them; a file is deleted only when nothing else was in it. `--purge` does not change this — see below |
+
+The run prints that boundary every time, because "it didn't happen" is not something you can see in the output otherwise.
+
+### `--purge`
+
+By default a role file that no longer matches the copy your loadout ships is **kept and reported**, because `task-init`'s `keep` policy means it may be your work. That bias is right, and it is also imprecise in one direction worth naming: it fires on a merely **stale install** too. A repo set up from an older checkout has role files that no longer byte-match what the current checkout ships, so they are kept even though you never touched them. For a `task-config set` that is cosmetic residue. For `task-remove` it is a file in the diff your reviewer reads.
+
+`--purge` deletes what the default would keep: a role file that differs from the shipped copy, the `<doc>.bak` (the one this run would have written, and any an earlier run left), and the `tasks/` backlog — "the project is done" being a real reason to want that gone.
+
+What it does **not** do is widen removal to files that are only partly ours. `CLAUDE.md` still loses only the import line, and a `settings.json` with your own hooks still keeps them. The override changes what counts as *task-force's*, not what counts as *yours*.
+
+Run it without `--purge` first and read the list. That ordering is the whole safety argument — the default names every file it keeps, and the run points at `--purge` only when there is something it would actually take, so you act on a list you have seen rather than on the tool's guess. `--purge --dry-run` shows it before it happens.
 
 ---
 
@@ -1019,6 +1077,7 @@ writing to the live mailbox.
 | `task_board.bats`                 | Shared `task-board` script — frontmatter parsing, sidecar overlay, `_board.md` regen |
 | `task_board_dispatcher.bats`      | Root `bin/task-board` — local-loadout dispatch, `--repo`-driven detection, refusal on gh/jira/notion |
 | `task_config.bats`                | `bin/task-config` — `show` on all seven loadouts + the zero/ambiguous states, `set` round trips, user-content survival, `--dry-run` inertness |
+| `task_remove.bats`                | `bin/task-remove` — zero artifacts left on all seven loadouts (asserted against `la_owned_paths`), user-content survival, `--purge`, the ci-guard hook and its `commit-msg.local` restore, the global install left alone, `--dry-run` inertness |
 | `task_done.bats`                  | `task-done` across combos — cleanup, PR, guards |
 | `radio_home_isolation.bats`       | The suite's own radio-home isolation — nothing lands under `$HOME/.task-force` |
 

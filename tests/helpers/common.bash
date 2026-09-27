@@ -57,6 +57,7 @@ KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.
 # kiro-gh task-reviewer is still a per-loadout file (kiro parity is #146).
 RADIO="$REPO_ROOT_REAL/bin/radio"
 TASK_CONFIG="$REPO_ROOT_REAL/bin/task-config"
+TASK_REMOVE="$REPO_ROOT_REAL/bin/task-remove"
 # Captured Claude Code SessionEnd hook payloads (#187). Tests feed these to
 # `radio unregister` on stdin instead of hand-building JSON — see
 # tests/fixtures/hook-payloads/README.md for provenance and counts.

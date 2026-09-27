@@ -596,6 +596,67 @@ JSON
   assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
 }
 
+@test "set: --impl naming a loadout not configured here is refused, not believed (#227)" {
+  # The same validation gap as task-remove's, and worse in consequence. Before the
+  # guard: aw_all_impls accepted the name, case 1) fell through with no check,
+  # current=kiro-gh, and cur_assistant / cur_tracker were derived from the pinned
+  # *name* rather than from reality — so this removed kiro-gh's (nonexistent)
+  # artifacts and installed kiro-notion beside the untouched claude-gh doc. Two
+  # loadouts configured: the ambiguous state this command exists to prevent, and
+  # the one every dispatcher refuses on.
+  _init claude-gh --owner acme --repo widgets --project 7
+  run "$TASK_CONFIG" set tracker notion --impl kiro-gh --yes
+  assert_failure
+  assert_output --partial "not configured in"
+  assert_output --partial "configured here: claude-gh"
+  # Nothing installed beside the existing loadout, nothing taken out of it.
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+  assert [ ! -e "$MAIN_REPO/.kiro" ]
+  # And the repo is still unambiguous, which is the property at stake.
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "loadout   : claude-gh"
+}
+
+@test "set: AW_IMPL naming a loadout not configured here is refused too (#227)" {
+  _init claude-gh --owner acme --repo widgets --project 7
+  AW_IMPL=kiro-gh run "$TASK_CONFIG" set tracker notion --yes
+  assert_failure
+  assert_output --partial "not configured in"
+  assert [ ! -e "$MAIN_REPO/.kiro" ]
+}
+
+@test "show: a pin that is not configured is described and signalled, never refused (#227)" {
+  # The `aw_require_configured` guard is deliberately on the paths that *act*, not
+  # on `show`: `show` is the command you reach for when a repo is confusing, so a
+  # refusal to print would break the one thing that makes it useful. What it owes
+  # instead is describe-but-signal, the rule its other two non-clean states already
+  # follow — print the state, exit non-zero so a script can branch. This case was
+  # the only one of the three exiting 0, which made
+  # `task-config show --impl X && do_something` proceed on a phantom.
+  _init claude-gh --owner acme --repo widgets --project 7
+  run "$TASK_CONFIG" --impl kiro-gh show
+  assert_failure
+  # Still printed in full — the non-zero status is a signal, not a refusal.
+  assert_output --partial "loadout   : kiro-gh"
+  assert_output --partial "assistant : kiro"
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+
+  # And describing is not the same as asserting. The block must say the pinned
+  # loadout is not here — otherwise `tracker : gh  (unset — fill in <path>)` reads
+  # as "kiro-gh IS configured, the values just aren't filled in", which invites the
+  # reader to go edit a file that does not exist.
+  assert_output --partial "NOT configured here"
+
+  # A configured loadout keeps exiting 0 and carries no annotation. Both halves
+  # matter: the status and the printed line are driven by the same doc-existence
+  # test, so this is what stops either drifting from the other.
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "loadout   : claude-gh"
+  refute_output --partial "NOT configured here"
+}
+
 @test "set: an unknown --impl value is refused" {
   run "$TASK_CONFIG" --impl claude-trello show
   assert_failure

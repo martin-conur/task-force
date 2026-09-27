@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-remove — take task-force's per-repo artifacts back out of a repo (#220).
+#
+# A *canonical* script for the same reason bin/task-config is one: it acts across
+# loadouts rather than within one, it has to keep working when detection is
+# ambiguous, and it writes no artifact of its own. The whole engine is
+# lib/loadout-artifacts.sh, which #219 factored out precisely so this could be a
+# thin wrapper over it rather than a second implementation of the same walk.
+#
+# Two situations want it. The project is done and the workflow config is dead
+# weight; or — the one that actually stings — you task-init'd a repo that does
+# not use task-force so you could work in it, and the PR diff would otherwise
+# carry .claude/commands/, a settings.json hook merge, a CLAUDE.md import line
+# and a workflow doc the upstream maintainer never asked for. The old workaround
+# (commit task-init's output first, `git revert` it before the PR) still works and
+# is still exact; it degrades once anything else has touched .claude/settings.json
+# since that commit, or when the init was never isolated into a commit at all.
+#
+# Scope is per-repo, and the boundary is load-bearing: the ~/.local/bin symlinks
+# and the shell-rc PATH line are the *global* install, shared by every repo on the
+# machine, so removing them because one project ended would break every other
+# project. A --global flag is a separate ask. Live worktrees and ~/.task-force
+# radio state are likewise out — `task-done --remove-worktree` already owns
+# worktree teardown and mailbox sweeping.
+
+usage() {
+  cat <<'EOF'
+Usage: task-remove [--dry-run] [--yes] [--purge] [--impl <loadout>]
+
+Strip the artifacts task-init wrote into *this* repo: the workflow doc (the
+detection key), the role commands / agent configs, the tasks/ scaffolding on the
+*-local loadouts, the @.claude/<t>-workflow.md import line in CLAUDE.md, the
+radio hooks and seeded allow-list inside .claude/settings.json, the
+.git/task-force/ entry in .gitignore, and the commit-msg ci-guard hook task-work
+installs (restoring a pre-existing hook the chain-install preserved).
+
+Removal is the inverse of task-init's idempotent merge: only task-init's own
+entries come out, and a file is deleted only when nothing else was in it. So a
+CLAUDE.md that predates task-force keeps everything but the import line, a
+settings.json carrying your own hooks keeps them, and your tasks/ backlog stays.
+A role file that no longer matches the copy your loadout ships is kept and
+reported rather than deleted, because task-init's keep policy means it may be
+your work — see --purge.
+
+NOT removed, by design:
+  ~/.local/bin/task-* symlinks and the shell-rc PATH line — that is the global
+    install, shared by every repo on this machine (a --global flag is a separate
+    ask; until then: rm the symlinks and the rc line by hand)
+  live worktrees and ~/.task-force radio state — `task-done --remove-worktree`
+    owns both
+
+Options
+  --dry-run   Print the plan and change nothing. Kept files are listed as
+              distinctly as removed ones, so the plan is the whole picture.
+  --purge     Also delete what the default would keep and report: a role file
+              that differs from the shipped copy, the <doc>.bak, and the tasks/
+              backlog. For the PR-against-someone-else's-repo case, where a
+              leftover file is not a courtesy but a line in the diff a
+              maintainer reads. Run it without --purge first and look at the
+              list: that is where the safety comes from.
+  --yes, -y   Skip the confirmation prompt (implied when stdin is not a TTY).
+  --impl N    Remove only loadout N. Without it, every loadout detected in the
+              repo is removed — "take task-force out" means all of it, and a
+              half-removed repo is the multi-match state every dispatcher
+              refuses on.
+  -h, --help  This.
+
+Examples
+  task-remove --dry-run
+  task-remove --purge --dry-run     # what the override would additionally take
+  task-remove --yes
+EOF
+  exit 0
+}
+
+# Resolve own path through symlinks -> AW_ROOT (the task-force checkout).
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+. "$AW_ROOT/lib/detect-impl.sh"
+# shellcheck source=lib/loadout-artifacts.sh
+. "$AW_ROOT/lib/loadout-artifacts.sh"
+
+DRY_RUN=false
+ASSUME_YES=false
+PURGE=false
+PINNED_IMPL=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)  usage ;;
+    --dry-run)  DRY_RUN=true; shift ;;
+    --yes|-y)   ASSUME_YES=true; shift ;;
+    --purge)    PURGE=true; shift ;;
+    --impl)     [[ $# -ge 2 ]] || { echo "Error: --impl requires a value" >&2; exit 1; }
+                PINNED_IMPL="$2"; shift 2 ;;
+    --impl=*)   PINNED_IMPL="${1#--impl=}"; shift ;;
+    -*)         echo "Error: unknown option: $1" >&2; exit 1 ;;
+    *)          echo "Error: task-remove takes no positional arguments (got '$1')" >&2; exit 1 ;;
+  esac
+done
+
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; exit 1; }
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# The engine reads the override off the environment rather than a parameter, so
+# that plan and apply stay one code path (see lib/loadout-artifacts.sh).
+# shellcheck disable=SC2034  # read by the sourced engine, not by this file
+if [[ "$PURGE" == true ]]; then LA_PURGE=1; else LA_PURGE=0; fi
+
+# Every loadout configured here, honouring --impl / $AW_IMPL as a pin. Zero is
+# fatal and many is *fine*: removing all of them is what "take task-force out of
+# this repo" means, and leaving one behind is the multi-match state every
+# dispatcher refuses on.
+#
+# The collector and the pin guard are shared with bin/task-config through
+# lib/detect-impl.sh (#227). They were a byte-for-byte copy in each script with no
+# drift sentinel, which is how one copy could be fixed and the other not.
+PIN="${PINNED_IMPL:-${AW_IMPL:-}}"
+aw_collect_matches "$REPO_ROOT" "$PIN" || exit 1
+# A pin naming a real loadout that is not configured *here* has to be refused
+# before anything else: it is the one input that makes this command report
+# "task-force removed from <root>" having removed nothing, which for the
+# strip-before-a-PR use case means shipping every artifact you meant to take out.
+aw_require_configured "$REPO_ROOT" "$PIN" || exit 1
+MATCHES=(${AW_MATCHES[@]+"${AW_MATCHES[@]}"})
+
+if ((${#MATCHES[@]} == 0)); then
+  {
+    echo "Error: no loadout configured in $REPO_ROOT — there is nothing to remove."
+    echo "       task-config show describes what is (and is not) set up here."
+  } >&2
+  # The one artifact that outlives a workflow doc deleted by hand, and the only
+  # thing still acting on commits in a repo that looks clean. Naming its path is
+  # cheaper than a flag to remove it on its own.
+  if hooks_dir=$(aw_ci_guard_hooks_dir "$REPO_ROOT" 2>/dev/null) \
+    && [[ -e "$hooks_dir/commit-msg" ]] \
+    && grep -qF "$AW_CI_GUARD_HOOK_MARKER" "$hooks_dir/commit-msg" 2>/dev/null; then
+    {
+      echo "       The ci-guard commit-msg hook is still installed at:"
+      echo "         $hooks_dir/commit-msg"
+      echo "       Remove it by hand (and restore commit-msg.local if one is beside it)."
+    } >&2
+  fi
+  exit 1
+fi
+
+printf 'task-remove: %s in %s\n' "$(printf '%s ' "${MATCHES[@]}" | sed 's/ *$//')" "$REPO_ROOT"
+if [[ "$PURGE" == true ]]; then
+  printf '  --purge: files the default would keep and report are deleted instead.\n'
+fi
+
+# Walk once in the requested mode. Called with `plan` for a --dry-run and for the
+# preview a confirmation prompt needs; with `apply` for the real thing. Both go
+# through la_plan / la_remove, which share one body so the preview cannot promise
+# something the run does not do.
+_walk() {
+  local mode="$1" m out
+  for m in "${MATCHES[@]}"; do
+    printf '\nremoving %s:\n' "$m"
+    if [[ "$mode" == plan ]]; then out=$(la_plan "$REPO_ROOT" "$m"); else out=$(la_remove "$REPO_ROOT" "$m"); fi
+    printf '%s\n' "$out"
+    WALK_TEXT+="$out"$'\n'
+  done
+  # The commit-msg guard is task-work's, not task-init's, so it is removed once
+  # for the repo rather than per loadout.
+  if [[ "$mode" == plan ]]; then out=$(la_ci_guard_plan "$REPO_ROOT"); else out=$(la_ci_guard_remove "$REPO_ROOT"); fi
+  if [[ -n "$out" ]]; then
+    printf '\nthe ci-guard commit-msg hook (shared by every worktree of this repo):\n'
+    printf '%s\n' "$out"
+    WALK_TEXT+="$out"$'\n'
+  fi
+}
+
+_footer_untouched() {
+  cat <<'EOF'
+
+Untouched, by design: the ~/.local/bin/task-* symlinks and the shell-rc PATH
+line (the global install, shared by every repo on this machine), live worktrees,
+and ~/.task-force radio state.
+EOF
+}
+
+# Point at --purge only when there is actually something it would take, and only
+# after the list has been printed. That ordering is the whole safety argument:
+# the user acts on a list they have seen rather than on the tool's guess.
+_purge_hint() {
+  [[ "$PURGE" == true ]] && return 0
+  # Matched against the three things --purge actually flips, rather than any
+  # "kept" line: the commit-msg hook is also reported as kept when it is not
+  # ours, and --purge would not touch that one either, so offering the flag for
+  # it would be a promise the run cannot keep.
+  case "$WALK_TEXT" in
+    *"may be yours"*|*"kept a copy at"*|*"backlog file(s)"*) ;;
+    *) return 0 ;;
+  esac
+  printf '\nSome of the above was kept because it may be yours. If you have read the\n'
+  printf 'list and want it gone too, re-run with --purge.\n'
+}
+
+WALK_TEXT=""
+
+# Preview when it is a preview: a --dry-run, or the moment before a confirmation
+# prompt. On a confirmed or --yes run the walk narrates the same steps in the past
+# tense as it performs them, and printing both would just be the same list twice.
+preview=false
+if [[ "$DRY_RUN" == true ]]; then preview=true
+elif [[ "$ASSUME_YES" != true && -t 0 ]]; then preview=true
+fi
+
+if [[ "$preview" == true ]]; then
+  _walk plan
+  _footer_untouched
+  _purge_hint
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+  printf '\n--dry-run: nothing was changed.\n'
+  exit 0
+fi
+
+if [[ "$ASSUME_YES" != true && -t 0 ]]; then
+  reply=""
+  # EOF on the prompt (the terminal going away mid-question) has to read as "no",
+  # not as an unexplained non-zero exit from `read` under set -e.
+  if ! read -rp $'\nRemove these? [y/N] ' reply; then reply=""; fi
+  case "$reply" in
+    y|Y|yes|YES) ;;
+    *) echo "Aborted; nothing was changed."; exit 1 ;;
+  esac
+fi
+
+WALK_TEXT=""
+_walk apply
+if [[ "$preview" != true ]]; then
+  _footer_untouched
+  _purge_hint
+fi
+
+printf '\ntask-force removed from %s.\n' "$REPO_ROOT"
+printf 'Verify with: task-config show   (it should report "loadout   : none")\n'

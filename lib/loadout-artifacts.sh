@@ -36,6 +36,20 @@
 # Every function is safe to call for a loadout that was never installed here:
 # enumeration reports only what is actually on disk.
 #
+# The keep-bias has one documented escape hatch, added for #220. Setting
+# LA_PURGE=1 makes the walk delete what it would otherwise keep and report: a
+# role file that no longer matches the shipped copy, the <doc>.bak (both the one
+# this run would have written and any left by an earlier one), and the tasks/
+# backlog. It exists because `task-remove`'s second use case — stripping
+# task-force out of a repo that does not use it, before opening a PR — turns
+# "kept, and reported" from a courtesy into a file the upstream maintainer reads
+# in the diff. It is deliberately not the default, and `task-remove` only offers
+# it *after* printing the list, so the safety comes from the user having seen
+# what goes rather than from the tool guessing. It also fires on a merely stale
+# install (a repo set up from an older checkout has role files that no longer
+# byte-match), which is the case the keep-bias cannot distinguish from a real
+# customization and this flag lets the user resolve.
+#
 # Exports:
 #   la_assistant <loadout>            -> claude | kiro
 #   la_tracker <loadout>              -> gh | jira | notion | local
@@ -46,6 +60,12 @@
 #   la_seeded_allow <loadout>         -> the permission literals task-init seeds
 #   la_plan <root> <loadout>          -> what removal would do; touches nothing
 #   la_remove <root> <loadout>        -> does it, printing the same lines
+#   la_ci_guard_plan <root>           -> what the commit-msg guard's removal would do
+#   la_ci_guard_remove <root>         -> does it (#194's hook, task-work-installed,
+#                                        so it is task-remove's business and not a
+#                                        loadout switch's)
+#
+# Honours: LA_PURGE=1 (see above)
 
 _LA_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The task-force checkout, one level up from lib/. Removal needs it to compare an
@@ -58,6 +78,13 @@ LA_AW_ROOT="$(dirname "$_LA_LIB_DIR")"
 # "everything below the end marker is yours" promise (#183) survives a switch.
 # shellcheck source=lib/managed-region.sh
 . "$_LA_LIB_DIR/managed-region.sh"
+# For AW_CI_GUARD_HOOK_MARKER / aw_ci_guard_hooks_dir — removal of the commit-msg
+# guard has to look where git will actually look (core.hooksPath, and the shared
+# common dir every worktree of a repo points at), which is the same question the
+# installer answers. Sourcing the installer's own lib rather than restating it
+# keeps the two from disagreeing about which file is even in play.
+# shellcheck source=lib/ci-guard.sh
+. "$_LA_LIB_DIR/ci-guard.sh"
 
 # The role files task-init installs. Enumerated by name rather than globbed:
 # `.claude/commands/` and `.kiro/agents/` are shared directories, and a command
@@ -80,6 +107,13 @@ LA_LOCAL_SCAFFOLD=(README.md _board.md)
 # removal has emptied it — a .claude/ still holding the user's settings, or a
 # second loadout's workflow doc, stays.
 LA_DIRS=(.claude/commands .kiro/agents .kiro/hooks .kiro/steering tasks .claude .kiro)
+
+# True when the caller has asked for the keep-bias to be overridden. Read as a
+# variable rather than threaded through every signature because it is orthogonal
+# to the plan/apply mode: `_la_walk` must stay *one* body for both modes so a
+# --dry-run cannot diverge from the real run, and a purge has to be previewable
+# by the same rule.
+_la_purging() { [[ "${LA_PURGE:-0}" == 1 ]]; }
 
 la_assistant() { printf '%s' "${1%%-*}"; }
 la_tracker()   { printf '%s' "${1##*-}"; }
@@ -349,19 +383,29 @@ _la_workflow_doc_tail() {
   printf '%s' "${tail//[[:space:]]/}"
 }
 
-# How many files in tasks/ are backlog rather than task-init scaffolding.
-_la_backlog_count() {
-  local root="$1" base scaffold keep n=0
-  if [[ ! -d "$root/tasks" ]]; then printf '0'; return 0; fi
+# Everything in tasks/ that is backlog rather than task-init scaffolding, one
+# repo-relative path per line. The count and the purge sweep read the same list,
+# so "kept tasks/ — 3 backlog file(s)" and what --purge would delete cannot
+# disagree about which files those are.
+_la_backlog_paths() {
+  local root="$1" base scaffold keep
+  [[ -d "$root/tasks" ]] || return 0
   while IFS= read -r base; do
     [[ -n "$base" ]] || continue
     keep=0
     for scaffold in "${LA_LOCAL_SCAFFOLD[@]}"; do
       if [[ "$base" == "$scaffold" ]]; then keep=1; fi
     done
-    if (( ! keep )); then n=$((n + 1)); fi
+    if (( ! keep )); then printf 'tasks/%s\n' "$base"; fi
   done < <(ls -A "$root/tasks" 2>/dev/null || true)
-  printf '%s' "$n"
+  return 0
+}
+
+# How many files in tasks/ are backlog rather than task-init scaffolding.
+_la_backlog_count() {
+  local n
+  n=$(_la_backlog_paths "$1" | grep -c . || true)
+  printf '%s' "${n:-0}"
 }
 
 # _la_dir_empty_after <root> <dir> <removed-newline-list> <created-newline-list>
@@ -413,17 +457,35 @@ _la_walk() {
   if [[ -f "$doc" ]]; then
     doc_rel="${doc#"$root"/}"
     doc_tail=$(_la_workflow_doc_tail "$doc")
-    if [[ -n "$doc_tail" ]]; then
+    if [[ -n "$doc_tail" ]] && ! _la_purging; then
       backup=$(_managed_backup_path "$doc")
       if [[ "$mode" == apply ]]; then cp "$doc" "$backup"; fi
       created+="${backup#"$root"/}"$'\n'
       printf '  %s %s → kept a copy at %s (it has sections of yours below the managed-region marker)\n' \
         "$verb" "$doc_rel" "${backup#"$root"/}"
+    elif [[ -n "$doc_tail" ]]; then
+      printf '  %s %s, sections of yours below the managed-region marker included (--purge)\n' \
+        "$verb" "$doc_rel"
     else
       printf '  %s %s\n' "$verb" "$doc_rel"
     fi
     if [[ "$mode" == apply ]]; then rm -f "$doc"; fi
     removed+="$doc_rel"$'\n'
+  fi
+
+  # A .bak beside the doc is the one thing a *previous* removal deliberately left
+  # behind, so a purge has to be able to reach it — otherwise the flag whose whole
+  # point is "leave nothing in the diff" leaves the one file the last run created.
+  # Swept whether or not the doc itself is still here, because the usual way to
+  # meet a stray .bak is a second run after the first one wrote it.
+  if _la_purging && [[ -n "$doc" ]]; then
+    local bak
+    for bak in "$doc".bak*; do
+      [[ -e "$bak" ]] || continue
+      if [[ "$mode" == apply ]]; then rm -f "$bak"; fi
+      removed+="${bak#"$root"/}"$'\n'
+      printf '  %s %s (--purge)\n' "$verb" "${bak#"$root"/}"
+    done
   fi
 
   # 2. The role files — deleted only where they can be proven task-init's own.
@@ -436,7 +498,14 @@ _la_walk() {
         removed+="$rel"$'\n'
         printf '  %s %s\n' "$verb" "$rel" ;;
       keep)
-        if [[ "$assistant" == kiro ]]; then
+        if _la_purging; then
+          # The user has seen this file named in the plan and asked for it anyway.
+          # Said with the reason attached, because this is the one line in the run
+          # that might be destroying work rather than reclaiming scaffolding.
+          if [[ "$mode" == apply ]]; then rm -f "$root/$rel"; fi
+          removed+="$rel"$'\n'
+          printf '  %s %s — it differs from the copy %s ships (--purge)\n' "$verb" "$rel" "$loadout"
+        elif [[ "$assistant" == kiro ]]; then
           _la_strip_agent_radio_hooks "$root" "$rel" "$mode"
         else
           if [[ "$mode" == plan ]]; then
@@ -459,7 +528,20 @@ _la_walk() {
   if [[ "$tracker" == local ]]; then
     local backlog
     backlog=$(_la_backlog_count "$root")
-    if (( backlog > 0 )); then
+    if (( backlog > 0 )) && _la_purging; then
+      # "The project is done" is a real reason to want the backlog gone (#220),
+      # and it is the only reason this is reachable: a loadout *switch* never
+      # sets LA_PURGE, so a task-config run cannot arrive here.
+      while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        # -rf because a backlog entry can be a directory. The :? guards satisfy
+        # SC2115 and are worth keeping on the one recursive delete in this file:
+        # an empty pair here would expand to `rm -rf /`.
+        if [[ "$mode" == apply ]]; then rm -rf "${root:?}/${rel:?}"; fi
+        removed+="$rel"$'\n'
+        printf '  %s %s (--purge — backlog, not scaffolding)\n' "$verb" "$rel"
+      done < <(_la_backlog_paths "$root")
+    elif (( backlog > 0 )); then
       # The backlog is the user's content, exactly as their own CLAUDE.md
       # sections are. Scaffolding goes; task files stay, and say so.
       printf '  kept tasks/ — %s backlog file(s), yours rather than task-init'\''s\n' "$backlog"
@@ -600,4 +682,57 @@ _la_strip_settings() {
     printf '  stripped the radio hooks + seeded allow-list from %s (your own entries stay)\n' "$rel"
   fi
   return 1
+}
+
+# la_ci_guard_plan <root> / la_ci_guard_remove <root>
+#
+# Take out the `commit-msg` hook task-work installs (#194), restoring whatever
+# hook was there before task-force arrived — the chain-install preserves it as
+# `commit-msg.local`, so putting that name back is the exact inverse.
+#
+# Deliberately outside _la_walk, and unreachable from a loadout switch: the guard
+# is installed by task-work rather than by task-init, is not per-loadout, and a
+# repo moving from claude to kiro still wants it. Only `task-remove` asks (#220).
+#
+# Two things this has to respect. The hook is only removed when it carries
+# task-force's own marker, so a `commit-msg` of the user's own — or husky's, via
+# core.hooksPath — is named and left alone. And because git shares one hooks
+# directory across every worktree of a repo, this is a repo-wide removal made
+# from whichever worktree you happen to be standing in; `task-remove` says so.
+la_ci_guard_plan()   { _la_ci_guard_hook "$1" plan; }
+la_ci_guard_remove() { _la_ci_guard_hook "$1" apply; }
+
+_la_ci_guard_hook() {
+  local root="$1" mode="$2" hooks_dir hook prev verb rel prev_rel
+  if [[ "$mode" == plan ]]; then verb="would remove"; else verb="removed"; fi
+
+  hooks_dir=$(aw_ci_guard_hooks_dir "$root") || return 0
+  hook="$hooks_dir/commit-msg"
+  prev="$hooks_dir/commit-msg.local"
+  [[ -e "$hook" ]] || return 0
+  rel="${hook#"$root"/}"
+  prev_rel="${prev#"$root"/}"
+
+  if ! grep -qF "$AW_CI_GUARD_HOOK_MARKER" "$hook" 2>/dev/null; then
+    if [[ "$mode" == plan ]]; then
+      printf '  would keep %s — no task-force marker in it, so it is not ours\n' "$rel"
+    else
+      printf '  kept %s — no task-force marker in it, so it is not ours\n' "$rel"
+    fi
+    return 0
+  fi
+
+  if [[ -e "$prev" ]]; then
+    if [[ "$mode" == apply ]]; then mv "$prev" "$hook"; fi
+    if [[ "$mode" == plan ]]; then
+      printf '  would restore %s → %s (the hook that was here before task-force)\n' "$prev_rel" "$rel"
+    else
+      printf '  restored %s → %s (the hook that was here before task-force)\n' "$prev_rel" "$rel"
+    fi
+    return 0
+  fi
+
+  if [[ "$mode" == apply ]]; then rm -f "$hook"; fi
+  printf '  %s %s (the ci-guard commit-msg hook)\n' "$verb" "$rel"
+  return 0
 }

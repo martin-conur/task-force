@@ -510,6 +510,33 @@ JSON
   assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
 }
 
+@test "--impl with valid but uninstalled loadout is refused rather than silently doing nothing" {
+  # The reviewer's test for the #227 blocker, verbatim. Before the guard,
+  # aw_all_impls accepted the *name*, MATCHES became 1 so the zero-match branch
+  # was skipped, the walk found nothing to remove, and the run still printed
+  # "task-force removed from <root>". For #220's strip-before-a-PR case that
+  # success line is the only thing a user checks, so they ship every artifact they
+  # meant to take out — the #194 / #182 failure class: correct-looking output for
+  # work that never happened.
+  _init claude-gh --owner acme --repo widgets --project 7
+  run "$TASK_REMOVE" --impl kiro-gh
+  assert_failure
+  assert_output --partial "not configured in"
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+}
+
+@test "AW_IMPL naming an uninstalled loadout is refused the same way as --impl" {
+  # The pin is "${PINNED_IMPL:-${AW_IMPL:-}}", so the env var reaches the same
+  # guard — and ambient env makes this worse than an explicit flag, not better:
+  # nothing on the command line hints at why the run is about to lie.
+  _init claude-gh --owner acme --repo widgets --project 7
+  AW_IMPL=kiro-gh run "$TASK_REMOVE" --yes
+  assert_failure
+  assert_output --partial "not configured in"
+  assert_output --partial "configured here: claude-gh"
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+}
+
 @test "an unknown --impl value is refused with the list of real loadouts" {
   _init claude-gh --owner acme --repo widgets --project 7
   run "$TASK_REMOVE" --impl claude-trello --yes

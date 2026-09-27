@@ -596,6 +596,49 @@ JSON
   assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
 }
 
+@test "set: --impl naming a loadout not configured here is refused, not believed (#227)" {
+  # The same validation gap as task-remove's, and worse in consequence. Before the
+  # guard: aw_all_impls accepted the name, case 1) fell through with no check,
+  # current=kiro-gh, and cur_assistant / cur_tracker were derived from the pinned
+  # *name* rather than from reality — so this removed kiro-gh's (nonexistent)
+  # artifacts and installed kiro-notion beside the untouched claude-gh doc. Two
+  # loadouts configured: the ambiguous state this command exists to prevent, and
+  # the one every dispatcher refuses on.
+  _init claude-gh --owner acme --repo widgets --project 7
+  run "$TASK_CONFIG" set tracker notion --impl kiro-gh --yes
+  assert_failure
+  assert_output --partial "not configured in"
+  assert_output --partial "configured here: claude-gh"
+  # Nothing installed beside the existing loadout, nothing taken out of it.
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+  assert [ ! -e "$MAIN_REPO/.kiro" ]
+  # And the repo is still unambiguous, which is the property at stake.
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "loadout   : claude-gh"
+}
+
+@test "set: AW_IMPL naming a loadout not configured here is refused too (#227)" {
+  _init claude-gh --owner acme --repo widgets --project 7
+  AW_IMPL=kiro-gh run "$TASK_CONFIG" set tracker notion --yes
+  assert_failure
+  assert_output --partial "not configured in"
+  assert [ ! -e "$MAIN_REPO/.kiro" ]
+}
+
+@test "show: a pin that is not configured still describes rather than refusing (#227)" {
+  # The guard is deliberately on the paths that *act*, not on `show`. `show`'s
+  # contract is that it never refuses — zero loadouts and two are both described —
+  # and it mutates nothing, so a pin it cannot corroborate costs a reader one
+  # comparison against un-pinned `show` rather than a broken repo. Pinned here so
+  # that asymmetry reads as a decision rather than as the guard being forgotten.
+  _init claude-gh --owner acme --repo widgets --project 7
+  run "$TASK_CONFIG" --impl kiro-gh show
+  assert_success
+  assert_output --partial "loadout   : kiro-gh"
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+}
+
 @test "set: an unknown --impl value is refused" {
   run "$TASK_CONFIG" --impl claude-trello show
   assert_failure

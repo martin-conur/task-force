@@ -127,7 +127,10 @@ workflow doc, removes that loadout's artifacts, then delegates the install to
 `<new-loadout>/bin/task-init --force`. It never writes an artifact itself.
 `--dry-run` prints the plan and changes nothing; a TTY run confirms first, and
 `--yes` skips the prompt. In an ambiguous repo, `--impl <name>` says which
-loadout to replace.
+loadout to replace — and an `--impl` (or `$AW_IMPL`) naming a loadout that is
+**not** configured in this repo is refused rather than believed: before #227 a
+`set` took the pinned name at face value and installed the target *beside* the
+untouched old loadout, producing the very two-loadout state it exists to prevent.
 
 Removal takes out **only** task-init's own entries. Your own `CLAUDE.md` sections
 survive with just the `@.claude/local-workflow.md` import line gone; your own hooks
@@ -167,7 +170,9 @@ switch has no business touching: the `commit-msg` ci-guard hook `task-work` inst
 restoring a pre-existing hook the chain-install preserved as `commit-msg.local`. Only
 a hook carrying task-force's own marker is removed. With no `--impl` it removes
 **every** loadout detected in the repo, because leaving one behind is the multi-match
-state every dispatcher refuses on. It does **not** touch the `~/.local/bin` symlinks
+state every dispatcher refuses on; an `--impl` / `$AW_IMPL` naming a loadout that is
+not configured here is refused rather than reported as removed (#227). It does
+**not** touch the `~/.local/bin` symlinks
 or the shell-rc `PATH` line — that is the *global* install, shared by every repo on
 this machine — nor live worktrees or `~/.task-force` radio state, which
 `task-done --remove-worktree` owns.

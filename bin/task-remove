@@ -117,32 +117,22 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 # shellcheck disable=SC2034  # read by the sourced engine, not by this file
 if [[ "$PURGE" == true ]]; then LA_PURGE=1; else LA_PURGE=0; fi
 
-_impl_list() { aw_all_impls | tr '\n' ' ' | sed 's/ *$//'; }
-
-# Every loadout configured here, honouring --impl / $AW_IMPL as a pin. Unlike
-# task-config's copy of this, zero is fatal and many is *fine*: removing all of
-# them is what "take task-force out of this repo" means, and leaving one behind
-# is the multi-match state every dispatcher refuses on.
-MATCHES=()
-_collect_matches() {
-  local pin="${PINNED_IMPL:-${AW_IMPL:-}}" m
-  MATCHES=()
-  if [[ -n "$pin" ]]; then
-    if ! aw_all_impls | grep -qFx "$pin"; then
-      echo "Error: unknown loadout '$pin'" >&2
-      echo "       known: $(_impl_list)" >&2
-      exit 1
-    fi
-    MATCHES=("$pin")
-    return 0
-  fi
-  while IFS= read -r m; do
-    [[ -n "$m" ]] && MATCHES+=("$m")
-  done < <(aw_detect_matches "$REPO_ROOT")
-  return 0
-}
-
-_collect_matches
+# Every loadout configured here, honouring --impl / $AW_IMPL as a pin. Zero is
+# fatal and many is *fine*: removing all of them is what "take task-force out of
+# this repo" means, and leaving one behind is the multi-match state every
+# dispatcher refuses on.
+#
+# The collector and the pin guard are shared with bin/task-config through
+# lib/detect-impl.sh (#227). They were a byte-for-byte copy in each script with no
+# drift sentinel, which is how one copy could be fixed and the other not.
+PIN="${PINNED_IMPL:-${AW_IMPL:-}}"
+aw_collect_matches "$REPO_ROOT" "$PIN" || exit 1
+# A pin naming a real loadout that is not configured *here* has to be refused
+# before anything else: it is the one input that makes this command report
+# "task-force removed from <root>" having removed nothing, which for the
+# strip-before-a-PR use case means shipping every artifact you meant to take out.
+aw_require_configured "$REPO_ROOT" "$PIN" || exit 1
+MATCHES=(${AW_MATCHES[@]+"${AW_MATCHES[@]}"})
 
 if ((${#MATCHES[@]} == 0)); then
   {

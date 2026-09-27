@@ -113,30 +113,20 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 
 # Populates MATCHES with every loadout configured in the repo, honouring
 # --impl / $AW_IMPL as a pin. Never errors on zero or many: the callers differ
-# in what they do about it.
+# in what they do about it — `show` describes both, `set` refuses many.
+#
+# The collector lives in lib/detect-impl.sh as of #227, shared with bin/task-remove
+# rather than copied into it: the two were byte-identical with no drift sentinel,
+# and the --impl validation gap `set` guards against below existed in both.
 MATCHES=()
+PIN="${PINNED_IMPL:-${AW_IMPL:-}}"
 _collect_matches() {
-  local pin="${PINNED_IMPL:-${AW_IMPL:-}}" m
-  MATCHES=()
-  if [[ -n "$pin" ]]; then
-    if ! aw_all_impls | grep -qFx "$pin"; then
-      echo "Error: unknown loadout '$pin'" >&2
-      echo "       known: $(_impl_list)" >&2
-      exit 1
-    fi
-    MATCHES=("$pin")
-    return 0
-  fi
-  while IFS= read -r m; do
-    [[ -n "$m" ]] && MATCHES+=("$m")
-  done < <(aw_detect_matches "$REPO_ROOT")
+  aw_collect_matches "$REPO_ROOT" "$PIN" || exit 1
+  MATCHES=(${AW_MATCHES[@]+"${AW_MATCHES[@]}"})
   return 0
 }
 
 _rel() { printf '%s' "${1#"$REPO_ROOT"/}"; }
-
-# The loadout names on one line, for an error message or a hint.
-_impl_list() { aw_all_impls | tr '\n' ' ' | sed 's/ *$//'; }
 
 # ---------------------------------------------------------------------------
 # show
@@ -204,7 +194,7 @@ cmd_show() {
       printf '  loadout   : none\n'
       printf '\nNo loadout configured in %s; run task-init to pick one:\n' "$REPO_ROOT"
       printf '  task-init            # interactive picker\n'
-      printf '  task-init claude-gh  # or name one: %s\n' "$(_impl_list)"
+      printf '  task-init claude-gh  # or name one: %s\n' "$(aw_impl_list)"
       return 1 ;;
     1)
       _show_one "${MATCHES[0]}"
@@ -243,6 +233,14 @@ cmd_set() {
   [[ -n "$axis" && -n "$value" ]] || { echo "Error: set needs an axis and a value (see --help)" >&2; exit 1; }
 
   _collect_matches
+  # Before the count is read, and before `current` is derived from it: a pin naming
+  # a real loadout that is not configured here would otherwise be believed, and
+  # every value below computed from the pinned *name* instead of from reality. A
+  # `set tracker notion --impl kiro-gh` on a claude-gh repo then removed kiro-gh's
+  # nonexistent artifacts and installed kiro-notion beside the untouched
+  # .claude/gh-workflow.md — two loadouts configured, which is the ambiguous state
+  # this command exists to prevent and the one every dispatcher refuses on (#227).
+  aw_require_configured "$REPO_ROOT" "$PIN" || exit 1
   case "${#MATCHES[@]}" in
     0)
       echo "Error: no loadout configured in $REPO_ROOT — there is nothing to switch from." >&2
@@ -296,7 +294,7 @@ cmd_set() {
       echo "       The assistant × tracker grid has one hole: $t_tracker is not" >&2
       echo "       available on $t_assistant (#92). Everything else exists." >&2
     fi
-    echo "       Available: $(_impl_list)" >&2
+    echo "       Available: $(aw_impl_list)" >&2
     exit 1
   fi
 

@@ -66,7 +66,7 @@ resolve_link() {
     rm -rf "$HOME/.local/bin"
     bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
 
-    for cmd in task-init task-work task-done task-board task-config task-pm radio ci-guard; do
+    for cmd in task-init task-work task-done task-board task-config task-remove task-pm radio ci-guard; do
       [ -L "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink missing"; return 1; }
       [ -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink dangling"; return 1; }
     done
@@ -90,6 +90,10 @@ resolve_link() {
     # no per-loadout copy for a link to point at by mistake.
     [ "$(resolve_link task-config)" = "$REPO_ROOT_REAL/bin/task-config" ] \
       || { echo "$impl: task-config resolves to $(resolve_link task-config)"; return 1; }
+    # task-remove is canonical for the same reason (#220) — it wraps the same
+    # cross-loadout removal engine task-config set uses.
+    [ "$(resolve_link task-remove)" = "$REPO_ROOT_REAL/bin/task-remove" ] \
+      || { echo "$impl: task-remove resolves to $(resolve_link task-remove)"; return 1; }
 
     case "$impl" in
       claude-*|kiro-gh)

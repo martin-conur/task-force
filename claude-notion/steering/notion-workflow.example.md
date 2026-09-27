@@ -141,6 +141,39 @@ the IDs are opaque strings no URL yields (the reason for `--help-ids`). **#225**
 adds the flags, after which carry-over works with no change to `task-config`. Run
 `task-config show` first and keep the output.
 
+`task-remove` — take task-force back out of this repo (#220)
+
+The same removal walk a `task-config set` performs, with no install after it. Two
+situations want it: the project is done and the workflow config is dead weight, or
+you are about to open a PR against a repo that does **not** use task-force, where the
+diff would otherwise carry `.claude/commands/`, a `.claude/settings.json` hook merge,
+the `@.claude/notion-workflow.md` import line in `CLAUDE.md` and a workflow doc
+nobody upstream asked for.
+
+```bash
+task-remove --dry-run              # the plan, changing nothing
+task-remove --yes                  # no prompt (a TTY run previews, then asks)
+task-remove --purge --dry-run      # what the override would additionally take
+```
+
+It takes out what a switch takes out — same keep-bias, same `<doc>.bak`, your own
+`CLAUDE.md` sections and `settings.json` entries untouched — plus one artifact a
+switch has no business touching: the `commit-msg` ci-guard hook `task-work` installs,
+restoring a pre-existing hook the chain-install preserved as `commit-msg.local`. Only
+a hook carrying task-force's own marker is removed. With no `--impl` it removes
+**every** loadout detected in the repo, because leaving one behind is the multi-match
+state every dispatcher refuses on. It does **not** touch the `~/.local/bin` symlinks
+or the shell-rc `PATH` line — that is the *global* install, shared by every repo on
+this machine — nor live worktrees or `~/.task-force` radio state, which
+`task-done --remove-worktree` owns.
+
+`--purge` deletes what the default keeps and reports: a role file that differs from
+the copy the loadout ships (which fires on a merely **stale** install too, not only
+on a real customization), the `<doc>.bak`, and the `tasks/` backlog. It does not
+widen removal to files that are only partly ours — `CLAUDE.md` still loses only its
+import line. Run without it first and read the list; the run points at `--purge` only
+when there is something it would actually take. That ordering is the safety argument.
+
 `ci-guard` — the commit-msg guard `task-work` installs (#194)
 
 Every `task-work` run installs a `commit-msg` git hook that refuses a commit

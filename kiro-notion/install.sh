@@ -8,9 +8,9 @@ echo "Installing kiro-notion scripts..."
 # region:install-shared-symlinks
 # Shared root scripts. task-init / task-work / task-done / task-board are
 # impl-dispatching scripts at the repo root (they route per-project based on
-# which workflow doc is present); task-pm, radio and task-config are canonical
-# single copies (#170, #219 — task-config acts *across* loadouts, so a
-# per-loadout copy would make no sense).
+# which workflow doc is present); task-pm, radio, task-config and task-remove are
+# canonical single copies (#170, #219, #220 — the latter two act *across*
+# loadouts, so a per-loadout copy would make no sense).
 # Every loadout links task-board even though only the two *-local
 # loadouts implement it: the dispatcher's job on the others is to refuse with a
 # message naming the detected loadout, rather than the command being absent
@@ -33,6 +33,8 @@ ln -sf "$SCRIPT_DIR/../bin/task-board" ~/.local/bin/task-board
 echo "  ✓ Script: task-board (shared dispatcher)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-config" ~/.local/bin/task-config
 echo "  ✓ Script: task-config (canonical)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-remove" ~/.local/bin/task-remove
+echo "  ✓ Script: task-remove (canonical)"; sleep 0.05
 # endregion:install-shared-symlinks
 
 # Ensure ~/.local/bin is on PATH

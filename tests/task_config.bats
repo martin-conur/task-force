@@ -626,24 +626,31 @@ JSON
   assert [ ! -e "$MAIN_REPO/.kiro" ]
 }
 
-@test "show: a pin that is not configured still describes rather than refusing (#227)" {
-  # The guard is deliberately on the paths that *act*, not on `show`. `show`'s
-  # contract is that it never refuses — zero loadouts and two are both described —
-  # and it mutates nothing, so a pin it cannot corroborate costs a reader one
-  # comparison against un-pinned `show` rather than a broken repo. Pinned here so
-  # that asymmetry reads as a decision rather than as the guard being forgotten.
+@test "show: a pin that is not configured is described and signalled, never refused (#227)" {
+  # The `aw_require_configured` guard is deliberately on the paths that *act*, not
+  # on `show`: `show` is the command you reach for when a repo is confusing, so a
+  # refusal to print would break the one thing that makes it useful. What it owes
+  # instead is describe-but-signal, the rule its other two non-clean states already
+  # follow — print the state, exit non-zero so a script can branch. This case was
+  # the only one of the three exiting 0, which made
+  # `task-config show --impl X && do_something` proceed on a phantom.
   _init claude-gh --owner acme --repo widgets --project 7
   run "$TASK_CONFIG" --impl kiro-gh show
-  assert_success
+  assert_failure
+  # Still printed in full — the non-zero status is a signal, not a refusal.
   assert_output --partial "loadout   : kiro-gh"
+  assert_output --partial "assistant : kiro"
   assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
 
-  # Describing is not the same as asserting. The block must say the pinned loadout
-  # is not here — otherwise `tracker : gh  (unset — fill in <path>)` reads as
-  # "kiro-gh IS configured, the values just aren't filled in", which invites the
+  # And describing is not the same as asserting. The block must say the pinned
+  # loadout is not here — otherwise `tracker : gh  (unset — fill in <path>)` reads
+  # as "kiro-gh IS configured, the values just aren't filled in", which invites the
   # reader to go edit a file that does not exist.
   assert_output --partial "NOT configured here"
-  # And the annotation must NOT appear for a loadout that really is configured.
+
+  # A configured loadout keeps exiting 0 and carries no annotation. Both halves
+  # matter: the status and the printed line are driven by the same doc-existence
+  # test, so this is what stops either drifting from the other.
   run "$TASK_CONFIG" show
   assert_success
   assert_output --partial "loadout   : claude-gh"

@@ -89,9 +89,11 @@ task-work spike-idea --no-launch
 `task-config show` / `task-config set` — which loadout this repo is on, and how to switch it (#219)
 
 `task-config show` prints the assistant, the tracker, that tracker's settings and
-the paths carrying them. Unlike every other task-force command it never refuses:
-a repo with **no** loadout and a repo with **two** are both *described* (each
-still exits non-zero), because a confusing repo is exactly when you reach for it.
+the paths carrying them. Unlike every other task-force command it never refuses —
+it *describes and signals*: a repo with **no** loadout, a repo with **two**, and an
+`--impl` pinning a loadout that is not configured here are all printed in full and
+all exit non-zero, so a script can still branch. A confusing repo is exactly when
+you reach for this command, so refusing to print would defeat it.
 
 ```bash
 task-config show
@@ -109,10 +111,10 @@ loadout to replace. A **`set`** whose `--impl` (or `$AW_IMPL`) names a loadout t
 is **not** configured in this repo is refused rather than believed: before #227 the
 pinned name was taken at face value and the target installed *beside* the untouched
 old loadout, producing the very two-loadout state it exists to prevent. `show` never
-refuses, so it annotates instead —
-`loadout   : kiro-gh  (NOT configured here — pinned via --impl / $AW_IMPL)` — because
-with no doc to read, its `tracker` line would otherwise say `unset — fill in <path>`
-and invite you to edit a file that does not exist.
+refuses, so it annotates and signals instead —
+`loadout   : kiro-gh  (NOT configured here — pinned via --impl / $AW_IMPL)`, exit 1 —
+because with no doc to read, its `tracker` line would otherwise say
+`unset — fill in <path>` and invite you to edit a file that does not exist.
 
 Removal takes out **only** task-init's own entries. Your own `CLAUDE.md` sections
 survive with just the `@.claude/gh-workflow.md` import line gone; your own hooks

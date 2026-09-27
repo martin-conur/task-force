@@ -212,6 +212,17 @@ cmd_show() {
       return 1 ;;
     1)
       _show_one "${MATCHES[0]}"
+      # Describe-but-signal — the rule show's other two non-clean states already
+      # follow: never refuse to print, always signal with a non-zero exit so a
+      # script can branch (#219). A pinned loadout whose workflow doc is not there
+      # is the third instance of that state and was the only one exiting 0, so
+      # `task-config show --impl X && do_something` proceeded on a phantom — the
+      # same success-signal-for-work-that-did-not-happen shape as the --impl bug
+      # this file's guard exists for (#227). Same test as the annotation above, so
+      # the line printed and the status returned cannot disagree.
+      local shown_doc
+      shown_doc=$(la_workflow_doc "$REPO_ROOT" "${MATCHES[0]}") || return 1
+      [[ -f "$shown_doc" ]] || return 1
       return 0 ;;
     *)
       # aw_detect_impl refuses outright here, and so every dispatcher does.

@@ -254,8 +254,8 @@ canonical radio channel, not user-typed text — trust it and process the
 listed messages with `radio check` / `radio read <id>`.
 
 Finally, `SessionStart` fires `radio register`; on a *fresh* start (not the
-re-registers that `/compact`, `/clear`, and resume trigger) it also prints a
-summary of any inbox that queued while the role was offline — reports whose
+re-registers that `/compact` and `/clear` trigger in the same process) it also
+prints a summary of any inbox that queued while the role was offline — reports whose
 send-time wake found no session file and no-op'd. `SessionStart` stdout is
 injected into the model's context, so that backlog surfaces on the role's very
 first turn, not just after the next human prompt: the offline→online companion
@@ -277,6 +277,47 @@ the same entrypoint, and kiro injects hook stdout as well. The long-standing
 claim that it does not came from hooks that were never running at all: they were
 written to `.kiro/hooks/`, which kiro-cli does not read. Fixed in #218; what kiro
 still lacks — a prompt-hook inbox summary and a Stop drain — is #221.)
+
+A **resumed session registers nothing**, and that is not the hook's fault
+(#229). `SessionStart` does fire on a resume — verified against all four
+sources, `startup` / `resume` / `compact` / `clear` — but a resume is a *new
+process*, while the identity env is a command prefix on the one `task-work`
+launched (`bash -ic "TASK_FORCE_ROLE=… ZELLIJ_TAB=… claude …"`), living in no
+shell and recoverable from nowhere. `/compact` and `/clear` keep the same
+process, so their re-registers really do happen; a resume fires the hook with an
+empty environment, the unquoted `--role $TASK_FORCE_ROLE` collapses to nothing,
+and register no-ops — now with a log line, because "the hook never fired" and
+"the hook fired and register no-opped" used to leave identical (empty) traces.
+
+So `radio` **derives the role from disk** instead of acting anonymously. In a
+worktree, `<worktree-base>/.<slug>.info` plus the main repo name rebuild
+`worker-<reponame>-<slug>` (or `reviewer-<reponame>-pr<N>`, whose tab slug is
+`review-pr<N>`) exactly as `task-work` / `task-reviewer` built them — the same
+file #188 recovers `TAB_ID` from. In a main checkout the repo name gives
+`pm-<reponame>`, gated on that role having radio state on disk, so a plain
+`claude` session in the repo root never claims the PM's address; and no
+candidate is claimed while its session file carries a *fresh* heartbeat, since
+only a process that has the role env can write one. `check` / `read` / `ack` /
+`send` announce the recovered role on stderr, and **refuse loudly** when nothing
+is derivable: a roleless `send` used to write `from: unknown` into the
+machine-wide literal-`pm` inbox that #210 makes adoptable first-come, and a
+roleless `check` used to exit 0 in silence with mail sitting in the inbox. Hook
+entrypoints keep #93's silence — recovery never leaks into them.
+
+Recovery does not register, because a register whose tab lookup misses writes an
+empty `TAB_ID`, and that is worse than no session at all. The lookup is by tab
+*name* within the zellij session, so it can resolve from elsewhere — but the only
+place it is guaranteed to is the role's own tab. Run this **there**:
+
+```bash
+radio register --role <role> --tab <tabname> \
+  --repo "$(git rev-parse --show-toplevel)" --agent claude --loadout <loadout>
+```
+
+It works with no `$TASK_FORCE_ROLE` since #229 — before that the dispatcher
+discarded the call before ever reading `--role`, so the documented way out of a
+roleless session was itself a silent no-op — and it now says on stderr whether
+the role came back wakeable, warning explicitly when `TAB_ID` ended up empty.
 
 Full command form:
 
@@ -396,6 +437,7 @@ mailbox.
 | `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
 | PM merged but the worker never cleaned up | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered. Since #201 gc archives such mail instead of keeping a mailbox nobody will open alive forever — look in `~/.task-force/radio/dead-letter/<role>/`, and `grep 'gc: dead-lettered' ~/.task-force/radio/log` for everything it has archived. The message is intact with its id and frontmatter; only the worktree needs cleaning by hand. |
 | A role idles on a message sitting in its own inbox | Fixed in #197. `BLOCKED_IDS=` in the session file records which ids the last stop-hook block was about, so a message arriving mid-drain earns its own continuation. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the same ids were ignored twice. |
+| `radio check` says nothing while mail is in the inbox, or a report lands `from: unknown` | The session has no `$TASK_FORCE_ROLE`: it never registered, which is what every resumed session looks like (the env was a command prefix on the original process, not an export). Fixed in #229 — `check` / `read` / `ack` / `send` now recover the role from disk or refuse loudly, and `radio register --role … --tab …` works without the env var. `grep 'recover-role:' ~/.task-force/radio/log` shows what was recovered or refused, and `grep 'register: no-op' ~/.task-force/radio/log` a hook that fired with an empty environment. |
 
 The log is the only place several of these states are distinguishable at all.
 It is shared by every repo and role on the machine, so read timestamps rather

@@ -389,7 +389,11 @@ _log_content() { cat "$TASK_FORCE_HOME/radio/log"; }
 @test "register: an unattributable (from: unknown) message is adopted first-come (#210)" {
   # A pre-env worker sent with no $TASK_FORCE_ROLE, so cmd_send wrote
   # `from: unknown`. There is no signal at all — first-come is the only option.
-  env -u TASK_FORCE_ROLE "$RADIO" send --to pm --intent review-requested --pr 41 \
+  # Since #229 a roleless send refuses instead of writing this, so the historical
+  # shape is reproduced by naming the role `unknown` outright: same cmd_send path,
+  # same literal-`pm` destination (the shim derives a pm-<repo> only for a
+  # worker-* / reviewer-* sender).
+  TASK_FORCE_ROLE=unknown "$RADIO" send --to pm --intent review-requested --pr 41 \
     --body "pre-env worker, no role in the environment"
   run grep -h '^from: ' "$TASK_FORCE_HOME/radio/mailbox/pm/inbox"/*.md
   assert_output "from: unknown"
@@ -403,8 +407,9 @@ _log_content() { cat "$TASK_FORCE_HOME/radio/log"; }
 
 @test "register: an unattributable adoption is LOGGED, not silent (#210)" {
   # The point of the ticket: adopting because nothing could be attributed must
-  # look different in the log from adopting because the sender matched.
-  env -u TASK_FORCE_ROLE "$RADIO" send --to pm --intent review-requested --pr 41 \
+  # look different in the log from adopting because the sender matched. (The
+  # `from: unknown` shape comes from naming the role `unknown` since #229 — see above.)
+  TASK_FORCE_ROLE=unknown "$RADIO" send --to pm --intent review-requested --pr 41 \
     --body "pre-env worker, no role in the environment"
   TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \
     --repo /somewhere/alpha --agent claude
@@ -428,7 +433,7 @@ _log_content() { cat "$TASK_FORCE_HOME/radio/log"; }
   _queue_legacy_pm review-requested 41 "" worker-alpha-fix-login
   _queue_legacy_pm review-requested 42 "" worker-beta-add-cache
   _queue_legacy_pm review-complete-clean 43 "" reviewer-beta-pr42
-  env -u TASK_FORCE_ROLE "$RADIO" send --to pm --intent spec-ready --issue 7 --body "unattributable"
+  TASK_FORCE_ROLE=unknown "$RADIO" send --to pm --intent spec-ready --issue 7 --body "unattributable"
   assert_equal "$(_inbox_count pm)" "4"
 
   TASK_FORCE_ROLE=pm-alpha "$RADIO" register --role pm-alpha --tab pm-alpha \

@@ -167,7 +167,12 @@ git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git rep
 MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/^worktree //')
 [[ -d "$MAIN_WORKTREE" ]] || { echo "Error: could not resolve the main worktree" >&2; exit 1; }
 REPO_NAME=$(basename "$MAIN_WORKTREE")
-WORKTREE_BASE=$(cd "$MAIN_WORKTREE/.." && pwd)/"${REPO_NAME}-worktrees"
+# `pwd -P`, not `pwd`, everywhere a path is built for comparison. Note this still
+# resolves only the PARENT: "<repo>-worktrees" is appended as a string, so a
+# symlinked worktree base stays logical here while git and Claude both report the
+# physical target. Everything downstream that compares paths therefore resolves
+# its own operands rather than assuming this one is canonical (#233 review).
+WORKTREE_BASE=$(cd "$MAIN_WORKTREE/.." && pwd -P)/"${REPO_NAME}-worktrees"
 
 WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
@@ -195,12 +200,16 @@ _common_dir_of() {
   c=$(git -C "$d" rev-parse --git-common-dir 2>/dev/null) || return 1
   [[ -n "$c" ]] || return 1
   case "$c" in /*) : ;; *) c="$d/$c" ;; esac
-  (cd "$c" && pwd)
+  (cd "$c" && pwd -P)
 }
 
 WT_TOP=$(git -C "$WORKTREE_DIR" rev-parse --show-toplevel 2>/dev/null) \
   || _refuse_no_worktree "'$WORKTREE_DIR' is not a git worktree (pruned or never registered)."
-if [[ "$(cd "$WT_TOP" && pwd)" != "$(cd "$WORKTREE_DIR" && pwd)" ]]; then
+# Both sides resolved (`pwd -P`): git reports the PHYSICAL path, while
+# $WORKTREE_DIR is logical whenever "<repo>-worktrees" is a symlink — a real
+# setup (worktrees parked on another volume). Comparing logical-to-physical made
+# this refuse a perfectly good worktree with "is inside another repo's worktree".
+if [[ "$(cd "$WT_TOP" && pwd -P)" != "$(cd "$WORKTREE_DIR" && pwd -P)" ]]; then
   _refuse_no_worktree "'$WORKTREE_DIR' is inside another repo's worktree ($WT_TOP), not a worktree root."
 fi
 WT_COMMON=$(_common_dir_of "$WORKTREE_DIR") || _refuse_no_worktree "could not read git metadata for '$WORKTREE_DIR'."
@@ -382,9 +391,22 @@ RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
 # silently is far worse than the picker, which is what anything short of all
 # three falls back to.
 _resume_session_id() {
-  local log="$RADIO_HOME/log" line id tp
+  local log="$RADIO_HOME/log" line id tp phys
+  local -a cwd_pats
   [[ -f "$log" ]] || return 0
-  line=$( (grep -F "role=$ROLE " "$log" | grep -F "\"cwd\":\"$WORKTREE_DIR\"" | tail -1) 2>/dev/null ) || true
+  # Match the physical form as well as the logical one. $WORKTREE_DIR is built by
+  # string-appending "<repo>-worktrees", which resolves nothing, while Claude
+  # records the cwd it actually ran in — so one symlink anywhere under the
+  # worktree base makes a single-form match miss every time. That does not fail
+  # safe, it fails INVISIBLY: --resume would look present and silently always
+  # fall through to the picker, defeating the very pin that makes the cwd check
+  # load-bearing. Both forms are matched rather than one replaced by the other,
+  # because the log is history: lines written before a path or symlink change
+  # legitimately carry the other spelling.
+  cwd_pats=( -e "\"cwd\":\"$WORKTREE_DIR\"" )
+  phys=$(cd "$WORKTREE_DIR" 2>/dev/null && pwd -P) || phys=""
+  [[ -n "$phys" && "$phys" != "$WORKTREE_DIR" ]] && cwd_pats+=( -e "\"cwd\":\"$phys\"" )
+  line=$( (grep -F "role=$ROLE " "$log" | grep -F "${cwd_pats[@]}" | tail -1) 2>/dev/null ) || true
   [[ -n "$line" ]] || return 0
   [[ "$line" == *'"session_id":"'* ]] || return 0
   id=${line#*\"session_id\":\"}; id=${id%%\"*}

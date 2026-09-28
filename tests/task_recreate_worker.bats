@@ -409,6 +409,61 @@ log_session_end() {
   assert_output --partial "claude --resume $sid"
 }
 
+# Same fixture, but reached through a symlinked worktree base — the case where
+# the logical and physical spellings of the worktree genuinely differ.
+#
+# The command builds WORKTREE_DIR as "<parent>/<repo>-worktrees/<slug>", appending
+# that middle component as a string, so it is never resolved. git and Claude both
+# report the physical target. Every earlier test builds both sides the same way
+# and so agrees with any logical/physical bug instead of catching it; these two do
+# not. Verified by hand that the two paths really do diverge here before writing
+# the assertions, so this cannot quietly become a tautology.
+dead_worker_symlinked_base() {
+  local slug="${1:-issue-42}"
+  local url="${2:-https://github.com/owner/repo/issues/42}"
+  SYMLINK_STORE="$BATS_TEST_TMPDIR/worktree-store"
+  mkdir -p "$SYMLINK_STORE"
+  ln -s "$SYMLINK_STORE" "$WORKTREE_BASE"
+  git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  printf 'BASE_BRANCH=main\nSLUG=%s\nGH_URL=%s\nTAB_ID=999\n' "$slug" "$url" \
+    > "$WORKTREE_BASE/.$slug.info"
+}
+
+@test "a symlinked worktree base is not mistaken for another repo's worktree" {
+  # git reports the physical path; WORKTREE_DIR is the logical one. Comparing the
+  # two unresolved refused a perfectly good worktree outright — a hard failure,
+  # not a silent one, and the same root cause as the --resume miss below.
+  dead_worker_symlinked_base issue-42
+  local phys logical
+  phys=$(cd "$SYMLINK_STORE/issue-42" && pwd -P)
+  logical="$WT_PHYS/issue-42"
+  [ "$phys" != "$logical" ] || skip "no logical/physical divergence on this host — nothing to pin"
+
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_stub_called zellij "new-tab --name issue-42"
+}
+
+@test "--resume matches a payload whose cwd is the physical path of a symlinked worktree" {
+  dead_worker_symlinked_base issue-42
+  local phys logical sid transcript
+  phys=$(cd "$SYMLINK_STORE/issue-42" && pwd -P)
+  logical="$WT_PHYS/issue-42"
+  [ "$phys" != "$logical" ] || skip "no logical/physical divergence on this host — nothing to pin"
+
+  sid="70ba59e4-c3ef-4145-a3e1-35a058cc5ed5"
+  transcript="$BATS_TEST_TMPDIR/$sid.jsonl"
+  : > "$transcript"
+  # Claude records the cwd it actually ran in: the PHYSICAL path.
+  log_session_end "$(role_for issue-42)" "$phys" "$sid" "$transcript"
+
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --resume
+  assert_success
+  assert_output --partial "resuming session $sid"
+  run launch_cmd_for issue-42
+  assert_output --partial "claude --resume $sid"
+}
+
 @test "--resume ignores a session id logged for a different worktree" {
   # Same role name can exist in another checkout of the same repo; resuming the
   # wrong transcript silently is worse than handing over to the picker.

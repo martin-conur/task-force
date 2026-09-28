@@ -302,8 +302,25 @@ radio send --to <role> --intent <kind> [--pr N] [--issue N] [--body TEXT]
 ```
 
 The body comes from `--body` or stdin. PR review *content* still lives in
-`gh pr comment`s — `radio` only carries the routing ping. Worker role names
-follow `worker-<reponame>-<slug>`; discover the live one via
+`gh pr comment`s — `radio` only carries the routing ping.
+
+**Agent-authored prose goes in on stdin, never through a double-quoted shell
+string** (#234). Inside `"…"` the shell command-substitutes every backticked
+token, so a review quoting `pwd -P` posts that command's *output*, and a
+backticked identifier naming no command — `$WORKTREE_DIR`, `_helper()` — posts
+as **nothing at all**, deleting the finding's subject with no sign a word is
+gone. Reviews, specs and commit bodies here are backtick-dense, so the rule is
+absolute: feed `gh` its body with `--body-file -`, `radio send` its body on
+stdin, and `git commit` its message with `-F -`, all from a **quote-delimited**
+heredoc (`<<'BODY'` … `BODY`, never `<<BODY`).
+Single-quoting `-b '…'` is not a fix — prose contains apostrophes, and the
+first one ends the string. It also means every backticked token in a review is
+*executed* in the reviewer's worktree, and review prose routinely quotes `rm`,
+`git reset` and `gh pr merge` while discussing a diff. The reviewer's PR comment
+is the failure that named this: its tab self-destructs by design, so a mangled
+comment is an unrecoverable loss of the analysis.
+
+Worker role names follow `worker-<reponame>-<slug>`; discover the live one via
 `ls ~/.task-force/radio/sessions/`.
 
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
@@ -316,7 +333,7 @@ It spawns a fresh zellij tab + worktree on the PR's head ref, runs the kiro
 `reviewer` agent, cross-checks the PR against the spec issue (passed as the
 second arg, or auto-detected from the PR body's first `Closes #N` /
 `Fixes #N` / `Resolves #N` line, case-insensitive), reviews the diff, posts a single thorough PR comment via
-`gh pr comment`, and radios PM back with `review-complete-clean` or
+`gh pr comment --body-file -`, and radios PM back with `review-complete-clean` or
 `review-complete-with-findings`. PM still owns the merge decision — the
 reviewer never approves, merges, or mutates status. The reviewer tab stays
 open showing the analysis; clean up with `task-done --remove-worktree` when

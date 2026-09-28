@@ -47,15 +47,24 @@ $ARGUMENTS
    - **Verdict** — `clean`, `clean-with-nits`, or `changes-requested`. Be explicit.
 
    **Tight-PR norm — prefer fix-in-this-PR over deferral.** Frame every finding as something the worker should fix *in this PR*, not as a follow-up ticket, whenever the fix is feasible within the PR's scope. Do NOT suggest "defer to a follow-up" / "track separately" for anything in-scope — that's a deferral the team is trying to avoid. Only flag a deferral when the work is genuinely out of this PR's scope (a separate subsystem, a large refactor), and say so explicitly — PM will decide whether to groom it into a ticket. Default: tight PR, everything fixed before merge.
-7. Post the comment:
+7. Post the comment — **on stdin, never through a double-quoted shell string.** Inside `"…"` the shell command-substitutes every backticked token in your prose: `` `pwd -P` `` posts as your working directory, `` `radio orphans` `` posts as that command's output, and a backticked identifier that names no command — `` `$SOME_VAR` ``, `` `_some_helper()` `` — posts as **nothing at all**, deleting the finding's subject and leaving a sentence that reads as if a word were missing. Findings here name functions, variables and paths in inline code constantly, and this comment is the only thing that outlives your tab, so feed the body in with `--body-file -` and a **quote-delimited** heredoc:
    ```bash
-   gh pr comment <N> -b "<full analysis>"
+   gh pr comment <N> --body-file - <<'REVIEW'
+   ## Spec compliance
+   … the full analysis. `backticks`, $vars, $(subshells), ${braces} and don't-style
+   apostrophes all reach GitHub verbatim …
+   REVIEW
    ```
-8. Radio PM back with the matching intent:
+   The quote on the delimiter (`<<'REVIEW'`, not `<<REVIEW`) is what disables substitution. Two things to get right: the terminator sits alone at the start of its own line with nothing before it, and the delimiter has to be a word no line of your body is equal to. Single-quoting `-b '…'` is **not** the fix — review prose contains apostrophes, and the first one would end the string.
+8. Radio PM back with the matching intent. `radio send` takes its body from stdin when `--body` is omitted, so the same quoted heredoc applies — a one-line summary names symbols and flags too:
    ```bash
-   radio send --to pm --intent review-complete-clean --pr <N> --body "<one-line summary>"
+   radio send --to pm --intent review-complete-clean --pr <N> <<'SUMMARY'
+   <one-line summary>
+   SUMMARY
    # — or —
-   radio send --to pm --intent review-complete-with-findings --pr <N> --body "<one-line summary>"
+   radio send --to pm --intent review-complete-with-findings --pr <N> <<'SUMMARY'
+   <one-line summary>
+   SUMMARY
    ```
    Check `radio send`'s stdout: `delivered` / `queued — pm is busy` means the verdict reached PM. But `radio: WARNING — no session for pm-…` (or `WARNING — pm-… looks dead …`) means PM isn't running, and `queued — pm is idle but wake failed …` means it's queued with no auto-redelivery — in those cases say so to the user instead of assuming the verdict was delivered.
 9. **Auto-destruct.** Run `task-done --remove-worktree` as your final action — it removes this review worktree and closes the tab, and `--remove-worktree` skips the confirmation prompt, so it needs no input from you. PM reads your verdict from the PR comment + the radio ping (on its next `radio check`), never from this tab, so there is nothing to keep open. Self-cleaning is mandatory, not optional.

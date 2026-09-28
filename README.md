@@ -574,6 +574,17 @@ These are the five transitions that make up a full PR cycle. Each one is a singl
 
 PR review *content* still lives in `gh pr comment` / `gh pr review` (or the equivalent on Jira / Notion / local); radio only carries the routing ping.
 
+**Agent-authored prose goes in on stdin, never through a double-quoted shell string** (#234). Inside `"…"` the shell command-substitutes every backticked token, so a review that quotes `pwd -P` posts that command's *output* where the code should be, and a backticked identifier naming no command — `$WORKTREE_DIR`, `_helper()` — posts as **nothing at all**: the finding's subject is deleted and the sentence reads as if a word were missing, with nothing to signal that anything was removed. It is also arbitrary execution driven by prose, in a worktree, and review prose routinely quotes `rm`, `git reset` and `gh pr merge` while discussing a diff. So every prompt that authors prose — reviewer, PM, planner, worker — feeds `gh` its body with `--body-file -`, `radio send` its body on stdin, and `git commit` its message with `-F -`, all from a **quote-delimited** heredoc (`<<'BODY'` … `BODY`, never `<<BODY`):
+
+```bash
+gh pr comment 42 --body-file - <<'REVIEW'
+## Spec compliance
+… `backticks`, $vars, $(subshells) and don't-style apostrophes all reach GitHub verbatim …
+REVIEW
+```
+
+Single-quoting `-b '…'` is not the fix — prose contains apostrophes, and the first one ends the string. The reviewer's PR comment is the failure that named this: the reviewer self-destructs by design, so its comment is the only surviving artifact and a mangled one is an unrecoverable loss of the analysis.
+
 Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (per-repo since #165, so two repos' PMs never collide), and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`. Workers always send `--to pm`; radio resolves it to the right `pm-<reponame>` using the injected `$TASK_FORCE_PM_ROLE` (or the sender's own identity). One PM can oversee several repos with `task-pm --also <repo>`, which aliases `pm-<other>` into its single inbox.
 
 ### Command surface
@@ -945,7 +956,9 @@ If PM is idle, its pane is woken with a `radio check`; if PM is mid-turn, the me
 ```bash
 gh pr view 42
 gh pr diff 42
-gh pr review 42 --comment --body "…"   # or: gh pr comment 42 --body "…"
+gh pr review 42 --comment --body-file - <<'REVIEW'   # or: gh pr comment 42 --body-file -
+… the review, with `backticks` intact — see the stdin rule above …
+REVIEW
 ```
 
 If requesting changes (worker roles are `worker-<reponame>-<slug>`; see `ls ~/.task-force/radio/sessions/`):
@@ -1054,7 +1067,7 @@ The reviewer:
 1. Reads the spec (passed as the second arg — issue number / URL for `claude-gh` / `kiro-gh`; Jira key for `claude-jira`; Notion page URL for `claude-notion`; local task slug or path for `claude-local`). On `claude-gh` / `kiro-gh` only, the wrapper also auto-detects from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive); non-gh loadouts require the spec identifier explicitly because PR bodies don't carry their tracker's linking convention.
 2. Reads the PR diff + comments.
 3. Cross-checks the diff against the spec, then runs the `code-review` skill on top (claude variants — kiro stays prompt-driven).
-4. Posts **one** thorough PR comment with spec-compliance findings, code-review findings, and a verdict (`clean`, `clean-with-nits`, or `changes-requested`).
+4. Posts **one** thorough PR comment with spec-compliance findings, code-review findings, and a verdict (`clean`, `clean-with-nits`, or `changes-requested`) — via `gh pr comment --body-file -` off a quoted heredoc, so the backticked code its findings are made of survives the shell.
 5. Radios PM back with `review-complete-clean` or `review-complete-with-findings`.
 6. **Auto-destructs** — on the claude loadouts the reviewer's final action is `task-done --remove-worktree`, which removes the review worktree and closes its own tab. It is single-shot and self-cleaning: the analysis is durable in the PR comment, so nothing is lost when the tab goes. The kiro `reviewer` agents still idle with the tab open — clean those up by hand.
 

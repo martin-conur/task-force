@@ -247,6 +247,22 @@ EOF
   assert [ -f "$TASK_FORCE_HOME/radio/mailbox/$role/processed/20260928-eee.md" ]
 }
 
+@test "ack: recovers the same way and still moves the message to processed/ (#229)" {
+  # `ack` goes through the identical _require_role_or_recover call site as `read`
+  # above, so this is coverage rather than a second mechanism — but a behaviour
+  # covered only by inspection reads as uncovered to anyone skimming for `ack`.
+  setup_worktree board-test
+  local role; role=$(_expected_worker_role board-test)
+  _put_mail "$role" 20260928-fff0 pm-somewhere approved-and-merged
+
+  cd "$WORKTREE_BASE/board-test"
+  run env -u TASK_FORCE_ROLE "$RADIO" ack 20260928-fff0
+  assert_success
+  assert_output --partial "Recovered role=$role"
+  assert [ -f "$TASK_FORCE_HOME/radio/mailbox/$role/processed/20260928-fff0.md" ]
+  assert [ ! -f "$TASK_FORCE_HOME/radio/mailbox/$role/inbox/20260928-fff0.md" ]
+}
+
 # ----- symptom 1: never write `from: unknown` into the shared pm inbox -------
 
 @test "send: a roleless worktree recovers its identity instead of writing from: unknown (#229)" {

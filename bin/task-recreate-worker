@@ -1,0 +1,494 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-recreate-worker — rebind a worker whose tab died but whose worktree
+# survived (#230). Canonical single copy, all loadouts (#170): only the final
+# launch line differs by agent (claude vs kiro), resolved via lib/detect-impl.sh.
+#
+# The gap this fills: a machine restart (or a killed zellij server) takes out
+# every tab on the box while leaving the work itself entirely intact. Nothing in
+# the toolset covered getting back in — `task-work` refuses on an existing branch
+# by design (#38), and `task-done` is the opposite operation — so the recovery was
+# a hand-rolled tab + cd + guesswork, ending in a session radio cannot address.
+#
+# What survives a reboot: the worktree and its branch, task-work's
+# `<worktree-base>/.<slug>.info` sidecar, radio's `<role>.loadout` / `<role>.agent`
+# sidecars (#188), and the role's mailbox with its undelivered mail. What does
+# not: the zellij tab, the radio session file, and `$TASK_FORCE_ROLE` (#229).
+# So this command is mostly a re-binding, not a re-creation — and it deliberately
+# never touches the worktree. If that is gone, this refuses and names `task-work`.
+#
+# The stale-TAB_ID hazard is the one trap worth naming. zellij's server restarted,
+# so the `TAB_ID` still sitting in the sidecar is either absent or points at an
+# unrelated tab — and since #218, `radio register` *recovers* TAB_ID from that
+# sidecar when its zellij name lookup misses, so a naive re-register can adopt it.
+# We therefore strip TAB_ID from the sidecar BEFORE the tab is spawned and write
+# the freshly-resolved one after: if the new session's SessionStart register wins
+# the race, it finds no TAB_ID to adopt and falls through to the name lookup,
+# which by then resolves to the tab we just made.
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+source "$AW_ROOT/lib/detect-impl.sh"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT/lib/zellij-tab.sh"
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
+# shellcheck source=lib/ci-guard.sh
+source "$AW_ROOT/lib/ci-guard.sh"
+# shellcheck source=lib/kiro-agent.sh
+source "$AW_ROOT/lib/kiro-agent.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  task-recreate-worker <slug> [options]
+
+Recover a worker whose zellij tab is gone but whose worktree is still on disk —
+after a machine restart, a killed zellij server, or a tab closed by accident.
+
+Opens a fresh tab on the existing worktree and launches the agent with the same
+role environment task-work injects, so the session registers with radio and is
+reachable again. It never creates, reuses or removes a worktree: if the worktree
+is missing, this refuses and points at `task-work`.
+
+Options:
+      --resume        Resume the previous agent session instead of starting a
+                      fresh one. Claude-only. The session id is recovered from
+                      the SessionEnd payload radio logged for THIS worktree when
+                      one is still there; otherwise this hands over to Claude's
+                      own picker and says so. Use it when there is uncommitted
+                      exploration worth keeping. A fresh start is the default and
+                      the safer one: its SessionStart register drains whatever
+                      queued while the role was offline (#168), so the agent
+                      opens with the backlog in front of it.
+      --auto          Opt the rebuilt role into radio auto-submit, so a PM ping
+                      processes without a keypress, and keep focus on the tab you
+                      ran this from. On claude it also launches in auto
+                      permission mode; on kiro it governs auto-submit only, as
+                      `task-work --auto` does there (#206).
+      --no-launch     Open the tab at the worktree but do NOT start the agent.
+                      The role stays unregistered until something does.
+      --force         Proceed even though a session still looks live for this
+                      role. Read the refusal first — it says what looks alive.
+      --impl <name>   Pin the loadout instead of detecting it.
+  -h, --help          Show this help.
+
+Examples:
+  task-recreate-worker issue-223
+  task-recreate-worker issue-223 --auto
+  task-recreate-worker add-auth --resume
+EOF
+  exit "${1:-1}"
+}
+
+# ---------------- impl resolution ----------------
+aw_parse_impl_flag "$@" || exit 1
+
+if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
+  # aw_detect_impl already said why. Still honour an explicit help request so
+  # `task-recreate-worker --help` works outside a configured repo.
+  for arg in ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}; do
+    case "$arg" in -h|--help) usage 0 ;; esac
+  done
+  exit 1
+fi
+AGENT="${IMPL%%-*}"
+
+set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+
+# ---------------- arg parsing ----------------
+POSITIONAL=()
+RESUME=""
+AUTO_MODE=""
+NO_LAUNCH=""
+FORCE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --resume) RESUME="1"; shift ;;
+    --auto) AUTO_MODE="1"; shift ;;
+    --no-launch) NO_LAUNCH="1"; shift ;;
+    --force) FORCE="1"; shift ;;
+    --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
+    -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+[[ ${#POSITIONAL[@]} -eq 1 ]] || {
+  echo "Error: exactly one <slug> is required" >&2
+  usage 1
+}
+
+# Accept `task/<slug>` and a trailing slash so a copy-pasted branch name or a
+# shell-completed directory path both work. Then sanitize exactly as task-work's
+# `sanitize_slug` does, so the slug we look up is the slug it wrote.
+SLUG="${POSITIONAL[0]}"
+SLUG="${SLUG%/}"
+SLUG="${SLUG##*/}"
+SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
+[[ -n "$SLUG" ]] || { echo "Error: could not derive a slug from input" >&2; exit 1; }
+
+# A reviewer worktree is not a worker and must not be rebuilt as one. Its role is
+# `reviewer-<repo>-pr<N>`, its prompt is /reviewer, and it is single-shot and
+# self-cleaning by design — so relaunching /worker in it would both misname the
+# role (nothing addresses `worker-<repo>-review-pr<N>`) and run the wrong agent.
+# Match the digits rather than the prefix, so a worker slug that merely starts
+# that way (`review-print-flow`) stays a worker — same test radio's role recovery
+# uses (#229).
+case "$SLUG" in
+  review-pr*)
+    _digits="${SLUG#review-pr}"
+    if [[ -n "$_digits" && -z "${_digits//[0-9]/}" ]]; then
+      echo "Error: '$SLUG' is a reviewer worktree, not a worker." >&2
+      echo "       Reviewers are single-shot and self-cleaning: their analysis lives in the" >&2
+      echo "       PR comment, not the tab. Re-read it with 'gh pr view ${_digits} --comments'," >&2
+      echo "       or re-dispatch a fresh review with 'task-reviewer ${_digits}'." >&2
+      echo "       To clear the leftover worktree: cd into it and run 'task-done --remove-worktree'." >&2
+      exit 1
+    fi ;;
+esac
+
+# ---------------- repo discovery ----------------
+# Resolve against the MAIN worktree, not $PWD's: this command is run from
+# whatever spare tab the user has, which may itself be a linked worktree, and
+# there `basename $(git rev-parse --show-toplevel)` is that worktree's slug.
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; exit 1; }
+MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/^worktree //')
+[[ -d "$MAIN_WORKTREE" ]] || { echo "Error: could not resolve the main worktree" >&2; exit 1; }
+REPO_NAME=$(basename "$MAIN_WORKTREE")
+WORKTREE_BASE=$(cd "$MAIN_WORKTREE/.." && pwd)/"${REPO_NAME}-worktrees"
+
+WORKTREE_DIR="${WORKTREE_BASE}/${SLUG}"
+INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+
+# ---------------- worktree validation ----------------
+# Every refusal here names task-work, because "the worktree is gone" is new work
+# and the two commands must not overlap: silently recreating it would hand the
+# rebuilt worker an empty tree and lose whatever the branch was carrying.
+_refuse_no_worktree() {
+  echo "Error: $1" >&2
+  echo "       Looked for: $WORKTREE_DIR" >&2
+  echo "       task-recreate-worker only re-binds a worktree that is still on disk." >&2
+  echo "       To start fresh work on this slug, use: task-work $SLUG" >&2
+  exit 1
+}
+
+[[ -d "$WORKTREE_DIR" ]] || _refuse_no_worktree "no worktree for slug '$SLUG'."
+[[ -r "$WORKTREE_DIR" && -x "$WORKTREE_DIR" ]] || _refuse_no_worktree "worktree for '$SLUG' is not readable."
+
+# It must be a live worktree *of this repo* — not an orphaned directory git has
+# already pruned, and not an unrelated checkout that happens to sit at that path.
+# --git-common-dir is the same absolute path for every worktree of one repo.
+_common_dir_of() {
+  local d="$1" c
+  c=$(git -C "$d" rev-parse --git-common-dir 2>/dev/null) || return 1
+  [[ -n "$c" ]] || return 1
+  case "$c" in /*) : ;; *) c="$d/$c" ;; esac
+  (cd "$c" && pwd)
+}
+
+WT_TOP=$(git -C "$WORKTREE_DIR" rev-parse --show-toplevel 2>/dev/null) \
+  || _refuse_no_worktree "'$WORKTREE_DIR' is not a git worktree (pruned or never registered)."
+if [[ "$(cd "$WT_TOP" && pwd)" != "$(cd "$WORKTREE_DIR" && pwd)" ]]; then
+  _refuse_no_worktree "'$WORKTREE_DIR' is inside another repo's worktree ($WT_TOP), not a worktree root."
+fi
+WT_COMMON=$(_common_dir_of "$WORKTREE_DIR") || _refuse_no_worktree "could not read git metadata for '$WORKTREE_DIR'."
+MAIN_COMMON=$(_common_dir_of "$MAIN_WORKTREE") || { echo "Error: could not read git metadata for $MAIN_WORKTREE" >&2; exit 1; }
+if [[ "$WT_COMMON" != "$MAIN_COMMON" ]]; then
+  _refuse_no_worktree "'$WORKTREE_DIR' belongs to a different repository."
+fi
+
+# A detached HEAD has no branch to open a PR from, and every downstream command
+# (task-done's `${BRANCH#task/}`, the PR base) reads one. Refuse rather than
+# rebuild a worker that cannot finish.
+BRANCH=$(git -C "$WORKTREE_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null) || BRANCH=""
+if [[ -z "$BRANCH" ]]; then
+  echo "Error: worktree '$SLUG' is on a detached HEAD — there is no branch to recover onto." >&2
+  echo "       Check it out first: git -C $WORKTREE_DIR checkout -b task/$SLUG" >&2
+  exit 1
+fi
+
+# ---------------- sidecar: read, then strip the stale TAB_ID ----------------
+# Read named fields rather than sourcing the file: sourcing would import TAB_ID
+# into this shell, which is the one value here that is wrong by definition.
+_info_field() {
+  local key="$1" file="$2"
+  [[ -f "$file" ]] || return 0
+  awk -v k="$key" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$file"
+}
+
+BASE_BRANCH=""
+GH_URL=""
+if [[ -f "$INFO_FILE" ]]; then
+  BASE_BRANCH=$(_info_field BASE_BRANCH "$INFO_FILE")
+  GH_URL=$(_info_field GH_URL "$INFO_FILE")
+fi
+[[ -n "$BASE_BRANCH" ]] || BASE_BRANCH="main"
+
+# ---------------- role + liveness guard ----------------
+REPO_RADIO_NAME=$(aw_main_repo_name "$MAIN_WORKTREE")
+ROLE="worker-${REPO_RADIO_NAME}-${SLUG}"
+case "$ROLE" in
+  *[!a-zA-Z0-9_-]*)
+    echo "Error: derived role '$ROLE' is not a valid radio role name." >&2
+    echo "       Both the repo directory and the slug must be [a-z0-9-]." >&2
+    exit 1 ;;
+esac
+
+RADIO="$BIN_DIR/radio"
+RADIO_HOME="${TASK_FORCE_HOME:-$HOME/.task-force}/radio"
+SESSION_FILE="$RADIO_HOME/sessions/${ROLE}.info"
+INBOX_DIR="$RADIO_HOME/mailbox/${ROLE}/inbox"
+DEAD_LETTER_DIR="$RADIO_HOME/dead-letter/${ROLE}"
+
+# Two independent signals that this role is NOT the one this command is for.
+# Both are checked, because either can be true on its own: a tab that survived
+# while the session file was wiped, or a session file whose heartbeat is fresh
+# while the tab is gone (the first hour after a reboot looks exactly like that).
+#
+# Staleness is delegated to `radio orphans` rather than re-parsed here, so the
+# >1h threshold and the GNU/BSD date handling stay in one place.
+TAB_EXISTS=""
+[[ -n "${ZELLIJ:-}" ]] && TAB_EXISTS=$(aw_zellij_tab_id_by_name "$SLUG" || true)
+
+SESSION_LOOKS_LIVE=""
+if [[ -f "$SESSION_FILE" ]]; then
+  SESSION_LOOKS_LIVE="1"
+  if [[ -x "$RADIO" ]]; then
+    # Captured into a variable rather than piped into `grep -q`: under the
+    # `pipefail` this script sets, grep's early exit SIGPIPEs the producer and
+    # the pipeline reports failure *because* the match succeeded — the same trap
+    # lib/detect-impl.sh documents at length.
+    _orphans=$("$RADIO" orphans 2>/dev/null || true)
+    # Listed as an orphan => heartbeat is >1h stale => this is the case we exist
+    # for. `radio orphans` prints "<role>\t…", so anchor on the tab.
+    if grep -q "^${ROLE}[[:space:]]" <<<"$_orphans"; then
+      SESSION_LOOKS_LIVE=""
+    fi
+  fi
+fi
+
+if [[ -z "$FORCE" && ( -n "$TAB_EXISTS" || -n "$SESSION_LOOKS_LIVE" ) ]]; then
+  {
+    echo "Error: $ROLE still looks live — refusing to open a second tab for one role."
+    [[ -n "$TAB_EXISTS" ]] && echo "       A zellij tab named '$SLUG' is open in this session (tab_id=$TAB_EXISTS)."
+    [[ -n "$SESSION_LOOKS_LIVE" ]] && echo "       $SESSION_FILE has a heartbeat newer than 1h (radio orphans does not list it)."
+    echo ""
+    echo "       If that tab is really gone, the session file is just stale bookkeeping:"
+    echo "         radio orphans                 # what radio thinks is dead"
+    echo "         task-recreate-worker $SLUG --force"
+  } >&2
+  exit 1
+fi
+
+# ---------------- report ----------------
+# Printed before the launch so it lands in the tab the user is standing in — the
+# new tab immediately fills with the agent's own output.
+AHEAD_OF_BASE=$(git -C "$WORKTREE_DIR" rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "?")
+DIRTY_COUNT=$(git -C "$WORKTREE_DIR" status --porcelain 2>/dev/null | grep -c . || true)
+
+if git -C "$WORKTREE_DIR" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev/null 2>&1; then
+  UNPUSHED=$(git -C "$WORKTREE_DIR" rev-list --count "origin/${BRANCH}..${BRANCH}" 2>/dev/null || echo "?")
+  PUSH_LINE="$UNPUSHED unpushed (origin/${BRANCH} exists)"
+else
+  PUSH_LINE="branch never pushed — all $AHEAD_OF_BASE commit(s) are local only"
+fi
+
+PR_URL=""
+if command -v gh >/dev/null 2>&1; then
+  PR_URL=$( (cd "$WORKTREE_DIR" && gh pr view --json url -q .url 2>/dev/null) || true )
+fi
+
+count_md() {
+  local d="$1" n=0 f
+  [[ -d "$d" ]] || { printf '0'; return 0; }
+  for f in "$d"/*.md; do [[ -e "$f" ]] && n=$(( n + 1 )); done
+  printf '%s' "$n"
+}
+INBOX_N=$(count_md "$INBOX_DIR")
+DEAD_N=$(count_md "$DEAD_LETTER_DIR")
+
+echo "Recovering worker '$SLUG'"
+echo "  role:      $ROLE"
+echo "  worktree:  $WORKTREE_DIR"
+echo "  branch:    $BRANCH (base: $BASE_BRANCH)"
+echo "  task:      ${GH_URL:-none recorded in $(basename "$INFO_FILE")}"
+echo "  commits:   $AHEAD_OF_BASE ahead of $BASE_BRANCH; $PUSH_LINE"
+echo "  dirty:     ${DIRTY_COUNT} uncommitted change(s) in the worktree"
+echo "  PR:        ${PR_URL:-none found}"
+echo "  mail:      $INBOX_N unread in inbox"
+if [[ "$DEAD_N" != "0" ]]; then
+  # Mail that gc archived because the role was gone when it was sent (#201).
+  # It will NOT be redelivered by the register below — say so, with where it is.
+  echo "  dead-letter: $DEAD_N message(s) already archived — radio will not redeliver these:"
+  echo "               $DEAD_LETTER_DIR"
+fi
+echo ""
+
+# ---------------- sidecar rewrite (TAB_ID stripped) ----------------
+# Done BEFORE the tab is spawned, on purpose. `radio register` recovers TAB_ID
+# from this file when its zellij name lookup misses (#218), and the new session's
+# SessionStart can fire before we get to write the new id — so the stale one must
+# already be gone by then, leaving the name lookup (which now resolves) as the
+# only source. Every other line is preserved; the three task-work fields are
+# ensured, because radio's roleless role-recovery keys off `SLUG=` (#229) and a
+# sidecar missing it leaves the rebuilt worker unrecoverable a second time.
+_tmp_info=$(mktemp "${INFO_FILE}.XXXXXX")
+{
+  printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"
+  printf 'SLUG=%s\n' "$SLUG"
+  printf 'GH_URL=%s\n' "$GH_URL"
+  if [[ -f "$INFO_FILE" ]]; then
+    grep -v -E '^(BASE_BRANCH|SLUG|GH_URL|TAB_ID)=' "$INFO_FILE" || true
+  fi
+} > "$_tmp_info"
+mv "$_tmp_info" "$INFO_FILE"
+
+# ---------------- launch ----------------
+# The commit-msg CI-skip guard is shared across a repo's worktrees and idempotent
+# (#194); re-assert it here for the same reason task-work does — the rebuilt
+# worker is about to commit, and this repo may have been re-cloned since.
+aw_install_ci_guard_hook "$MAIN_WORKTREE"
+
+# The whole point of the command (#229): the rebuilt session gets the identity env
+# task-work injects, so its SessionStart register makes the role wakeable again
+# and `radio send --to pm` reports as itself instead of `from: unknown`.
+RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$ROLE") ZELLIJ_TAB=$(printf %q "$SLUG") "
+RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
+[[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+
+# The session id of this role's last session, when it can be established beyond
+# doubt — otherwise nothing, and `--resume` falls back to Claude's own picker.
+#
+# radio logs the whole `SessionEnd` payload on an unregister, session_id and
+# transcript_path included, so the id of the session a reboot killed is usually
+# still on disk. "Usually" is why this is a hint and not a mechanism: the log is
+# an append-only debug log that self-rotates past ~1MB (#169), a hard kill fires
+# no SessionEnd at all, and a role that has run several times has several lines.
+# So the match is pinned three ways before the id is used — the role, the
+# payload's own `cwd` (this exact worktree, not another checkout of the same
+# repo), and a transcript file that still exists. Resuming the WRONG session
+# silently is far worse than the picker, which is what anything short of all
+# three falls back to.
+_resume_session_id() {
+  local log="$RADIO_HOME/log" line id tp
+  [[ -f "$log" ]] || return 0
+  line=$( (grep -F "role=$ROLE " "$log" | grep -F "\"cwd\":\"$WORKTREE_DIR\"" | tail -1) 2>/dev/null ) || true
+  [[ -n "$line" ]] || return 0
+  [[ "$line" == *'"session_id":"'* ]] || return 0
+  id=${line#*\"session_id\":\"}; id=${id%%\"*}
+  [[ "$id" =~ ^[0-9a-fA-F-]{8,64}$ ]] || return 0
+  [[ "$line" == *'"transcript_path":"'* ]] || return 0
+  tp=${line#*\"transcript_path\":\"}; tp=${tp%%\"*}
+  [[ -f "$tp" ]] || return 0
+  printf '%s' "$id"
+}
+
+RESUME_SESSION_ID=""
+[[ -n "$RESUME" && "$AGENT" == claude ]] && RESUME_SESSION_ID=$(_resume_session_id)
+
+build_agent_cmd() {
+  local mode_prefix="" q_gh_url=""   # mode_prefix is claude-only; see the kiro arm
+  [[ -n "$GH_URL" ]] && q_gh_url=$(printf %q "$GH_URL")
+  case "$AGENT" in
+    claude)
+      [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
+      if [[ -n "$RESUME" ]]; then
+        if [[ -n "$RESUME_SESSION_ID" ]]; then
+          echo "claude ${mode_prefix}--resume $RESUME_SESSION_ID"
+        else
+          # Nothing identified this role's last session beyond doubt, so hand
+          # over to Claude's picker rather than guess. The caller is told.
+          echo "claude ${mode_prefix}--resume"
+        fi
+      elif [[ -n "$GH_URL" ]]; then
+        echo "claude ${mode_prefix}\"/worker Implement task: $q_gh_url\""
+      else
+        echo "claude ${mode_prefix}\"/worker\""
+      fi ;;
+    kiro)
+      # On kiro, --auto governs radio auto-submit ONLY (#206) — the permission
+      # model there is `-a/--trust-all`, which task-work keeps as a separate
+      # flag. Folding it in here would hand a recovered kiro worker broader
+      # tool permissions than the task-work invocation that first created it.
+      if [[ -n "$GH_URL" ]]; then
+        echo "kiro-cli chat --agent worker \"Implement task: $q_gh_url\""
+      else
+        echo "kiro-cli chat --agent worker"
+      fi ;;
+  esac
+}
+
+if [[ -z "$NO_LAUNCH" ]]; then
+  case "$AGENT" in
+    claude) : ;;
+    kiro)
+      if [[ -n "$RESUME" ]]; then
+        echo "Error: --resume is claude-only; kiro-cli has no session picker to hand you." >&2
+        echo "       Re-run without --resume for a fresh session on the same worktree." >&2
+        exit 1
+      fi
+      # kiro-cli does not fail on an unresolvable --agent, it falls back to a
+      # hookless built-in — which registers nothing, i.e. the exact state this
+      # command exists to get out of (#218). Checked against the MAIN worktree,
+      # as task-work checks it: kiro-cli will actually read the recovered
+      # worktree's own `.kiro/agents/`, but a repo that keeps those files
+      # untracked would then fail this check and block the recovery — and a
+      # false refusal here is worse than the conservative pass the guard's own
+      # docs describe, which can only let through a case that was already broken.
+      aw_require_kiro_agent worker "$MAIN_WORKTREE" "task-init ${IMPL}" || exit 1 ;;
+    *)
+      echo "Error: no worker launch line for agent '$AGENT' (impl '$IMPL')" >&2
+      exit 1 ;;
+  esac
+fi
+
+echo "Opening zellij tab '$SLUG'..."
+# `set +H; ` must come BEFORE $RADIO_ENV_PREFIX, never between it and the agent:
+# `VAR=val cmd1; cmd2` scopes the assignments to cmd1 only, so the env would
+# attach to the `set` builtin and never reach the agent — radio routing and
+# auto-submit silently dead. Same ordering as task-work / task-reviewer.
+if [[ -n "$NO_LAUNCH" ]]; then
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
+else
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}$(build_agent_cmd)" "${AUTO_MODE:-}"
+fi
+
+# ---------------- rebind TAB_ID ----------------
+# Re-derived from the tab we just opened, never carried over. An empty result
+# (no zellij, no jq, tab not visible yet) is a soft skip — task-done then falls
+# back to the radio session file, exactly as it does for a task-work worker.
+INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
+if [[ -n "$INFO_TAB_ID" ]]; then
+  printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"
+fi
+
+if [[ -n "$NO_LAUNCH" ]]; then
+  echo "Tab opened at $WORKTREE_DIR — agent NOT launched (--no-launch)."
+  echo "Nothing has registered with radio, so $ROLE stays unwakeable until it does."
+elif [[ -n "$RESUME" ]]; then
+  if [[ -n "$RESUME_SESSION_ID" ]]; then
+    echo "Recovered $ROLE in $WORKTREE_DIR — resuming session $RESUME_SESSION_ID"
+    echo "(its id came from the SessionEnd payload radio logged for this worktree)."
+  else
+    echo "Recovered $ROLE in $WORKTREE_DIR — pick the session to resume in the new tab."
+    echo "No session id was recoverable for this worktree, so Claude's picker is doing the choosing."
+  fi
+  echo "Either way the session inherits the role env from this launch, so radio can reach it (#229)."
+else
+  echo "Recovered $ROLE in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
+  if [[ "$INBOX_N" != "0" ]]; then
+    echo "Its SessionStart register will surface the $INBOX_N queued message(s) on the first turn."
+  fi
+fi

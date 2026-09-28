@@ -177,7 +177,7 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
-`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-pm`, `radio`, `ci-guard`, `task-config` and `task-remove` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why those last two in particular cannot be dispatchers.)
+`task-work`, `task-done`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-pm`, `radio`, `ci-guard`, `task-config`, `task-remove` and `task-recreate-worker` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why `task-config` and `task-remove` in particular cannot be dispatchers.)
 
 When you run one of them inside a project, the dispatcher detects the impl by looking at which workflow doc is present:
 
@@ -361,6 +361,31 @@ By default a role file that no longer matches the copy your loadout ships is **k
 What it does **not** do is widen removal to files that are only partly ours. `CLAUDE.md` still loses only the import line, and a `settings.json` with your own hooks still keeps them. The override changes what counts as *task-force's*, not what counts as *yours*.
 
 Run it without `--purge` first and read the list. That ordering is the whole safety argument — the default names every file it keeps, and the run points at `--purge` only when there is something it would actually take, so you act on a list you have seen rather than on the tool's guess. `--purge --dry-run` shows it before it happens.
+
+---
+
+## `task-recreate-worker` — get a worker back after its tab died
+
+A machine restart kills every role on the box at once. On 2026-09-28 that was ten clean `unregister` lines in one second across four repos — and not one line of work lost, because the work was never in the tab. The worktree, its branch, `task-work`'s `<worktree-base>/.<slug>.info` sidecar, radio's `<role>.loadout` / `<role>.agent` sidecars (#188) and the role's mailbox all sit on disk and survive a reboot untouched. What dies with the zellij server is the tab, the radio session file, and `$TASK_FORCE_ROLE` (#229).
+
+Nothing covered getting back in. `task-work <slug>` refuses, because the branch and worktree already exist — which is right, and #38 made it a hard stop on purpose. `task-done` is the opposite operation. So the recovery was a hand-rolled tab, a `cd`, a guess about resuming, and a session radio had no name for: the worker on #223 was rebuilt that way, finished the work, opened its PR, and could not deliver its report to PM.
+
+```bash
+task-recreate-worker issue-223           # fresh session; tab, role and mail rebound
+task-recreate-worker issue-223 --auto    # hands-off; focus stays on your tab
+task-recreate-worker add-auth --resume   # resume the old session (id recovered, else picker)
+task-recreate-worker issue-223 --force   # a session still looks live; do it anyway
+```
+
+It opens a fresh tab on the **existing** worktree and launches the agent with the same role env `task-work` injects. That last part is the whole point: `SessionStart` registers the role, so the worker is wakeable again and its report goes out as itself instead of `from: unknown`. Before it launches, it reports what it found — the issue URL, the base branch, unpushed commits, whether a PR already exists, and how much mail queued while the role was offline (plus, separately, anything gc already moved to `dead-letter/`, which a register will **not** redeliver).
+
+**It never creates, reuses or removes a worktree.** If the worktree is gone, that is new work and it says so, naming `task-work`. The two commands must not overlap: silently recreating the tree would hand the rebuilt worker an empty checkout and lose whatever the branch was carrying.
+
+**Fresh is the default; `--resume` is the opt-in.** A fresh start is the safer one — its register-time backlog drain (#168) puts the queued handoff in front of the agent on turn one, and its role env is right from the first turn. `--resume` is for uncommitted exploration worth keeping, and it is claude-only. It recovers the session id from the `SessionEnd` payload radio logged on the last unregister, pinned to this role *and* this worktree's own `cwd` *and* a transcript file that still exists — and when any of those three does not hold it hands over to Claude's picker and says which happened. It is a hint, not a mechanism: the radio log self-rotates past ~1MB, and a hard kill fires no `SessionEnd` at all. Resuming the wrong session silently would be far worse than a picker.
+
+**It refuses when the role still looks live** — a zellij tab of that name is open, or the session file's heartbeat is newer than an hour, which it asks `radio orphans` rather than re-deriving. The first hour after a reboot looks exactly like a live session, so that refusal has a way through: read it (it names which signal fired), then `--force`.
+
+**The stale `TAB_ID` is the trap worth knowing about.** zellij's server restarted, so the id still sitting in the sidecar is either absent or now belongs to an unrelated tab, and since #218 `radio register` *recovers* `TAB_ID` from that file when its own name lookup misses — so a naive re-register adopts it. This strips it **before** the tab is spawned and writes the new one after: a register that beats us to the write then finds nothing to adopt and resolves the new tab by name, which by then is the right one.
 
 ---
 
@@ -733,6 +758,7 @@ needed attention. So when radio looks broken, start at the **log**
 | **"I ran `radio unregister` and nothing happened."** | Expected behaviour since #198, not a bug. A bare `unregister` has no `SessionEnd` payload naming a real exit, so it refuses. | It printed `refusing to wipe <role> … re-run with --manual` on stderr, and logged a `skipping` line. Pass `--manual` if you actually meant to tear the session down. |
 | **"The PM merged, but the worker never cleaned up its worktree."** | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered — and the worker never heard to run `task-done`. Since #201 gc archives such mail rather than keeping a mailbox nobody will open alive forever. | `ls ~/.task-force/radio/dead-letter/<role>/` — the message is there, id and frontmatter intact. `grep 'gc: dead-lettered' ~/.task-force/radio/log` lists every message gc has archived and when. Remove the stranded worktree by hand (`task-done --remove-worktree` from inside it). See [Undelivered mail is never deleted](#undelivered-mail-is-never-deleted). |
 | **"`radio check` says nothing, but mail is in the inbox"** — or a report arrives `from: unknown`. | The session has no `$TASK_FORCE_ROLE`: it never registered, which is what every resumed session looks like. Fixed in #229 — see [Roleless sessions](#roleless-sessions-a-resume-registers-nothing). | `grep 'recover-role:' ~/.task-force/radio/log` — what was recovered, and what was refused and why. `grep 'register: no-op' ~/.task-force/radio/log` — a hook that fired with an empty environment (before #229 this left no trace at all). Repair it with `radio register --role <role> --tab <tab> --repo "$(git rev-parse --show-toplevel)" --agent claude`, **from that role's own tab**, and check the stderr line says wakeable rather than `EMPTY TAB_ID`. |
+| **"A worker's tab is gone, but its worktree is still there."** | A restart (machine, or the zellij server) took the tab, the session file and `$TASK_FORCE_ROLE` with it. The work is untouched — this is a re-binding problem, not a lost-work one. | `task-recreate-worker <slug>` opens a fresh tab on that worktree with the role env injected, so it registers and drains its inbox. It reports what it found first — unpushed commits, an existing PR, queued mail. If it says the role still looks live, read which signal fired, then `--force`. See [`task-recreate-worker`](#task-recreate-worker--get-a-worker-back-after-its-tab-died). |
 | **"The worker says it's idling for a message that's in its own inbox."** | Fixed in #197. Pre-#197 the stop-hook gave up on the `stop_hook_active` flag alone, so a message that landed *during* a forced drain turn got no continuation of its own — terminal for an idle `--auto` worker nobody was going to prompt again. | `grep BLOCKED_IDS ~/.task-force/radio/sessions/<role>.info` — the ids the last block was about. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the agent ignored the same ids twice. |
 
 #### Reading the log

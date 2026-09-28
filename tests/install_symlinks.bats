@@ -66,7 +66,7 @@ resolve_link() {
     rm -rf "$HOME/.local/bin"
     bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
 
-    for cmd in task-init task-work task-done task-board task-config task-remove task-pm radio ci-guard; do
+    for cmd in task-init task-work task-done task-board task-config task-remove task-recreate-worker task-pm radio ci-guard; do
       [ -L "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink missing"; return 1; }
       [ -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: $cmd symlink dangling"; return 1; }
     done
@@ -94,6 +94,11 @@ resolve_link() {
     # cross-loadout removal engine task-config set uses.
     [ "$(resolve_link task-remove)" = "$REPO_ROOT_REAL/bin/task-remove" ] \
       || { echo "$impl: task-remove resolves to $(resolve_link task-remove)"; return 1; }
+    # task-recreate-worker is canonical for the same reason as task-pm (#230):
+    # only its final launch line differs by agent, and a worker recovered through
+    # a per-loadout copy would be one more place for the radio env to drift.
+    [ "$(resolve_link task-recreate-worker)" = "$REPO_ROOT_REAL/bin/task-recreate-worker" ] \
+      || { echo "$impl: task-recreate-worker resolves to $(resolve_link task-recreate-worker)"; return 1; }
 
     case "$impl" in
       claude-*|kiro-gh)

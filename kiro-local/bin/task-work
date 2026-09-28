@@ -13,6 +13,14 @@ source "$AW_ROOT_REAL/lib/repo-name.sh"
 # shellcheck source=lib/ci-guard.sh
 source "$AW_ROOT_REAL/lib/ci-guard.sh"
 # endregion:lib-source-header
+
+# region:board-regen-source
+# Board rendering exists only on the local loadouts, so this source line sits
+# outside the lib-source-header region that all seven task-work copies share
+# byte-for-byte.
+# shellcheck source=lib/board-regen.sh
+source "$AW_ROOT_REAL/lib/board-regen.sh"
+# endregion:board-regen-source
 # kiro-only: the agent preflight (#218). Deliberately outside the drift-guarded
 # region above, which is byte-identical across all 7 task-work copies including
 # the claude ones — they have no kiro agent to check.
@@ -243,15 +251,13 @@ printf '{"slug":"%s","branch":"%s","worktree":"%s","started_at":"%s","task_file"
   "$(_json_escape "$TASK_FILE")" \
   >> "$STATE_FILE"
 
-# Regenerate the board if task-board is available (skip silently otherwise).
-if command -v task-board >/dev/null 2>&1; then
-  task-board --repo "$REPO_ROOT" >/dev/null || true
-else
-  _BOARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task-board"
-  if [[ -x "$_BOARD_SCRIPT" ]]; then
-    "$_BOARD_SCRIPT" --repo "$REPO_ROOT" >/dev/null || true
-  fi
-fi
+# region:board-regen
+# Regenerate tasks/_board.md. A failure warns and names which copy of task-board
+# ran instead of aborting the run: the silent `|| true` this replaces is how a
+# foreign ~/.local/bin copy came to fail on every local-loadout machine with no
+# symptom but a missing artifact (#223).
+aw_regenerate_board "$REPO_ROOT"
+# endregion:board-regen
 
 # region:ci-guard-hook
 # Install the commit-msg guard before the worker gets a shell (#194). GitHub

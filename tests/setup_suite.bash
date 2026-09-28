@@ -4,16 +4,29 @@
 # the first test file, so ./run_tests.sh and a bare `bats tests/foo.bats` both
 # get it.
 #
-# Its one job is radio-home isolation (#203): give the whole run a scratch
+# Its job is fixture isolation from real machine state: a scratch
 # $TASK_FORCE_HOME so a suite that forgets setup_task_force_home degrades to
-# "isolated anyway" rather than "writes to the developer's live mailbox". See
-# tests/helpers/radio_home.bash for the failure this prevents.
+# "isolated anyway" rather than "writes to the developer's live mailbox" (#203),
+# and a $PATH with no task-force command on it so a suite can only reach the
+# checkout under test (#223). See tests/helpers/radio_home.bash and
+# tests/helpers/path_isolation.bash for the failures these prevent.
 
 _SETUP_SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/helpers/radio_home.bash
 source "$_SETUP_SUITE_DIR/helpers/radio_home.bash"
+# shellcheck source=tests/helpers/path_isolation.bash
+source "$_SETUP_SUITE_DIR/helpers/path_isolation.bash"
 
 setup_suite() {
+  # PATH first: it decides which checkout's binaries the run can see at all.
+  # Unconditional, not "only when something leaked" — the rewrite is a no-op on
+  # a machine that has never run install.sh, and honouring a caller-supplied
+  # PATH the way $TASK_FORCE_HOME is honoured would just reinstate the bug.
+  AW_PATH_MIRROR_ROOT=$(mktemp -d "${BATS_SUITE_TMPDIR:-${TMPDIR:-/tmp}}/path-mirror.XXXXXX")
+  PATH=$(sanitize_path_of_task_force "$AW_PATH_MIRROR_ROOT")
+  export PATH
+  require_task_force_free_path || return 1
+
   if [[ -n "${TASK_FORCE_HOME:-}" ]]; then
     # Caller supplied one (CI, or a developer pinning a scratch dir): honour
     # it, but only once it has been proven not to be the real home.
@@ -28,8 +41,10 @@ setup_suite() {
 }
 
 teardown_suite() {
-  # Same shell as setup_suite, so $TASK_FORCE_HOME is still the run-scoped one
-  # unless a test file exported its own — hence the isolation re-check.
+  # Same shell as setup_suite, so $AW_PATH_MIRROR_ROOT and $TASK_FORCE_HOME are
+  # still the run-scoped ones unless a test file exported its own — hence the
+  # isolation re-check.
+  [[ -z "${AW_PATH_MIRROR_ROOT:-}" ]] || rm -rf "$AW_PATH_MIRROR_ROOT"
   [[ -n "${TASK_FORCE_HOME:-}" ]] || return 0
   task_force_home_is_isolated "$TASK_FORCE_HOME" && rm -rf "$TASK_FORCE_HOME"
   return 0

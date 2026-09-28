@@ -202,6 +202,58 @@ EOF
   assert_output --partial "Add login"
 }
 
+# task-work resolves task-board from $PATH first and only then from its own
+# sibling copy. The suite runs with $PATH out of reach of ~/.local/bin (#223), so
+# without this the $PATH branch would be exercised by nobody on any machine —
+# which is the state the bug grew in. Test it on purpose instead.
+@test "board regen: \$PATH's task-board is preferred over the sibling copy" {
+  _make_task_file "$MAIN_REPO/tasks/001-add-login.md" 001 "Add login"
+  local bin="$BATS_TEST_TMPDIR/path-bin"
+  mkdir -p "$bin"
+  cat > "$bin/task-board" <<'BOARD'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_CALLS_DIR/task-board.calls"
+mkdir -p "$2/tasks"
+echo "rendered by the PATH copy" > "$2/tasks/_board.md"
+BOARD
+  chmod +x "$bin/task-board"
+
+  PATH="$bin:$PATH" run "$KIRO_LOCAL_TASK_WORK" tasks/001-add-login.md
+  assert_success
+  assert_stub_called task-board "--repo $(cd "$MAIN_REPO" && pwd -P)"
+  run cat "$MAIN_REPO/tasks/_board.md"
+  assert_output "rendered by the PATH copy"
+}
+
+# A task-board that fails must say so. $PATH takes precedence over the sibling
+# copy, so ~/.local/bin's symlink into another checkout is what runs on an
+# installed machine — and under the `|| true` this replaces, its failure produced
+# no output at all, only a board that silently never appeared (#223).
+@test "task-board failing is loud, and does not sink task-work" {
+  _make_task_file "$MAIN_REPO/tasks/001-add-login.md" 001 "Add login"
+  local bin="$BATS_TEST_TMPDIR/foreign-bin"
+  mkdir -p "$bin"
+  cat > "$bin/task-board" <<'BOARD'
+#!/usr/bin/env bash
+echo "Error: no workflow doc found (foreign checkout)" >&2
+exit 1
+BOARD
+  chmod +x "$bin/task-board"
+
+  PATH="$bin:$PATH" run "$KIRO_LOCAL_TASK_WORK" tasks/001-add-login.md
+  # The worktree and tab are what task-work is for; a board that did not render
+  # is a warning, not a reason to abort after they exist.
+  assert_success
+  assert [ -d "$WORKTREE_BASE/add-login" ]
+  assert_output --partial "task-board failed"
+  assert_output --partial "$bin/task-board"
+  # The failing copy's own diagnostics reach the user rather than /dev/null.
+  assert_output --partial "no workflow doc found"
+  # And it names this checkout's own copy as the way to render it by hand.
+  assert_output --partial "$KIRO_LOCAL_TASK_BOARD --repo"
+  assert [ ! -f "$MAIN_REPO/tasks/_board.md" ]
+}
+
 # ---------------------------------------------------------------------------
 # Zellij interactions
 # ---------------------------------------------------------------------------

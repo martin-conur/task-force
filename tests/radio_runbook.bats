@@ -53,6 +53,8 @@ DOCUMENTED_GREPS=(
   'BLOCKED_IDS'
   'AUTO_SUBMIT=1'
   'refusing to wipe'
+  'recover-role:'
+  'register: no-op'
 )
 
 # Print the runbook block of a workflow doc: the heading through the end of the
@@ -65,7 +67,7 @@ runbook_block() {
     | sed '/^<!-- task-init:managed:end -->$/,$d'
 }
 
-@test "the README carries the runbook with all six symptoms" {
+@test "the README carries the runbook with all seven symptoms" {
   run cat "$REPO_ROOT_REAL/README.md"
   assert_success
   assert_output --partial "### When radio misbehaves"
@@ -75,6 +77,8 @@ runbook_block() {
   assert_output --partial "I ran \`radio unregister\` and nothing happened."
   assert_output --partial "never cleaned up its worktree."
   assert_output --partial "idling for a message that's in its own inbox."
+  # #229: a roleless session — the silent-`check` / `from: unknown` pair.
+  assert_output --partial "says nothing, but mail is in the inbox"
   # The four sub-sections the ticket asks for.
   assert_output --partial "#### Symptom → cause → check"
   assert_output --partial "#### Reading the log"
@@ -133,6 +137,21 @@ runbook_block() {
       assert_success
       refute_output "0"
     done
+  done
+}
+
+@test "the roleless-session row is in the README and every workflow doc (#229)" {
+  # The runbook block is byte-identical across each family (asserted above), so
+  # pinning the row in one template per family plus the README is enough to catch
+  # a doc that lost it.
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
+           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    run grep -cF -- 'recover-role:' "$f"
+    assert_success
+    refute_output "0"
+    run grep -cF -- 'register: no-op' "$f"
+    assert_success
+    refute_output "0"
   done
 }
 

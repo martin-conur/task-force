@@ -16,7 +16,9 @@ usage() {
   cat <<'EOF'
 Usage:
   radio send --to ROLE --intent KIND [--pr N] [--issue N] [--repo PATH] [--body TEXT | < body]
-  radio check                            list unread messages for this role
+  radio check                            list unread messages for this role. With no role in the
+                                         environment it recovers one from disk, or fails loudly —
+                                         never exits 0 silently while mail waits (#229)
   radio read   [--peek|--no-ack] <id>    print body; by default also move inbox/<id>.md -> processed/
   radio ack    <id>                      move message to processed/ (idempotent: no-op if already processed)
   radio register --role ROLE --tab TAB [--repo PATH] --agent claude|kiro [--loadout NAME]
@@ -44,6 +46,14 @@ Usage:
                                          dead-letter/<role>/ first, never deleted
 
 Self-identification: every command except `register` reads $TASK_FORCE_ROLE.
+A session that never registered (a resume whose environment lost that variable)
+has none, so `check` / `read` / `ack` / `send` derive it from disk — the worktree's
+`.<slug>.info` gives `worker-<repo>-<slug>`, a main checkout gives `pm-<repo>` —
+and refuse rather than act anonymously when they cannot (#229). Hook entrypoints
+(`busy` / `ready` / `awaiting` / `stop-hook` / `prompt-hook`, and `register` with
+no `--role`) stay silent no-ops in a plain `claude` session (#93). To repair such
+a session, `radio register --role <role> --tab <tab> …` works even with no
+$TASK_FORCE_ROLE — run it from the tab that role owns, so the tab binding resolves.
 Override the mailbox root with $TASK_FORCE_HOME (defaults to ~/.task-force).
 EOF
   exit "${1:-1}"
@@ -186,6 +196,216 @@ _require_role() {
 # here would block UserPromptSubmit; exit 0 silently instead.
 _silent_exit_if_no_role() {
   [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0
+  return 0
+}
+
+# ----- roleless-session recovery (#229) -------------------------------------
+#
+# A session that never registered — a resume whose environment lost
+# $TASK_FORCE_ROLE, which is what the 2026-09-28 machine restart produced —
+# degraded silently in every direction: `check` exited 0 with mail on disk,
+# `send` wrote `from: unknown` into the shared literal-`pm` inbox that #210
+# makes adoptable first-come, and `register`, the documented way out, no-opped
+# because the dispatcher gated it on the very env var it exists to repair.
+#
+# Two rules follow. (a) The role is derivable from disk — task-work's own info
+# file plus the repo name — so derive it, the way #188 recovers TAB_ID from the
+# same file, rather than erroring out. (b) Where it cannot be derived, fail
+# LOUDLY. #93's silence belongs to HOOK paths (busy / ready / awaiting /
+# stop-hook / prompt-hook / the SessionStart register) in a plain `claude`
+# session; it was never meant to answer a command an agent or a human typed on
+# purpose, where silence is a wrong answer rather than politeness.
+_RECOVERED_ROLE=""
+_RECOVERED_ROLE_SRC=""
+
+# Accept $1 as this session's role if the evidence supports it. $2 is a
+# human-readable provenance string; $3 is 1 when the candidate needs
+# corroborating on-disk radio state.
+#
+# Two refusals. A LIVE session file for the candidate means we are not it:
+# nothing but a role-carrying process refreshes LAST_HEARTBEAT (every writer
+# goes through _update_state, which is role-gated), so a roleless session's own
+# session file necessarily goes stale — while a fresh heartbeat says some other
+# session holds that identity right now. And `pm-<reponame>` is derivable in
+# ANY checkout of the repo, so without corroboration a plain `claude` in the
+# repo root would claim the PM's address and start acking its mail; a role that
+# has ever registered leaves sidecars (they outlive unregister by design, #188)
+# and a mailbox behind, and that is the corroboration.
+_accept_recovered_role() {
+  local role="$1" src="$2" need_evidence="${3:-0}"
+  _validate_role "$role" 2>/dev/null || {
+    _log "recover-role: derived an invalid role '$role' from $src"; return 1; }
+  if ! _session_dead "$role" "$(date -u +%s)"; then
+    _log "recover-role: candidate $role has a live session file — not claiming it (from $src)"
+    printf 'radio: %s already has a live session (fresh heartbeat) — refusing to assume that identity here. Prefix TASK_FORCE_ROLE=%s if this session really is it.\n' \
+      "$role" "$role" >&2
+    return 1
+  fi
+  if (( need_evidence )) \
+     && [[ ! -f "$(_loadout_sidecar "$role")" ]] \
+     && [[ ! -f "$(_agent_sidecar "$role")" ]] \
+     && [[ ! -d "$(_inbox_dir "$role")" ]]; then
+    _log "recover-role: no radio state for candidate $role (from $src) — not claiming it"
+    return 1
+  fi
+  _RECOVERED_ROLE="$role"
+  _RECOVERED_ROLE_SRC="$src"
+  return 0
+}
+
+# Derive this session's role from the filesystem. Sets $_RECOVERED_ROLE /
+# $_RECOVERED_ROLE_SRC and returns 0 on success.
+#
+# Worker / reviewer arm: task-work and task-reviewer write
+# `<worktree-base>/.<slug>.info` at tab creation and radio never touches it
+# (#188), so its SLUG plus the main repo name reconstruct the role name the same
+# way those two binaries built it — `worker-<reponame>-<slug>`, or
+# `reviewer-<reponame>-pr<N>` for a reviewer, whose tab slug is `review-pr<N>`
+# while its role says `pr<N>`. $ZELLIJ_TAB is the primary slug key (it IS the
+# slug, and is what _info_file_tab_id keys off) with basename(worktree) as the
+# fallback for a resume that lost that variable too.
+#
+# PM arm: `pm-<reponame>` is how task-pm names the PM, but the main checkout is
+# also where a plain `claude` runs, so this candidate is corroboration-gated.
+_recover_role() {
+  _RECOVERED_ROLE=""; _RECOVERED_ROLE_SRC=""
+  local repo rn slug info_file recorded
+  repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$repo" ]] || { _log "recover-role: not inside a git repo — cannot derive a role"; return 1; }
+  rn=$(_repo_name_of "$repo")
+  [[ -n "$rn" ]] || rn=$(_sanitize_role_segment "$(basename "$repo")")
+  [[ -n "$rn" ]] || { _log "recover-role: no usable repo name for $repo"; return 1; }
+
+  for slug in "${ZELLIJ_TAB:-}" "$(basename "$repo")"; do
+    [[ -n "$slug" ]] || continue
+    info_file="$(dirname "$repo")/.${slug}.info"
+    [[ -f "$info_file" ]] || continue
+    # Confirm the file is the one task-work wrote for THIS slug rather than a
+    # same-named file that happens to sit beside the worktree.
+    recorded=$(awk -F= '/^SLUG=/ { print $2; exit }' "$info_file" 2>/dev/null || true)
+    [[ "$recorded" == "$slug" ]] || continue
+    # A reviewer slug is `review-pr<N>` and nothing else — require the tail to be
+    # all digits rather than trusting the prefix, so a worker slug that merely
+    # starts that way (`review-pr-flow`) stays a worker.
+    local candidate="" digits kind=worker
+    case "$slug" in
+      review-pr*)
+        digits="${slug#review-pr}"
+        if [[ -n "$digits" && -z "${digits//[0-9]/}" ]]; then
+          candidate="reviewer-${rn}-pr${digits}"; kind=reviewer
+        fi ;;
+    esac
+    [[ -n "$candidate" ]] || candidate="worker-${rn}-$(_sanitize_role_segment "$slug")"
+    _accept_recovered_role "$candidate" "$info_file ($kind worktree)" && return 0
+    # The info file named this worktree's role and it was refused (live
+    # elsewhere) — do not fall through to the PM arm and claim a second identity.
+    return 1
+  done
+
+  _accept_recovered_role "pm-${rn}" "main checkout of $rn" 1 && return 0
+  return 1
+}
+
+# A recovered role with no session file is #229's third symptom: nothing can
+# wake it, and `radio send` to it queues while cheerfully printing `queued`.
+# Say so, with the repair — and say where to run it, because a register whose
+# tab lookup misses writes an empty TAB_ID, which is worse than no session at
+# all (a sender then gets `queued` instead of `WARNING — no session`).
+_warn_if_unregistered() {
+  [[ -f "$(_session_file "$TASK_FORCE_ROLE")" ]] && return 0
+  local agent loadout
+  agent=$(cat "$(_agent_sidecar "$TASK_FORCE_ROLE")" 2>/dev/null || true)
+  [[ -n "$agent" ]] || agent=claude
+  loadout=$(cat "$(_loadout_sidecar "$TASK_FORCE_ROLE")" 2>/dev/null || true)
+  # shellcheck disable=SC2016  # literal $VARs / backticks for the reader, not expansions
+  printf 'radio: %s has no session file — it is unregistered, so nothing can wake it. From its own zellij tab: radio register --role %s --tab %s --repo "$(git rev-parse --show-toplevel)" --agent %s%s\n' \
+    "$TASK_FORCE_ROLE" "$TASK_FORCE_ROLE" "${ZELLIJ_TAB:-<tab-name>}" "$agent" "${loadout:+ --loadout $loadout}" >&2
+}
+
+# Role gate for DELIBERATE invocations — check / read / ack / send. Recovers the
+# role when the environment has none and fails loudly when it cannot. $1 is the
+# subcommand name, for the log line and the remediation hint. Hook entrypoints
+# never call this: they keep _silent_exit_if_no_role / _hook_role_gate (#93).
+_require_role_or_recover() {
+  local cmd="$1"
+  if [[ -n "${TASK_FORCE_ROLE:-}" ]]; then
+    _require_role
+    return 0
+  fi
+  if _recover_role; then
+    TASK_FORCE_ROLE="$_RECOVERED_ROLE"
+    _log "recover-role: $cmd running as $TASK_FORCE_ROLE (recovered from $_RECOVERED_ROLE_SRC; \$TASK_FORCE_ROLE was unset)"
+    # shellcheck disable=SC2016  # literal $VARs / backticks for the reader, not expansions
+    printf 'radio: no $TASK_FORCE_ROLE in this session — it never registered (resumed session?). Recovered role=%s from %s.\n' \
+      "$TASK_FORCE_ROLE" "$_RECOVERED_ROLE_SRC" >&2
+    _warn_if_unregistered
+    return 0
+  fi
+  local live=""
+  shopt -s nullglob
+  local sf
+  for sf in "$SESSIONS_DIR"/*.info; do live+="$(basename "$sf" .info) "; done
+  shopt -u nullglob
+  _log "recover-role: $cmd refused — no \$TASK_FORCE_ROLE and no derivable role"
+  # shellcheck disable=SC2016  # literal $VARs / backticks for the reader, not expansions
+  {
+    printf 'Error: $TASK_FORCE_ROLE is not set and the role of this session could not be derived from disk.\n'
+    printf '  This session never registered with radio (a resumed session whose environment lost the\n'
+    printf '  variable, or a plain `claude`). radio refuses rather than guess: a roleless `send` used to\n'
+    printf '  write `from: unknown` into the shared literal-`pm` inbox, and a roleless `check` used to\n'
+    printf '  report an empty inbox while mail sat in it (#229).\n'
+    printf '  Either name the role for this one call:   TASK_FORCE_ROLE=<role> radio %s ...\n' "$cmd"
+    printf '  or re-register from its own zellij tab:\n'
+    printf '    radio register --role <role> --tab <tabname> --repo "$(git rev-parse --show-toplevel)" --agent claude\n'
+    printf '  Registered roles: %s\n' "${live:-<none>}"
+  } >&2
+  exit 2
+}
+
+# Did argv carry a usable `--role`? (#229, symptom 4.) The SessionStart hook
+# fires `radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB ...` UNQUOTED,
+# so in a plain `claude` session the role argument does not merely go empty — it
+# disappears, and `--role` swallows the next flag (`--tab`), which is how the
+# historical `--tab` mailbox got created. Both shapes fail _validate_role (empty,
+# and `-`-leading), so #93's silent no-op is preserved exactly while an explicit
+# `radio register --role pm-foo ...`, typed to repair a roleless session, is
+# finally allowed through instead of being discarded before argument parsing.
+_argv_has_valid_role() {
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == --role ]]; then
+      [[ $# -ge 2 ]] || return 1
+      _validate_role "$2" 2>/dev/null || return 1
+      return 0
+    fi
+    shift
+  done
+  return 1
+}
+
+# `--flag <value>` sanity for cmd_register's non-`--role` flags (#229). Same
+# unquoted-interpolation story as _argv_has_valid_role, one flag over: with
+# $ZELLIJ_TAB unset the hook's `--tab $ZELLIJ_TAB --repo <path>` parses as
+# tab="--repo" and the real path as an unknown flag — an error naming neither the
+# cause nor the missing variable, and leaving no log line at all. Name it, and log
+# it. `--role` is deliberately NOT routed through here: its swallowed shape IS the
+# plain-`claude` hook invocation, which the dispatcher no-ops silently before
+# cmd_register runs, so the only way to reach it with a dash-leading role is a
+# human typing one — where _validate_role's `invalid role` is the right answer
+# (#169).
+_register_flag_value() {
+  local flag="$1"
+  if [[ $# -lt 2 ]]; then
+    _log "register: rejected $flag — no value followed it"
+    printf 'register: %s needs a value\n' "$flag" >&2
+    return 1
+  fi
+  if [[ "$2" == -* ]]; then
+    _log "register: rejected $flag — swallowed the next flag ('$2') as its value"
+    # shellcheck disable=SC2016  # literal $VARs / backticks for the reader, not expansions
+    printf 'register: %s took the next flag (%s) as its value. The SessionStart hook interpolates $TASK_FORCE_ROLE / $ZELLIJ_TAB unquoted, so an unset one drops the argument entirely and shifts every later flag (#229).\n' \
+      "$flag" "$2" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -985,17 +1205,31 @@ cmd_register() {
   local role="" tab="" repo="" agent="" loadout=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --role)    role="$2";    shift 2 ;;
-      --tab)     tab="$2";     shift 2 ;;
-      --repo)    repo="$2";    shift 2 ;;
-      --agent)   agent="$2";   shift 2 ;;
-      --loadout) loadout="$2"; shift 2 ;;
+      --role)    [[ $# -ge 2 ]] || { echo "register: --role needs a value" >&2; exit 2; }
+                 role="$2";    shift 2 ;;
+      --tab)     _register_flag_value "$@" || exit 2; tab="$2";     shift 2 ;;
+      --repo)    _register_flag_value "$@" || exit 2; repo="$2";    shift 2 ;;
+      --agent)   _register_flag_value "$@" || exit 2; agent="$2";   shift 2 ;;
+      --loadout) _register_flag_value "$@" || exit 2; loadout="$2"; shift 2 ;;
       *) echo "register: unknown flag $1" >&2; exit 2 ;;
     esac
   done
   [[ -n "$role"  ]] || { echo "register: --role required"  >&2; exit 2; }
   [[ -n "$agent" ]] || { echo "register: --agent required" >&2; exit 2; }
   _validate_role "$role" || exit 2
+
+  # Explicit repair register (#229): the dispatcher now lets `--role <valid>`
+  # through even with no $TASK_FORCE_ROLE in the environment, because that is the
+  # documented way out of a roleless session. Adopt the role for the rest of THIS
+  # process so the beats that read the env var — _rename_tab's first idle paint
+  # and its wrong-pane safeguard — behave exactly as they did under the hand-run
+  # `TASK_FORCE_ROLE=<role> radio register ...` workaround #229 verified by hand.
+  local explicit_repair=0
+  if [[ -z "${TASK_FORCE_ROLE:-}" ]]; then
+    explicit_repair=1
+    TASK_FORCE_ROLE="$role"
+    _log "register: explicit repair — no \$TASK_FORCE_ROLE in the environment, adopting --role $role for this call"
+  fi
 
   # Resolve the zellij stable tab_id once, here at register time, and persist
   # it as TAB_ID= alongside TAB=. From this point on, _rename_tab / cmd_send
@@ -1180,6 +1414,24 @@ cmd_register() {
   # hide inside the generic register line.
   if [[ "$tab_id_src" == none ]]; then
     _log "register: no tab binding for $role (zellij lookup miss, no TAB_ID in \$INFO_FILE) — TAB_ID left empty; sends to it will queue with no wake"
+  fi
+
+  # A hand-run repair register reports its own outcome (#229). The hook path
+  # stays silent on stderr — its channel is the log and the drain summary on
+  # stdout — but a person typing this to un-wedge a role has to be told whether
+  # the role came back WAKEABLE. An empty TAB_ID trades a loud failure for a
+  # silent one: senders stop getting `WARNING — no session` and start getting a
+  # cheerful `queued` against a role nothing will ever wake, which is why it is
+  # worth undoing rather than leaving in place.
+  if (( explicit_repair )); then
+    if [[ -z "$tab_id" ]]; then
+      # shellcheck disable=SC2016  # literal $VARs / backticks for the reader, not expansions
+      printf 'radio: WARNING — registered %s with an EMPTY TAB_ID: no tab is bound, so nothing can wake it and senders will be told `queued` instead of warned. Re-run from the tab that role owns, or undo with: TASK_FORCE_ROLE=%s radio unregister --manual\n' \
+        "$role" "$role" >&2
+    else
+      printf 'radio: registered %s (tab=%s tab_id=%s, via %s) — wakeable again.\n' \
+        "$role" "$tab" "$tab_id" "$tab_id_src" >&2
+    fi
   fi
 
   # Legacy `pm` inbox adoption (#182): before the drain summary below, a fresh
@@ -2052,6 +2304,15 @@ cmd_send() {
   [[ -n "$intent" ]] || { echo "send: --intent required" >&2; exit 2; }
   _validate_role "$to" || exit 2
 
+  # Sender identity, recovered or refused — never `from: unknown` (#229). It has
+  # to run BEFORE the --to pm shim below, because the shim resolves `pm` through
+  # the sender's own identity: with none, `--to pm` stayed the LITERAL `pm`, and
+  # the report landed in the one mailbox shared by every repo on the machine —
+  # which #210 made adoptable first-come, so whichever PM booted first, in
+  # whichever repo, could claim it. #182's cross-repo adoption filter cannot
+  # close that hole; refusing to send unattributed is what closes it.
+  _require_role_or_recover send
+
   # --to pm compat shim (#165): resolve `pm` to the repo-scoped pm-<reponame>
   # role. `pm` is the stable wire format (RC-1), so this runs on every PM-bound
   # send. No-op for any explicitly-scoped target (pm-foo / worker-… / reviewer-…).
@@ -2247,11 +2508,19 @@ cmd_send() {
 }
 
 cmd_check() {
-  _silent_exit_if_no_role
-  _require_role
+  # NOT _silent_exit_if_no_role (#229). `check` is typed by an agent or a human
+  # on purpose — it is also what a radio wake types into the recipient's prompt
+  # box — so exiting 0 with no output was an affirmative answer to a question
+  # nobody asked: byte-identical to "you have no mail" while mail sat in the
+  # inbox. Same failure shape as #194's empty check list read as green.
+  _require_role_or_recover check
   local inbox
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
-  [[ -d "$inbox" ]] || { mkdir -p "$inbox"; return 0; }
+  # Fall THROUGH to the loop when the mailbox is brand new rather than returning
+  # early (#229): a role with no mailbox directory yet is an empty inbox, and it
+  # should be told so in words. `check` printing nothing at all is the shape this
+  # ticket is about.
+  [[ -d "$inbox" ]] || mkdir -p "$inbox"
   shopt -s nullglob
   local any=0
   for f in "$inbox"/*.md; do
@@ -2269,7 +2538,7 @@ cmd_check() {
 }
 
 cmd_read() {
-  _require_role
+  _require_role_or_recover read
   # Default beat is read+ack: print body, then move inbox -> processed. The
   # split between `read` and `ack` was a footgun — workers would `read`, act,
   # and forget to `ack`, leaving stale messages that re-listed on every
@@ -2305,7 +2574,7 @@ cmd_read() {
 }
 
 cmd_ack() {
-  _require_role
+  _require_role_or_recover ack
   local id="${1:-}"
   [[ -n "$id" ]] || { echo "ack: <id> required" >&2; exit 2; }
   local inbox processed
@@ -2663,7 +2932,20 @@ case "$sub" in
   # have $TASK_FORCE_ROLE set (from task-work / task-pm), so they still hit the
   # loud `register: --role required` / `--agent required` errors in cmd_register
   # if they forget a flag — typo protection preserved.
-  register)    [[ -z "${TASK_FORCE_ROLE:-}" ]] && exit 0; cmd_register "$@" ;;
+  # ... and gated on the resolved ARGUMENT rather than the env var since #229:
+  # keying it on $TASK_FORCE_ROLE made `radio register`, the documented way out
+  # of a roleless session, a silent no-op precisely when it was needed — the
+  # catch-22 that blocked recovery from every other symptom in that ticket.
+  register)
+    if [[ -z "${TASK_FORCE_ROLE:-}" ]] && ! _argv_has_valid_role "$@"; then
+      # Logged, unlike the bare `exit 0` this replaces: "the hook never fired"
+      # and "the hook fired and register no-opped" left identical traces —
+      # nothing — which is why #229 went eleven hours unnoticed and had its
+      # handoff relayed by hand.
+      _log "register: no-op — no \$TASK_FORCE_ROLE and no valid --role in argv (plain session, or a SessionStart hook with an empty environment)"
+      exit 0
+    fi
+    cmd_register "$@" ;;
   register-alias) cmd_register_alias "$@" ;;
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;

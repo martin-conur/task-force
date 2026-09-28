@@ -556,11 +556,11 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 | Command | What it does |
 |---------|--------------|
 | `radio send --to <role> --intent <kind> [--pr N] [--issue N] [--body TEXT]` | Send a message (e.g. `--to pm --intent review-requested --pr 42`); body can come from stdin |
-| `radio check`                       | List unread messages addressed to this role |
+| `radio check`                       | List unread messages addressed to this role. In a session with no `$TASK_FORCE_ROLE` (a resume — see [Roleless sessions](#roleless-sessions-a-resume-registers-nothing)) it derives the role from disk, or fails loudly; it never exits 0 in silence while mail waits (#229) |
 | `radio read <id>`                   | Print one message AND mark it acknowledged (moves `inbox/` → `processed/`) |
 | `radio read --peek <id>`            | Print without acknowledging — for inspection / debugging |
 | `radio ack <id>`                    | Mark it acknowledged (idempotent — no-op if already processed by a prior `read`) |
-| `radio register` / `radio unregister [--manual]` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`). `unregister` defaults to **not** removing anything, whatever its stdin looks like: it wipes only when a piped `SessionEnd` payload names a real-exit `reason` (`logout` / `prompt_input_exit` / `other`), and logs a skip for `clear` / `resume`, an unparseable payload, an empty one, or any payload at all on a host without `jq` (where no `reason` can be read, so none can be trusted). A terminal on stdin does **not** authorize a wipe (it did until #198) — so bare `radio unregister` typed by hand is a no-op that prints `refusing to wipe <role> … re-run with --manual` on stderr and explains itself, rather than silently tearing down the session. `--manual` (alias `--force`) is the explicit opt-in for deliberate cleanup — it bypasses the stdin inspection entirely, works from any stdin shape, and is what `task-done` passes. A wipe removes the `.info` (and any `--also` aliases pointing at it); the `.loadout` / `.agent` sidecars beside it deliberately survive — see [Session state and self-heal](#session-state-and-self-heal) |
+| `radio register` / `radio unregister [--manual]` | Add/remove this tab's session file (`~/.task-force/radio/sessions/<role>.info`). `unregister` defaults to **not** removing anything, whatever its stdin looks like: it wipes only when a piped `SessionEnd` payload names a real-exit `reason` (`logout` / `prompt_input_exit` / `other`), and logs a skip for `clear` / `resume`, an unparseable payload, an empty one, or any payload at all on a host without `jq` (where no `reason` can be read, so none can be trusted). A terminal on stdin does **not** authorize a wipe (it did until #198) — so bare `radio unregister` typed by hand is a no-op that prints `refusing to wipe <role> … re-run with --manual` on stderr and explains itself, rather than silently tearing down the session. `--manual` (alias `--force`) is the explicit opt-in for deliberate cleanup — it bypasses the stdin inspection entirely, works from any stdin shape, and is what `task-done` passes. A wipe removes the `.info` (and any `--also` aliases pointing at it); the `.loadout` / `.agent` sidecars beside it deliberately survive — see [Session state and self-heal](#session-state-and-self-heal). `register` is gated on the resolved `--role` rather than on `$TASK_FORCE_ROLE`, so it is the way out of a roleless session (#229) — run it from the tab that role owns |
 | `radio ready` / `radio busy`        | Toggle this session's `STATE` field — drives the wake-up vs. queue decision on the sender side |
 | `radio stop-hook`                   | Stop-hook entrypoint: empty inbox → mark idle; unread messages → mark busy and emit Stop-hook block JSON so the agent continues and drains them. On the forced continuation it re-blocks only for ids that weren't in the block it caused |
 | `radio prompt-hook`                 | UserPromptSubmit-hook entrypoint: mark busy; if the inbox has unread messages, print a one-line summary that Claude Code injects into the model's context |
@@ -591,7 +591,7 @@ Because `radio send` now writes to stdout, anything **capturing** its output mus
 
 | Hook              | Command                       | Why                                            |
 |-------------------|-------------------------------|------------------------------------------------|
-| `SessionStart`    | `radio register`              | Claims the role's session file — and on a *fresh* start injects a summary of any inbox that queued while the role was offline (its stdout is injected into context, like `UserPromptSubmit`; claude loadouts only). A fresh `pm-<repo>` register also adopts any orphaned literal-`pm` backlog (write-only post-#165) into its own inbox, provenance-stamped, and surfaces it in that summary — only the messages whose `from:` names **this** repo, so another repo's backlog is left for its own PM (#210) |
+| `SessionStart`    | `radio register`              | Claims the role's session file — or no-ops, logging one line, when the session has no role to claim (it fires on `startup` / `resume` / `compact` / `clear`, but a *resumed* process carries no identity env: [Roleless sessions](#roleless-sessions-a-resume-registers-nothing)) — and on a *fresh* start injects a summary of any inbox that queued while the role was offline (its stdout is injected into context, like `UserPromptSubmit`; claude loadouts only). A fresh `pm-<repo>` register also adopts any orphaned literal-`pm` backlog (write-only post-#165) into its own inbox, provenance-stamped, and surfaces it in that summary — only the messages whose `from:` names **this** repo, so another repo's backlog is left for its own PM (#210) |
 | `UserPromptSubmit`| `radio prompt-hook`           | Marks the session busy — and surfaces any unread inbox into the model's context (its stdout is injected, unlike Stop's) |
 | `Stop`            | `radio stop-hook`             | Marks idle — or blocks the stop so the agent drains queued messages first |
 | `PostToolUse`     | `radio busy`                  | State flip only — deliberately NOT `prompt-hook`; it fires after every tool call, and the inbox summary belongs at prompt time, not sprayed mid-turn |
@@ -674,9 +674,43 @@ ensure_session: re-seeded worker-foo … tab_id=41 tab_id_src=info-file loadout=
 ensure_session: no tab binding for worker-foo (zellij lookup miss, no TAB_ID in $INFO_FILE) — TAB_ID left empty; sends to it will queue with no wake
 ```
 
+### Roleless sessions: a resume registers nothing
+
+The role name itself gets the same from-disk recovery as `TAB_ID`, for the same
+reason — and the reason is not a hook that failed to fire. `SessionStart` fires on
+all four sources (`startup`, `resume`, `compact`, `clear`; verified with a canary
+hook). But a resume is a **new process**, and the identity env is a command prefix
+on the one `task-work` launched — `bash -ic "TASK_FORCE_ROLE=… ZELLIJ_TAB=… claude
+…"` — so it lives in no shell and nothing can hand it back. `/compact` and
+`/clear` keep the same process and really do re-register; a resume runs the hook
+with an empty environment, and `--role $TASK_FORCE_ROLE` (unquoted, in the hook
+command) collapses to nothing.
+
+Before #229 every beat keyed off that variable then degraded **silently**: `send`
+wrote `from: unknown` into the machine-wide literal-`pm` inbox that #210 makes
+adoptable first-come, `check` exited 0 with no output while mail sat in the inbox,
+the role was unwakeable, and `register` — the documented repair — no-opped,
+because the dispatcher gated it on the very variable it exists to restore, before
+ever reading `--role`. All four left no log line, so "the hook never fired" and
+"the hook fired and no-opped" were indistinguishable.
+
+Now:
+
+| Invocation | With no `$TASK_FORCE_ROLE` |
+|---|---|
+| `check` / `read` / `ack` / `send` | Derive the role from disk, announce it on stderr, and **refuse loudly** if it can't be derived. In a worktree, `<worktree-base>/.<slug>.info` + the main repo name rebuild `worker-<reponame>-<slug>` (or `reviewer-<reponame>-pr<N>`, tab slug `review-pr<N>`); in a main checkout the repo name gives `pm-<reponame>`, but only if that role already has radio state on disk — otherwise a plain `claude` in the repo root would claim the PM's address. No candidate is claimed while its session file has a *fresh* heartbeat: only a process holding the role env can write one, so that means someone else is it. |
+| `busy` / `ready` / `awaiting` / `stop-hook` / `prompt-hook` / `unregister` | Unchanged silent no-ops (#93). Recovery is for commands typed on purpose; these fire automatically in every plain `claude` session and must stay quiet. |
+| `register --role <role> …` | Runs. This is the repair, and it is why it had to be fixed first. It reports on stderr whether the role came back **wakeable**, and warns explicitly when the tab lookup missed and left `TAB_ID` empty — a state strictly worse than no session, because senders then get a cheerful `queued` instead of `WARNING — no session`. Run it from the tab that role owns. |
+
+Recovery deliberately stops at identity: it does not write a session file, because
+a register whose tab lookup misses is the empty-`TAB_ID` trap above. That lookup is
+by tab *name* within the zellij session, so it can resolve from another tab — the
+role's own tab is simply the one place it is guaranteed to. `grep 'recover-role:'
+~/.task-force/radio/log` shows every recovery and refusal.
+
 ### Cleanup
 
-If a tab dies unexpectedly (or Claude resumes without re-firing `SessionStart`), the session file's `LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session older than an hour. Safe to `rm ~/.task-force/radio/sessions/<role>.info` or just leave it — the next legitimate `radio register` overwrites it.
+If a tab dies unexpectedly (or Claude resumes — the hook fires, but a resumed process has no role to register: [Roleless sessions](#roleless-sessions-a-resume-registers-nothing)), the session file's `LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session older than an hour. Safe to `rm ~/.task-force/radio/sessions/<role>.info` or just leave it — the next legitimate `radio register` overwrites it.
 
 On kiro this is the *routine* cleanup step, not just the crash path: `agentStop` fires per turn, not on session close, so there is no kiro analogue of claude's `SessionEnd` → `radio unregister`. `task-done` covers the worker happy path (it unregisters before removing the worktree), but any kiro tab closed without it leaves a session file still advertising `STATE=idle` — which makes `radio send` try to wake a tab that's gone. Run `radio orphans` periodically and delete what it lists. Heartbeat-driven auto-unregister is #127.
 
@@ -698,6 +732,7 @@ needed attention. So when radio looks broken, start at the **log**
 | **"A role keeps disappearing from `sessions/`."** | Session flapping — something fires `SessionEnd` → `radio unregister` on intra-session events (`/clear`, `/compact`, resume, or an unexplained cascade) and the wipe takes `TAB_ID` with it. #187 / #198 made `unregister` refuse unless a wipe is explicitly authorized. | Compare the three counters below. Post-#187, `skipping` should carry the bulk of the traffic and `unregister role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=` — anything calling it in a loop inflates that counter alone, notably a test suite that hasn't isolated `$TASK_FORCE_HOME` and is unregistering your live role (#205). Otherwise an **old `radio` binary** is running, since every non-`--manual` call now logs one or the other; `radio` on `PATH` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | **"I ran `radio unregister` and nothing happened."** | Expected behaviour since #198, not a bug. A bare `unregister` has no `SessionEnd` payload naming a real exit, so it refuses. | It printed `refusing to wipe <role> … re-run with --manual` on stderr, and logged a `skipping` line. Pass `--manual` if you actually meant to tear the session down. |
 | **"The PM merged, but the worker never cleaned up its worktree."** | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered — and the worker never heard to run `task-done`. Since #201 gc archives such mail rather than keeping a mailbox nobody will open alive forever. | `ls ~/.task-force/radio/dead-letter/<role>/` — the message is there, id and frontmatter intact. `grep 'gc: dead-lettered' ~/.task-force/radio/log` lists every message gc has archived and when. Remove the stranded worktree by hand (`task-done --remove-worktree` from inside it). See [Undelivered mail is never deleted](#undelivered-mail-is-never-deleted). |
+| **"`radio check` says nothing, but mail is in the inbox"** — or a report arrives `from: unknown`. | The session has no `$TASK_FORCE_ROLE`: it never registered, which is what every resumed session looks like. Fixed in #229 — see [Roleless sessions](#roleless-sessions-a-resume-registers-nothing). | `grep 'recover-role:' ~/.task-force/radio/log` — what was recovered, and what was refused and why. `grep 'register: no-op' ~/.task-force/radio/log` — a hook that fired with an empty environment (before #229 this left no trace at all). Repair it with `radio register --role <role> --tab <tab> --repo "$(git rev-parse --show-toplevel)" --agent claude`, **from that role's own tab**, and check the stderr line says wakeable rather than `EMPTY TAB_ID`. |
 | **"The worker says it's idling for a message that's in its own inbox."** | Fixed in #197. Pre-#197 the stop-hook gave up on the `stop_hook_active` flag alone, so a message that landed *during* a forced drain turn got no continuation of its own — terminal for an idle `--auto` worker nobody was going to prompt again. | `grep BLOCKED_IDS ~/.task-force/radio/sessions/<role>.info` — the ids the last block was about. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the agent ignored the same ids twice. |
 
 #### Reading the log

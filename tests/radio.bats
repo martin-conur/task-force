@@ -112,10 +112,21 @@ teardown() {
   [ -z "$output" ]
 }
 
-@test "check is a silent no-op when TASK_FORCE_ROLE is unset" {
+@test "check REFUSES loudly when TASK_FORCE_ROLE is unset and no role is derivable (#229)" {
+  # This used to be a silent exit 0 — an affirmative-looking answer to a question
+  # nobody asked, byte-identical to "you have no mail" while mail sat in the
+  # inbox. #93's silence is for HOOK entrypoints (busy / ready / awaiting /
+  # stop-hook / prompt-hook / unregister, all still asserted above); `check` is
+  # typed on purpose, and it is what a radio wake types into a prompt box.
+  # Recovery from disk is exercised in tests/radio_roleless_session.bats; the cd
+  # is what makes refusal the outcome here — run from a task-work worktree (this
+  # suite routinely is) the role WOULD be derivable, which is the fix working.
+  local outside; outside=$(mktemp -d)
+  cd "$outside"
   run env -u TASK_FORCE_ROLE "$RADIO" check
-  assert_success
-  [ -z "$output" ]
+  assert_failure
+  assert_output --partial "TASK_FORCE_ROLE"
+  rm -rf "$outside"
 }
 
 @test "unregister is a silent no-op when TASK_FORCE_ROLE is unset" {

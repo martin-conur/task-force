@@ -1051,6 +1051,24 @@ If `$TASK_FORCE_HOME` is missing or aimed back at the real home, loading
 `tests/helpers/common.bash` aborts the run with an explanation rather than
 writing to the live mailbox.
 
+**PATH isolation.** The same shape, a different variable (#223). `task-work` and
+`task-done` resolve `task-board` from `$PATH` in preference to their own sibling
+copy, and `install.sh` plants `~/.local/bin/task-board` as a symlink into
+whichever checkout ran the installer last — so on any machine that has ever
+installed task-force, the suite was rendering its fixtures' boards with **another
+clone's** code. That copy is the root dispatcher, which refuses on a fixture repo
+carrying no workflow doc, and a `|| true` swallowed the refusal whole: the only
+symptom was a missing `tasks/_board.md` two assertions later. CI installs
+nothing, so CI stayed green — the suite was red for exactly the people most
+likely to run it. `tests/setup_suite.bash` now rewrites `$PATH` once per run so no
+task-force command is reachable by name, mirroring each holding directory as
+symlinks minus our own commands so everything *else* it provides (`jq`, `gh`, …)
+still resolves. Loading `tests/helpers/common.bash` aborts the run if one is
+reachable anyway. A test that wants a `task-board` on `$PATH` plants its own —
+`tests/board_regen.bats` covers both resolution branches on purpose, since a
+branch that only fires by accident of the developer's environment is how this
+bug survived.
+
 <details>
 <summary><b>Test suites</b> (click to expand)</summary>
 
@@ -1080,6 +1098,8 @@ writing to the live mailbox.
 | `task_remove.bats`                | `bin/task-remove` — zero artifacts left on all seven loadouts (asserted against `la_owned_paths`), user-content survival, `--purge`, the ci-guard hook and its `commit-msg.local` restore, the global install left alone, `--dry-run` inertness |
 | `task_done.bats`                  | `task-done` across combos — cleanup, PR, guards |
 | `radio_home_isolation.bats`       | The suite's own radio-home isolation — nothing lands under `$HOME/.task-force` |
+| `path_isolation.bats`             | The suite's own `$PATH` isolation — no task-force command is reachable by name, and the board tests survive a foreign `task-board` on `$PATH` |
+| `board_regen.bats`                | `lib/board-regen.sh` — both `task-board` resolution branches (`$PATH` copy, sibling copy), and a failed render warning instead of aborting |
 
 </details>
 
@@ -1088,6 +1108,7 @@ Infrastructure:
 - `tests/helpers/common.bash` — `setup_repo`, `setup_stubs`, `setup_worktree`, `teardown_all`, `assert_stub_called`
 - `tests/setup_suite.bash` — runs once per bats invocation; exports the run-scoped `$TASK_FORCE_HOME`
 - `tests/helpers/radio_home.bash` — `task_force_home_is_isolated`, `require_isolated_task_force_home`
+- `tests/helpers/path_isolation.bash` — `sanitize_path_of_task_force`, `require_task_force_free_path`, `task_force_commands_on_path`
 - `tests/helpers/stubs/` — fakes for `zellij`, `gh`, `kiro-cli`, `claude`; every call lands in `$STUB_CALLS_DIR/*.calls`
 - `tests/libs/` — bats-core, bats-support, bats-assert as git submodules
 

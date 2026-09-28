@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# region:board-regen-source
+# Board rendering exists only on the local loadouts; the five tracker-backed
+# task-done copies source nothing, so this stands on its own rather than joining
+# a shared header region.
+AW_ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=lib/board-regen.sh
+source "$AW_ROOT_REAL/lib/board-regen.sh"
+# endregion:board-regen-source
+
 # region:flag-parsing
 usage() {
   echo "Usage: task-done [--force] [--remove-worktree]"
@@ -185,15 +194,14 @@ if [[ -f "$STATE_FILE" ]]; then
   ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 fi
 
-# Regenerate the board from the main worktree (where tasks/ lives).
-if command -v task-board >/dev/null 2>&1; then
-  task-board --repo "$MAIN_WORKTREE" >/dev/null || true
-else
-  _BOARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task-board"
-  if [[ -x "$_BOARD_SCRIPT" ]]; then
-    "$_BOARD_SCRIPT" --repo "$MAIN_WORKTREE" >/dev/null || true
-  fi
-fi
+# region:board-regen
+# Regenerate tasks/_board.md from the main worktree (where tasks/ lives). A
+# failure warns and names which copy of task-board ran instead of aborting the
+# cleanup: the silent `|| true` this replaces is how a foreign ~/.local/bin copy
+# came to fail on every local-loadout machine with no symptom but a stale
+# artifact (#223).
+aw_regenerate_board "$MAIN_WORKTREE"
+# endregion:board-regen
 
 # Reviewer worktrees write PR_NUMBER into their info file; they're pure
 # scaffolding and their branch never merges into main (the PR does — its

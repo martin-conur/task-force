@@ -90,13 +90,17 @@ TASK_DONE_RADIO_TESTS='unregister|radio|mailbox'
 }
 
 @test "a suite that never calls setup_task_force_home is still isolated" {
-  # Stand up a throwaway bats tree carrying only setup_suite.bash and its
-  # helper, plus a probe file whose setup() does nothing at all. The probe has
-  # to come out isolated purely on the strength of the suite-level default.
+  # Stand up a throwaway bats tree carrying only setup_suite.bash and the
+  # helpers it sources, plus a probe file whose setup() does nothing at all. The
+  # probe has to come out isolated purely on the strength of the suite-level
+  # default.
   local dir="$FAKE_HOME/probe"
   mkdir -p "$dir/helpers"
   cp "$REPO_ROOT_REAL/tests/setup_suite.bash" "$dir/"
   cp "$REPO_ROOT_REAL/tests/helpers/radio_home.bash" "$dir/helpers/"
+  # setup_suite also isolates $PATH (#223); without its helper the probe run
+  # dies on the source line rather than on anything this test is about.
+  cp "$REPO_ROOT_REAL/tests/helpers/path_isolation.bash" "$dir/helpers/"
   cat > "$dir/probe.bats" <<'PROBE'
 @test "probe records its radio home" {
   printf '%s' "${TASK_FORCE_HOME:-}" > "$PROBE_OUT"

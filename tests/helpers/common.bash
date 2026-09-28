@@ -18,6 +18,18 @@ if [[ -n "${TASK_FORCE_HOME:-}" || "${BATS_TEST_NAME:-}" != source ]]; then
   require_isolated_task_force_home || exit 1
 fi
 
+# PATH isolation guard (#223). Same chokepoint, same reason: a file that reaches
+# $PATH's task-board instead of the sibling copy is testing whichever checkout
+# ~/.local/bin happens to point at.
+# shellcheck source=tests/helpers/path_isolation.bash
+source "$REPO_ROOT_REAL/tests/helpers/path_isolation.bash"
+# Unlike $TASK_FORCE_HOME there is no "unset proves nothing" case — $PATH is
+# always set — but the collection pass still runs before setup_suite has
+# rewritten it, so only the real pass can be judged.
+if [[ "${BATS_TEST_NAME:-}" != source ]]; then
+  require_task_force_free_path || exit 1
+fi
+
 KIRO_TASK_WORK="$REPO_ROOT_REAL/kiro-notion/bin/task-work"
 JIRA_TASK_WORK="$REPO_ROOT_REAL/claude-jira/bin/task-work"
 KIRO_TASK_DONE="$REPO_ROOT_REAL/kiro-notion/bin/task-done"

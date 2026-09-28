@@ -477,6 +477,50 @@ assert_task_done_unregisters() {
 }
 
 # ---------------------------------------------------------------------------
+# Board regeneration on the local loadouts (#223)
+# ---------------------------------------------------------------------------
+
+# task-done re-renders tasks/_board.md from the main worktree on the way out.
+# It resolves task-board the same way task-work does — $PATH first, then the
+# sibling copy — so the suite has to be out of reach of ~/.local/bin for this to
+# be testing the checkout it thinks it is (see tests/helpers/path_isolation.bash).
+assert_task_done_regenerates_board() {
+  local script="$1"
+  mkdir -p "$MAIN_REPO/tasks"
+  cat > "$MAIN_REPO/tasks/001-add-login.md" <<'TASK'
+---
+id: 001
+title: Add login
+status: todo
+priority: P2
+tags: []
+created: 2026-05-15
+branch: ""
+pr: ""
+---
+
+## Problem
+
+A test problem.
+TASK
+  run_task_done "$script" --force
+  assert_success
+  # Checked against task-done's own output, before $output is replaced below.
+  refute_output --partial "task-board failed"
+  assert [ -f "$MAIN_REPO/tasks/_board.md" ]
+  run cat "$MAIN_REPO/tasks/_board.md"
+  assert_output --partial "Add login"
+}
+
+@test "claude-local: task-done regenerates tasks/_board.md" {
+  assert_task_done_regenerates_board "$CLAUDE_LOCAL_TASK_DONE"
+}
+
+@test "kiro-local: task-done regenerates tasks/_board.md" {
+  assert_task_done_regenerates_board "$KIRO_LOCAL_TASK_DONE"
+}
+
+# ---------------------------------------------------------------------------
 # Reviewer-worktree branch cleanup (issue #148)
 # A reviewer worktree (created by task-reviewer) writes PR_NUMBER= into its
 # $INFO_FILE. The branch (task/review-pr<N>) is pure scaffolding forked from

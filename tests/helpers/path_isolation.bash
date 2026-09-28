@@ -92,13 +92,18 @@ task_force_commands_on_path() {
 # Mirrors are created under $1, which the caller owns and must clean up.
 sanitize_path_of_task_force() {
   local mirror_root="${1:?mirror root required}"
-  local out='' dir n=0
+  local out='' seen='' dir n=0
   local -a dirs=()
   IFS=: read -r -a dirs <<< "$PATH"
   for dir in ${dirs[@]+"${dirs[@]}"}; do
     # An empty entry means "the current directory" — never something a test
     # should be resolving a binary from, so it goes rather than being mirrored.
     [[ -n "$dir" ]] || continue
+    # A $PATH listing the same directory twice is common and harmless in itself,
+    # but mirroring it twice is not: each repeat would mint another mirror under
+    # $mirror_root. Keep the first occurrence, which is the one that resolves.
+    case ":$seen:" in *":$dir:"*) continue ;; esac
+    seen+="${seen:+:}$dir"
     if _aw_dir_has_task_force_command "$dir"; then
       n=$((n + 1))
       dir=$(_aw_mirror_dir_without_task_force "$dir" \

@@ -51,8 +51,17 @@ aw_regenerate_board() {
 
 # Print the task-board to use on behalf of the script at $1: $PATH's copy if
 # there is one, else the sibling next to $1. Returns 1 when there is neither.
+#
+# $1 is required, deliberately with no `${1:-${BASH_SOURCE[1]}}` default like the
+# one aw_regenerate_board carries. That default reads as a convenience but could
+# never be right here: a caller reaching this function goes through
+# aw_regenerate_board, so BASH_SOURCE[1] is that frame — this file — and this
+# file has no task-board beside it. So it fails at the call site instead, where
+# whoever wrote the call can see it.
 aw_resolve_task_board() {
-  local self="${1:-${BASH_SOURCE[1]}}" sibling
+  # No apostrophe in the message: the text of a ${var:?...} is shell-parsed, so
+  # one would open a quote and take the rest of the file with it.
+  local self="${1:?aw_resolve_task_board: path of the calling script is required}" sibling
   if command -v task-board >/dev/null 2>&1; then
     command -v task-board
     return 0

@@ -84,6 +84,23 @@ EOF
   assert_equal "$resolved" "$CALLER_BIN/task-board"
 }
 
+@test "resolve: the caller's script path is required, not defaulted" {
+  # There is deliberately no `${1:-${BASH_SOURCE[1]}}` default here. It reads as
+  # a convenience but could never be right: every real caller arrives through
+  # aw_regenerate_board, so BASH_SOURCE[1] would be that frame — lib/ — which has
+  # no task-board beside it. So a direct caller that forgets the argument fails
+  # at its own call site instead of silently resolving nothing (#223 review).
+  # Run it in a subshell and report that subshell's status: a ${var:?} failure
+  # exits the shell it happens in, and bash's status for that is not the same
+  # number everywhere, so the assertion is on "not zero" plus the message.
+  run bash -c "source '$REPO_ROOT_REAL/lib/board-regen.sh'
+               ( aw_resolve_task_board ) 2>&1
+               echo \"rc=\$?\""
+  assert_success
+  assert_output --partial "path of the calling script is required"
+  refute_output --partial "rc=0"
+}
+
 @test "resolve: fails when there is neither" {
   run aw_resolve_task_board "$CALLER"
   assert_failure

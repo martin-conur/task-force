@@ -96,6 +96,28 @@ EOF
   done
 }
 
+@test "sanitize: a repeated directory is mirrored once, not once per mention" {
+  local bin mirror sanitized n
+  bin=$(make_foreign_bin)
+  mirror="$BATS_TEST_TMPDIR/mirror"
+  sanitized=$(PATH="$bin:/usr/bin:$bin:/bin:$bin"; sanitize_path_of_task_force "$mirror")
+
+  # One mirror, not three.
+  n=$(find "$mirror" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')
+  assert_equal "$n" "1"
+  # And the duplicate entries are gone rather than pointing at the same mirror.
+  assert_equal "$sanitized" "$mirror/01-${bin##*/}:/usr/bin:/bin"
+  run bash -c "PATH='$sanitized'; command -v task-board"
+  assert_failure
+}
+
+@test "sanitize: a duplicate directory with nothing of ours collapses too" {
+  local mirror="$BATS_TEST_TMPDIR/mirror" sanitized
+  mkdir -p "$mirror"
+  sanitized=$(PATH="/usr/bin:/bin:/usr/bin"; sanitize_path_of_task_force "$mirror")
+  assert_equal "$sanitized" "/usr/bin:/bin"
+}
+
 @test "sanitize: a \$PATH with nothing of ours is returned unchanged" {
   local d="$BATS_TEST_TMPDIR/clean" mirror="$BATS_TEST_TMPDIR/mirror" sanitized
   mkdir -p "$d" "$mirror"

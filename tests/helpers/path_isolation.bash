@@ -27,11 +27,11 @@
 
 # Every command the loadout installers symlink into ~/.local/bin. A test must
 # reach the checkout under test through an explicit path ($CLAUDE_LOCAL_TASK_WORK
-# and friends in helpers/common.bash), never through $PATH — so all ten are
+# and friends in helpers/common.bash), never through $PATH — so all eleven are
 # stripped, not just the two that are currently resolved by name.
 AW_TASK_FORCE_COMMANDS=(
   task-init task-work task-done task-board task-pm
-  task-reviewer task-config task-remove radio ci-guard
+  task-reviewer task-config task-remove task-recreate-worker radio ci-guard
 )
 
 # True when $1 names one of them.

@@ -8,9 +8,11 @@ echo "Installing claude-gh scripts..."
 # region:install-shared-symlinks
 # Shared root scripts. task-init / task-work / task-done / task-board are
 # impl-dispatching scripts at the repo root (they route per-project based on
-# which workflow doc is present); task-pm, radio, task-config and task-remove are
-# canonical single copies (#170, #219, #220 — the latter two act *across*
-# loadouts, so a per-loadout copy would make no sense).
+# which workflow doc is present); task-pm, radio, task-config, task-remove and
+# task-recreate-worker are canonical single copies (#170, #219, #220, #230 —
+# task-config and task-remove act *across* loadouts, so a per-loadout copy would
+# make no sense; task-pm and task-recreate-worker differ by agent only in their
+# final launch line).
 # Every loadout links task-board even though only the two *-local
 # loadouts implement it: the dispatcher's job on the others is to refuse with a
 # message naming the detected loadout, rather than the command being absent
@@ -35,6 +37,8 @@ ln -sf "$SCRIPT_DIR/../bin/task-config" ~/.local/bin/task-config
 echo "  ✓ Script: task-config (canonical)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-remove" ~/.local/bin/task-remove
 echo "  ✓ Script: task-remove (canonical)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-recreate-worker" ~/.local/bin/task-recreate-worker
+echo "  ✓ Script: task-recreate-worker (canonical)"; sleep 0.05
 # endregion:install-shared-symlinks
 ln -sf "$SCRIPT_DIR/../bin/task-reviewer" ~/.local/bin/task-reviewer
 echo "  ✓ Script: task-reviewer (canonical + kiro routing)"; sleep 0.05

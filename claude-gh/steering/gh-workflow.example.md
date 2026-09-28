@@ -86,6 +86,54 @@ task-work spike-idea --no-launch
 - `--force` — skip all confirmation prompts
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
+`task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
+
+A machine restart (or a killed zellij server) takes out every tab on the box and
+leaves the work itself untouched. What survives: the worktree and its branch,
+`task-work`'s `<worktree-base>/.<slug>.info` sidecar, radio's `<role>.loadout` /
+`<role>.agent` sidecars, and the role's mailbox with its undelivered mail. What
+does not: the zellij tab, the radio session file, and `$TASK_FORCE_ROLE`. Until
+this command there was no way back in — `task-work` refuses on the existing
+branch by design (#38) and `task-done` is the opposite operation — so recovery
+meant a hand-rolled tab and a session radio could not address.
+
+So this re-binds what survived rather than rebuilding it. It opens a fresh tab on
+the existing worktree and launches the agent with the same role env `task-work`
+injects, which is the whole point: `SessionStart` registers the role, and the
+backlog that queued while it was offline is in front of the agent on its first
+turn. It never creates, reuses or removes a worktree — if the worktree is gone,
+that is new work, and it refuses and names `task-work`.
+
+- `--resume` — resume the previous session instead of starting fresh; claude-only.
+  It recovers the session id from the `SessionEnd` payload radio logged for *this
+  worktree*, and falls back to Claude's own picker — saying so — when no id can be
+  established beyond doubt. Worth it when there is uncommitted exploration to
+  keep. Fresh is the default and the safer one: the register-time backlog drain
+  (#168) means a fresh agent opens with its queued handoff already surfaced.
+- `--auto` — radio auto-submit plus keeping focus on the tab you ran it from;
+  on claude it also launches in auto permission mode, on kiro it governs
+  auto-submit only, exactly as `task-work --auto` does on each (#206).
+- `--no-launch` — open the tab, start nothing; the role stays unregistered.
+- `--force` — proceed although a session still looks live.
+
+It refuses when the role still looks live: a zellij tab of that name is open, or
+the session file's heartbeat is newer than an hour (it asks `radio orphans`
+rather than re-deriving the threshold). The first hour after a reboot looks
+exactly like a live session, which is what `--force` is for — read the refusal
+first, it names which of the two signals fired.
+
+The sidecar's `TAB_ID` is **stripped before the tab is spawned** and rewritten
+afterwards, never carried over: zellij's server restarted, so that id is stale by
+definition, and `radio register` adopts it from that file when its own name
+lookup misses (#218). Stripping it first means a register that beats us to the
+write finds nothing to adopt and resolves the new tab by name instead.
+
+```bash
+task-recreate-worker issue-223           # fresh session; tab, role and mail rebound
+task-recreate-worker issue-223 --auto    # hands-off; focus stays where you are
+task-recreate-worker add-auth --resume   # resume the old session (id recovered, else picker)
+```
+
 `task-config show` / `task-config set` — which loadout this repo is on, and how to switch it (#219)
 
 `task-config show` prints the assistant, the tracker, that tracker's settings and

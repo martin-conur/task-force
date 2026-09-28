@@ -191,6 +191,7 @@ require_pty() {
 }
 
 TASK_PM="$REPO_ROOT_REAL/bin/task-pm"
+TASK_RECREATE_WORKER="$REPO_ROOT_REAL/bin/task-recreate-worker"
 TASK_REVIEWER="$REPO_ROOT_REAL/bin/task-reviewer"
 TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"
 

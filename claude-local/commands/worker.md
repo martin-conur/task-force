@@ -81,7 +81,9 @@ Workflow:
 10. **Hand off to PM via radio** — this is the canonical handoff, not a
     message to the user:
     ```bash
-    radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"
+    radio send --to pm --intent review-requested --pr <N> <<'BODY'
+    PR up: <url>
+    BODY
     ```
     Read `radio send`'s stdout — it reports what actually happened:
     - `delivered`, or `queued — pm is busy` / `awaiting` → the ping landed (or drains when PM next stops / is prompted). Idle as planned.

@@ -40,7 +40,9 @@ Workflow:
 9. Transition the issue to the **Status when in review** value from `.claude/jira-workflow.md` (typically `In Review`, same lookup pattern as step 3). If no matching transition is available, leave the issue in its current status — do NOT transition to Done yet.
 10. Hand off to PM via radio — this is the canonical handoff, not a message to the user:
     ```bash
-    radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"
+    radio send --to pm --intent review-requested --pr <N> <<'BODY'
+    PR up: <url>
+    BODY
     ```
     Read `radio send`'s stdout — it reports what actually happened:
     - `delivered`, or `queued — pm is busy` / `awaiting` → the ping landed (or drains when PM next stops / is prompted). Idle as planned.

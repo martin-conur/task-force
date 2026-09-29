@@ -40,7 +40,9 @@ Workflow:
 9. Update the task's Status property in Notion to the **Status when in review** value from `.claude/notion-workflow.md` (typically `In Review`). If the Notion database has no In Review state, leave it at the **Status when starting work** value — do NOT set Done yet.
 10. Hand off to PM via radio — this is the canonical handoff, not a message to the user:
     ```bash
-    radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"
+    radio send --to pm --intent review-requested --pr <N> <<'BODY'
+    PR up: <url>
+    BODY
     ```
     Read `radio send`'s stdout — it reports what actually happened:
     - `delivered`, or `queued — pm is busy` / `awaiting` → the ping landed (or drains when PM next stops / is prompted). Idle as planned.

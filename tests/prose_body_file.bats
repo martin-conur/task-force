@@ -211,14 +211,21 @@ all_prompts() {
   [ "$bad" -eq 0 ]
 }
 
-@test "no shipped prompt hands radio a model-authored body as a quoted argument" {
-  # `--body "<…>"` is a placeholder the model fills with its own prose. The
-  # fixed literals (`--body "merged"`, `--body "see PR comments"`) carry no
-  # backticks and stay as they are.
+@test "no shipped prompt puts a model-filled slot inside a quoted --body" {
+  # The boundary is *slots*, not trackers. A `<…>` anywhere inside the quoted
+  # body is a hole the model fills with text it did not choose the charset of,
+  # so it goes on stdin; a body that is literal end to end can stay quoted.
+  #
+  # Anchoring on the START of the body (`--body "<`) is not enough, and that is
+  # the hole this test was widened to close: the notion planners read
+  # `--body "spec written for <task name>, …"`, with the slot in the middle.
+  # A Notion task titled the way this repo titles its own issues — "a resumed
+  # session has no $TASK_FORCE_ROLE", or anything with backticks — would lose
+  # the variable name to an empty expansion, or execute.
   local f bad=0
   while read -r f; do
-    if prompt_text "$f" | grep -nF -- '--body "<'; then
-      echo "^^^ $f passes model-authored prose as a quoted --body (#234)"
+    if prompt_text "$f" | grep -nE -- '--body "[^"]*<[^"]*"'; then
+      echo "^^^ $f has a model-filled slot inside a quoted --body (#234)"
       bad=1
     fi
   done < <(all_prompts)

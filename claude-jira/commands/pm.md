@@ -18,6 +18,8 @@ When creating issues, set status to the project's "to do" equivalent unless told
 Keep summaries concise and actionable.
 When showing the backlog, group by epic (or project) and sort by priority.
 
+**Prose you author never goes through a double-quoted shell string.** An issue body, a review comment, a merge note, a spec — anything you compose that carries backticked code — goes in on stdin: `gh` takes `--body-file -`, `radio send` takes its body on stdin whenever `--body` is omitted, and both read from a quote-delimited heredoc (`<<'BODY'` … `BODY`, never `<<BODY`). Inside a double-quoted string the shell command-substitutes every backticked token: `pwd -P` posts its own output, and a backticked identifier that names no command posts as **nothing at all** — the word is deleted with no sign it was ever there. Single-quoting is not the fix either; prose contains apostrophes, and the first one ends the string. Fixed literals like `--body "merged"` can stay as they are — the rule is about prose you write.
+
 ### Radio handoffs (canonical)
 
 The worker pings you via `radio` at every transition. Reciprocate so the worker knows when to push more commits, when to clean up, or when to keep waiting. Your own PM role is `pm-<reponame>` (per-repo since #165, so PMs in two repos no longer clobber each other's mailbox); workers reach it by sending `--to pm`, which radio's compat shim resolves to this repo's `pm-<reponame>` via the injected `$TASK_FORCE_PM_ROLE` (or, for a pre-migration worker with no env, the sender's own identity). Worker role names follow `worker-<reponame>-<slug>`; discover the live ones via `ls ~/.task-force/radio/sessions/`.
@@ -33,7 +35,7 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
   ```
   The worker treats this as the signal to transition the Jira issue to Done and run `task-done --remove-worktree`. Without this beat, the worker sits idle and the worktree leaks.
 
-- **After requesting changes**: post the substantive review via `gh pr comment <N> -b "..."` or `gh pr review <N> --request-changes -b "..."`, **then**:
+- **After requesting changes**: post the substantive review via `gh pr comment <N> --body-file -` or `gh pr review <N> --request-changes --body-file -`, with the body on a quote-delimited heredoc as above, **then**:
   ```bash
   radio send --to <worker-role> --intent changes-requested --pr <N> --body "see PR comments"
   ```

@@ -14,7 +14,7 @@ Workflow:
 4. Implement the solution following the spec.
 5. Write tests for new features or bug fixes.
 6. Run tests to verify.
-7. Commit with the issue title as a prefix: `<Issue title>: <short description>`.
+7. Commit with the issue title as a prefix: `<Issue title>: <short description>`. **The message goes in on stdin, never through a double-quoted shell string** — `git commit -F -` off a quote-delimited heredoc (`<<'MSG'` … `MSG`), never `-m "..."`. A commit body names files and symbols in backticks, and inside a double-quoted string the shell command-substitutes every one of them: `pwd -P` commits its own output, and a backticked identifier that names no command commits as nothing at all — the word is gone from the permanent record with no sign it was ever there.
 
 **Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (see the workflow doc for this repo's specifics):
 - **Changelog**: if the repo keeps a changelog, add an entry for this change — and note any upgrade/migration step it requires.
@@ -40,7 +40,9 @@ Workflow:
 9. Update the project item's Status field to the **Status when in review** value from `.claude/gh-workflow.md` (typically `In Review`). If the project has no In Review state, leave it as the **Status when starting work** value — do NOT set Done yet.
 10. Hand off to PM via radio — this is the canonical handoff, not a message to the user:
     ```bash
-    radio send --to pm --intent review-requested --pr <N> --body "PR up: <url>"
+    radio send --to pm --intent review-requested --pr <N> <<'BODY'
+    PR up: <url>
+    BODY
     ```
     Read `radio send`'s stdout — it reports what actually happened:
     - `delivered`, or `queued — pm is busy` / `awaiting` → the ping landed (or drains when PM next stops / is prompted). Idle as planned.

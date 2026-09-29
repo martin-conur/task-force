@@ -11,7 +11,7 @@ Workflow:
 1. Given an issue URL or title, fetch it from GitHub to read the current description and any existing spec.
 2. Explore the codebase to understand the relevant architecture (read files, search symbols, grep patterns).
 3. Design the solution.
-4. Write the implementation spec into the issue body.
+4. Write the implementation spec into the issue body. **Feed it in on stdin, never through a double-quoted shell string** — `gh issue edit <N> --body-file -` with a quote-delimited heredoc (`<<'SPEC'` … `SPEC`), never `--body "..."`. A spec is backtick-dense, and inside a double-quoted string the shell command-substitutes every backticked token: `pwd -P` writes its own output into the issue, and a backticked identifier that names no command writes as nothing at all — the word is deleted with no sign it was ever there.
 5. Hand off to PM via radio — this is the canonical handoff:
    ```bash
    radio send --to pm --intent spec-ready --issue <N> --body "spec written, ready to dispatch"

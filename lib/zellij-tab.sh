@@ -102,10 +102,11 @@ aw_record_tab_id() {
     echo "  has one, task-done will skip closing this tab — close it by hand then."
     echo "  Logged to $log_file (grep 'tab-id:')."
   } >&2
-  mkdir -p "$(dirname "$log_file")" 2>/dev/null \
-    && printf '%s tab-id: %s capture missed slug=%s reason=%s info=%s detail=%s\n' \
-         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$caller" "$slug" "$code" "$info_file" "${reason#* }" \
-         >> "$log_file" 2>/dev/null || true
+  if mkdir -p "$(dirname "$log_file")" 2>/dev/null; then
+    printf '%s tab-id: %s capture missed slug=%s reason=%s info=%s detail=%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$caller" "$slug" "$code" "$info_file" "${reason#* }" \
+      >> "$log_file" 2>/dev/null || true
+  fi
   return 0
 }
 

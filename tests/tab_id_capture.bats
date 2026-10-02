@@ -35,6 +35,14 @@ miss_reason() {
   bash -c 'source "$1"; aw_zellij_tab_id_miss_reason "$2"' _ "$REPO_ROOT_REAL/lib/zellij-tab.sh" "$1"
 }
 
+@test "miss reason: no-zellij-bin when zellij is not on PATH" {
+  export ZELLIJ=fake-session
+  NOJQ_BIN=$(make_nojq_bin)   # bash and coreutils only: no zellij, no jq
+  run env PATH="$NOJQ_BIN" bash -c 'source "$1"; aw_zellij_tab_id_miss_reason "$2"' _ "$REPO_ROOT_REAL/lib/zellij-tab.sh" my-feature
+  assert_success
+  assert_output --regexp '^no-zellij-bin '
+}
+
 @test "miss reason: not-in-zellij when \$ZELLIJ is unset" {
   unset ZELLIJ
   run miss_reason my-feature
@@ -128,6 +136,46 @@ miss_reason() {
   assert_output --partial "Could not capture the zellij tab id for 'my-feature'"
   run grep -c 'tab-id: task-work capture missed slug=my-feature reason=list-tabs-empty ' "$LOG"
   assert_output "1"
+}
+
+# ---------------------------------------------------------------------------
+# The other callers: each names itself in the log line, so a miss is
+# attributable to the command that launched the tab.
+# ---------------------------------------------------------------------------
+
+@test "task-reviewer (claude): a missed capture is reported and logged as task-reviewer" {
+  setup_kiro_agents
+  export ZELLIJ=fake-session GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_output --partial "Could not capture the zellij tab id for 'review-pr42'"
+  run grep -c 'tab-id: task-reviewer capture missed slug=review-pr42 reason=list-tabs-empty ' "$LOG"
+  assert_output "1"
+}
+
+@test "task-reviewer (kiro-gh): a missed capture is reported and logged as task-reviewer" {
+  setup_kiro_agents
+  export ZELLIJ=fake-session GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_output --partial "Could not capture the zellij tab id for 'review-pr42'"
+  run grep -c 'tab-id: task-reviewer capture missed slug=review-pr42 reason=list-tabs-empty ' "$LOG"
+  assert_output "1"
+}
+
+@test "task-recreate-worker: a missed rebind is reported and logged as task-recreate-worker" {
+  export ZELLIJ=fake-session
+  mkdir -p "$WORKTREE_BASE"
+  git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/issue-42" -b task/issue-42
+  printf 'BASE_BRANCH=main\nSLUG=issue-42\nGH_URL=\nTAB_ID=999\n' > "$WORKTREE_BASE/.issue-42.info"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_output --partial "Could not capture the zellij tab id for 'issue-42'"
+  run grep -c 'tab-id: task-recreate-worker capture missed slug=issue-42 reason=list-tabs-empty ' "$LOG"
+  assert_output "1"
+  # The stale id was stripped and nothing replaced it.
+  run grep '^TAB_ID=' "$WORKTREE_BASE/.issue-42.info"
+  assert_failure
 }
 
 # ---------------------------------------------------------------------------

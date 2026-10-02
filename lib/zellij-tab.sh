@@ -93,6 +93,11 @@ aw_record_tab_id() {
     printf 'TAB_ID=%s\n' "$id" >> "$info_file"
     return 0
   fi
+  # The diagnosis re-queries list-tabs (once for the names, once more for the
+  # race check) rather than reusing the first lookup's output. That is up to
+  # three zellij round-trips, deliberately: it only runs once something has
+  # already failed, and the race check is only meaningful as a *fresh* query.
+  # Do not fold them together.
   reason=$(aw_zellij_tab_id_miss_reason "$slug")
   code="${reason%% *}"
   log_file="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/log"

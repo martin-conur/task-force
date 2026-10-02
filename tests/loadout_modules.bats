@@ -77,14 +77,19 @@ TRACKER_HOOKS_TASK_DONE=(
   assert_success
 }
 
-@test "aw_tracker_module names the missing file rather than letting source fail" {
+# These two exercise the helper DIRECTLY, and their names say so. The previous
+# names claimed the helper stopped `source` from failing, which is a claim about
+# the call site and was not what they checked — a green suite would have told the
+# next reader something untrue. The call-site behaviour is pinned separately, at
+# the bottom of this file, by running the real bin/task-done.
+@test "aw_tracker_module itself names the missing file and fails" {
   run bash -c "source '$DETECT'; aw_tracker_module '$REPO_ROOT_REAL' nosuchtracker"
   assert_failure
   assert_output --partial "no tracker module for 'nosuchtracker'"
   assert_output --partial "lib/trackers/nosuchtracker.sh"
 }
 
-@test "aw_agent_module names the missing file rather than letting source fail" {
+@test "aw_agent_module itself names the missing file and fails" {
   run bash -c "source '$DETECT'; aw_agent_module '$REPO_ROOT_REAL' nosuchagent"
   assert_failure
   assert_output --partial "no agent module for 'nosuchagent'"
@@ -207,17 +212,61 @@ TRACKER_HOOKS_TASK_DONE=(
 # 5. task-done refuses rather than running half-composed
 # ---------------------------------------------------------------------------
 
+# Build a checkout of bin/task-done with one tracker module missing. Prints the
+# fake root; the caller runs the script out of it.
+_fakeroot_without_tracker() {
+  local tracker="$1" fake="$BATS_TEST_TMPDIR/fakeroot-$tracker"
+  rm -rf "$fake"
+  mkdir -p "$fake/bin" "$fake/lib/trackers" "$fake/lib/agents"
+  cp "$REPO_ROOT_REAL/bin/task-done" "$fake/bin/task-done"
+  cp "$REPO_ROOT_REAL/lib/detect-impl.sh" "$fake/lib/"
+  cp "$REPO_ROOT_REAL/lib/trackers/"*.sh "$fake/lib/trackers/"
+  cp "$REPO_ROOT_REAL/lib/agents/"*.sh "$fake/lib/agents/"
+  rm -f "$fake/lib/trackers/$tracker.sh"
+  printf '%s' "$fake"
+}
+
 @test "task-done fails loudly when its tracker module is absent" {
   # A broken checkout must not reach the cleanup code with hooks undefined:
   # under `set -u` an undefined aw_tracker_pr_section would abort mid-run, after
   # the confirmation prompt but before the worktree was removed.
-  local fake="$BATS_TEST_TMPDIR/fakeroot"
-  mkdir -p "$fake/bin" "$fake/lib/trackers" "$fake/lib/agents"
-  cp "$REPO_ROOT_REAL/bin/task-done" "$fake/bin/task-done"
-  cp "$REPO_ROOT_REAL/lib/detect-impl.sh" "$fake/lib/"
-  cp "$REPO_ROOT_REAL/lib/trackers/_default.sh" "$fake/lib/trackers/"
-  # gh.sh deliberately absent.
+  local fake
+  fake=$(_fakeroot_without_tracker gh)
   run env AW_IMPL=claude-gh "$fake/bin/task-done" --force
   assert_failure
   assert_output --partial "no tracker module for 'gh'"
+}
+
+@test "task-done's module diagnosis is not buried under shell noise" {
+  # The call-site assertion, and the reason it is separate from the two helper
+  # tests above. `source "$(aw_tracker_module …)" || exit 1` reads as equivalent
+  # to resolve-then-source and is not: the command substitution yields the empty
+  # string before `|| exit 1` is reached, so `source ""` runs and bash appends
+  # `: No such file or directory` naming a line in task-done. The helper tests
+  # pass either way — they never touch the call site — so without this one a
+  # green suite would have implied a clean error the user does not actually get.
+  #
+  # Pin the message bash actually emits. The first draft of this test asserted
+  # `source: : not found`, which is what the review described and not what bash
+  # says; it therefore passed against the very call site it was written to
+  # reject. Verified by hand against both call-site forms before landing.
+  local fake
+  fake=$(_fakeroot_without_tracker gh)
+  run env AW_IMPL=claude-gh "$fake/bin/task-done" --force
+  assert_failure
+  assert_output --partial "no tracker module for 'gh'"
+  refute_output --partial "No such file or directory"
+}
+
+@test "every tracker is resolved before it is sourced, for every loadout" {
+  # Same property as above, swept across all four trackers rather than just gh,
+  # so a future call site added for one tracker cannot regress unnoticed.
+  local t fake
+  for t in $(bash -c "source '$DETECT'; aw_all_trackers"); do
+    fake=$(_fakeroot_without_tracker "$t")
+    run env AW_IMPL="claude-$t" "$fake/bin/task-done" --force
+    assert_failure
+    assert_output --partial "no tracker module for '$t'"
+    refute_output --partial "No such file or directory"
+  done
 }

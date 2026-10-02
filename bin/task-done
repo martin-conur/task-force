@@ -60,8 +60,16 @@ fi
 TRACKER="${IMPL##*-}"
 # shellcheck source=lib/trackers/_default.sh
 source "$AW_ROOT/lib/trackers/_default.sh"
+# Resolve first, source second. `source "$(aw_tracker_module …)" || exit 1` reads
+# as equivalent and is not: on a missing module the helper writes its message to
+# stderr and exits 1, but the command substitution has already yielded the empty
+# string, so `source ""` runs anyway and bash appends its own
+# `task-done: line N: : No such file or directory` before `|| exit 1` is ever
+# reached. The real diagnosis arrives first and is then followed by shell noise
+# about a filename nobody typed, pointing at a line in this script.
+TRACKER_MODULE=$(aw_tracker_module "$AW_ROOT" "$TRACKER") || exit 1
 # shellcheck source=/dev/null
-source "$(aw_tracker_module "$AW_ROOT" "$TRACKER")" || exit 1
+source "$TRACKER_MODULE"
 
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 

@@ -137,6 +137,19 @@ if [[ -z "$_WORKER_TAB_ID" && -n "${ZELLIJ:-}" && -n "${TASK_FORCE_ROLE:-}" ]]; 
     _WORKER_TAB_ID=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$_SESSION_FILE")
   fi
 fi
+# Say which source came up empty, decided now: $INFO_FILE is deleted before the
+# close-tab step that reports it. A sidecar with no TAB_ID= line is task-work's
+# capture failing, which it reports and logs as `tab-id:` at launch (#242).
+_TAB_ID_MISS=""
+if [[ -z "$_WORKER_TAB_ID" ]]; then
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    _TAB_ID_MISS="task-done is not running inside zellij (\$ZELLIJ unset)"
+  elif [[ ! -f "$INFO_FILE" ]]; then
+    _TAB_ID_MISS="no sidecar at $INFO_FILE (branch '$BRANCH')"
+  else
+    _TAB_ID_MISS="$(basename "$INFO_FILE") has no TAB_ID= line; the launch logged why: grep 'tab-id:.*slug=$SLUG ' ${TASK_FORCE_HOME:-$HOME/.task-force}/radio/log"
+  fi
+fi
 
 # Unregister radio session before tearing down the worktree (#94). The
 # `|| true` is a safety net: $TASK_FORCE_ROLE should be set inside a worker
@@ -233,5 +246,6 @@ if [[ -n "$_WORKER_TAB_ID" ]]; then
   zellij action close-tab-by-id "$_WORKER_TAB_ID" >/dev/null 2>&1 || true
 else
   echo "Skipping zellij close-tab (no tab id captured; close this tab manually if needed)."
+  echo "  ($_TAB_ID_MISS)"
 fi
 # endregion:confirm-and-cleanup

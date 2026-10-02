@@ -414,10 +414,11 @@ _setup_stale_local_base() {
   assert_equal "${TAB_ID:-}" "12"
 }
 
-@test ".info has no TAB_ID line when zellij list-tabs misses (graceful no-op)" {
+@test ".info has no TAB_ID line when zellij list-tabs misses (non-fatal)" {
   # No STUB_ZELLIJ_TABS_JSON → stub returns empty → aw_zellij_tab_id_by_name
   # returns empty → no TAB_ID= line is appended. task-done's fallback (radio
-  # session file) covers this case.
+  # session file) covers this case; the miss itself is reported and logged at
+  # launch — see tests/tab_id_capture.bats (#242).
   run "$CLAUDE_GH_TASK_WORK" my-feature
   assert_success
   run grep "^TAB_ID=" "$WORKTREE_BASE/.my-feature.info"

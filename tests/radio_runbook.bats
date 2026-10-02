@@ -284,3 +284,17 @@ runbook_block() {
     refute_output "0"
   done
 }
+
+@test "the missed-tab-id row greps a string lib/zellij-tab.sh actually logs (#242)" {
+  # `tab-id:` is written by aw_record_tab_id, not bin/radio, so it sits outside
+  # DOCUMENTED_GREPS — pinned here against the file that emits it.
+  run grep -cF -- ' tab-id: ' "$REPO_ROOT_REAL/lib/zellij-tab.sh"
+  assert_success
+  refute_output "0"
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
+           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    run grep -cF -- "grep 'tab-id:'" "$f"
+    assert_success
+    refute_output "0"
+  done
+}

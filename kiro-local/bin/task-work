@@ -265,7 +265,11 @@ printf '{"slug":"%s","branch":"%s","worktree":"%s","started_at":"%s","task_file"
 # ran instead of aborting the run: the silent `|| true` this replaces is how a
 # foreign ~/.local/bin copy came to fail on every local-loadout machine with no
 # symptom but a missing artifact (#223).
-aw_regenerate_board "$REPO_ROOT"
+#
+# The caller is named as the root task-work, not this file: the sibling
+# fallback looks for task-board beside it, and since #238 the one copy lives in
+# the root bin/ — there is none beside this loadout's own script any more.
+aw_regenerate_board "$REPO_ROOT" "$AW_ROOT_REAL/bin/task-work"
 # endregion:board-regen
 
 # region:ci-guard-hook

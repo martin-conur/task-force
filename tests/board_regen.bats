@@ -21,7 +21,7 @@ setup() {
   setup_stubs
   mkdir -p "$MAIN_REPO/tasks"
 
-  # Stands in for <impl>/bin/task-work: the sibling fallback is resolved
+  # Stands in for the calling script: the sibling fallback is resolved
   # relative to the *calling script's* path, so the fixture needs one.
   CALLER_BIN="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/impl/bin"
   mkdir -p "$CALLER_BIN"
@@ -99,6 +99,25 @@ EOF
   assert_success
   assert_output --partial "path of the calling script is required"
   refute_output --partial "rc=0"
+}
+
+# The real callers name a root script as `self` (#238): the one task-board is
+# bin/task-board, and neither <impl>/bin/task-work nor lib/trackers/ has a copy
+# beside it any more. Pin that the names they pass resolve to it, so the
+# fallback cannot quietly start finding nothing again.
+@test "resolve: the local callers' fallback is the root task-board" {
+  local caller resolved
+  for caller in "$REPO_ROOT_REAL/bin/task-work" "$REPO_ROOT_REAL/bin/task-done"; do
+    resolved=$(aw_resolve_task_board "$caller")
+    assert_equal "$resolved" "$REPO_ROOT_REAL/bin/task-board"
+  done
+  run grep -c 'aw_regenerate_board "$REPO_ROOT" "$AW_ROOT_REAL/bin/task-work"' \
+    "$REPO_ROOT_REAL/claude-local/bin/task-work" "$REPO_ROOT_REAL/kiro-local/bin/task-work"
+  assert_success
+  refute_output --partial ":0"
+  run grep -c 'aw_regenerate_board "$main_worktree" "$AW_ROOT/bin/task-done"' \
+    "$REPO_ROOT_REAL/lib/trackers/local.sh"
+  assert_output "1"
 }
 
 @test "resolve: fails when there is neither" {

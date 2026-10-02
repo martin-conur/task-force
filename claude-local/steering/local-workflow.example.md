@@ -104,11 +104,11 @@ task-work tasks/007-spike-idea.md --no-launch
 
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
 `.git/task-force/state.json`. Idempotent; safe to run anytime. Like `task-work`
-/ `task-done`, it is a root dispatcher that resolves the loadout per-repo
-(#215) — on a repo tracked in GitHub / Jira / Notion it refuses with a message
-naming that loadout, because there are no local task files to render a board
-from. `--repo PATH` picks the repo, and the dispatcher detects from that path
-rather than from `$PWD`.
+/ `task-done`, it resolves the loadout per-repo (#215) — on a repo tracked in
+GitHub / Jira / Notion it refuses with a message naming that loadout, because
+there are no local task files to render a board from. It is a single root copy
+(#238), not a per-loadout one. `--repo PATH` picks the repo, and detection
+follows that path rather than `$PWD`.
 
 `task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
 

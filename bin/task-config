@@ -4,8 +4,8 @@ set -euo pipefail
 # task-config — show, or switch, a repo's assistant × tracker (#219).
 #
 # A *canonical* script, like bin/task-pm and bin/radio — deliberately NOT a
-# dispatcher into <loadout>/bin/. task-work / task-done / task-board dispatch
-# because they act *within* one loadout. task-config acts *across* them: it has
+# dispatcher into <loadout>/bin/. task-work / task-done / task-board detect
+# the loadout because they act *within* one. task-config acts *across* them: it has
 # to work when detection is ambiguous (that is precisely when you reach for it),
 # and it has to know about a loadout the repo is not on, so a per-loadout copy
 # would make no sense.

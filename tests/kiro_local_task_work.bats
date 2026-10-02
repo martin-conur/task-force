@@ -13,6 +13,11 @@ setup() {
   cd "$MAIN_REPO"
   # kiro-local needs a tasks/ dir for board regen. Create it.
   mkdir -p "$MAIN_REPO/tasks"
+  # The sibling-fallback task-board is the root one (#238), which detects the
+  # loadout before rendering — so this has to be a kiro-local repo, as it
+  # always is when task-work is reached through its dispatcher.
+  mkdir -p "$MAIN_REPO/.kiro/steering"
+  touch "$MAIN_REPO/.kiro/steering/local-workflow.md"
 }
 
 teardown() {
@@ -250,7 +255,7 @@ BOARD
   # The failing copy's own diagnostics reach the user rather than /dev/null.
   assert_output --partial "no workflow doc found"
   # And it names this checkout's own copy as the way to render it by hand.
-  assert_output --partial "$KIRO_LOCAL_TASK_BOARD --repo"
+  assert_output --partial "$TASK_BOARD --repo"
   assert [ ! -f "$MAIN_REPO/tasks/_board.md" ]
 }
 

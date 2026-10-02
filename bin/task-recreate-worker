@@ -488,13 +488,10 @@ else
 fi
 
 # ---------------- rebind TAB_ID ----------------
-# Re-derived from the tab we just opened, never carried over. An empty result
-# (no zellij, no jq, tab not visible yet) is a soft skip — task-done then falls
-# back to the radio session file, exactly as it does for a task-work worker.
-INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
-if [[ -n "$INFO_TAB_ID" ]]; then
-  printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"
-fi
+# Re-derived from the tab we just opened, never carried over. A miss (no zellij,
+# no jq, tab not visible yet) is reported and logged, never fatal — task-done
+# then falls back to the radio session file, exactly as for a task-work worker.
+aw_record_tab_id "$SLUG" "$INFO_FILE" task-recreate-worker
 
 if [[ -n "$NO_LAUNCH" ]]; then
   echo "Tab opened at $WORKTREE_DIR — agent NOT launched (--no-launch)."

@@ -51,6 +51,64 @@ aw_zellij_tab_id_by_name() {
          | .[0] // empty' 2>/dev/null
 }
 
+# Why aw_zellij_tab_id_by_name came back empty for <slug>, as
+# "<code> <human text>" on one line. Codes: no-zellij-bin, not-in-zellij,
+# no-jq, list-tabs-empty, race, no-match. no-match carries the names zellij did
+# report, JSON-quoted so a byte-level mismatch against the slug is visible
+# in the line itself rather than needing the (long-gone) tab to reproduce.
+aw_zellij_tab_id_miss_reason() {
+  local target="$1" tabs names
+  if ! command -v zellij >/dev/null 2>&1; then
+    echo "no-zellij-bin zellij is not on PATH"; return 0
+  fi
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    echo "not-in-zellij not running inside zellij (\$ZELLIJ unset)"; return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "no-jq jq is not on PATH"; return 0
+  fi
+  tabs=$(zellij action list-tabs --json 2>/dev/null || true)
+  names=$(printf '%s' "$tabs" | jq -c '[.[].name]' 2>/dev/null || true)
+  if [[ -z "$names" ]]; then
+    echo "list-tabs-empty zellij action list-tabs --json returned nothing parseable"; return 0
+  fi
+  # The diagnosis re-queries, so a tab that was not listed yet when the lookup
+  # ran can be listed now: name that case instead of reporting a mismatch.
+  if [[ -n "$(aw_zellij_tab_id_by_name "$target")" ]]; then
+    echo "race tab \"$target\" was not listed yet when the lookup ran (it is now)"; return 0
+  fi
+  echo "no-match no tab named \"$target\" (${#target} chars) in list-tabs; names seen: $names"
+}
+
+# Resolve <slug>'s tab_id and append TAB_ID= to <info_file> (#117). On a miss,
+# say so on stderr at the moment it happens and append a `tab-id:` line to
+# radio's log (#242): before this the miss was silent, and its only symptom was
+# task-done's "no tab id captured" hours later, in a different command, after
+# the context that explained it was gone. A miss never fails the caller — the
+# tab is already open and the agent already running. A hit prints nothing.
+aw_record_tab_id() {
+  local slug="$1" info_file="$2" caller="$3" id reason code log_file
+  id=$(aw_zellij_tab_id_by_name "$slug" || true)
+  if [[ -n "$id" ]]; then
+    printf 'TAB_ID=%s\n' "$id" >> "$info_file"
+    return 0
+  fi
+  reason=$(aw_zellij_tab_id_miss_reason "$slug")
+  code="${reason%% *}"
+  log_file="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/log"
+  {
+    echo "⚠ Could not capture the zellij tab id for '$slug': ${reason#* }."
+    echo "  No TAB_ID= was written to $info_file; unless radio's session file"
+    echo "  has one, task-done will skip closing this tab — close it by hand then."
+    echo "  Logged to $log_file (grep 'tab-id:')."
+  } >&2
+  mkdir -p "$(dirname "$log_file")" 2>/dev/null \
+    && printf '%s tab-id: %s capture missed slug=%s reason=%s info=%s detail=%s\n' \
+         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$caller" "$slug" "$code" "$info_file" "${reason#* }" \
+         >> "$log_file" 2>/dev/null || true
+  return 0
+}
+
 # Launch a new zellij tab. See file header for semantics.
 #
 # Optional 4th arg `stay_on_caller_tab`: when "1", capture the caller's tab

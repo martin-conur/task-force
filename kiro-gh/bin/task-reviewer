@@ -277,8 +277,5 @@ fi
 # best-effort steps must not roll the spawn back if they fail.
 trap - ERR
 
-INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
-if [[ -n "$INFO_TAB_ID" ]]; then
-  printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"
-fi
+aw_record_tab_id "$SLUG" "$INFO_FILE" task-reviewer
 # endregion:body

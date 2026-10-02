@@ -225,8 +225,9 @@ echo "Worker started in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
 # zellij-side .name before matching against $SLUG, so a `radio busy` paint
 # that fires between aw_launch_tab returning and this lookup (worker's
 # SessionStart → first prompt) can't make the match miss (#117 review).
-INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
-if [[ -n "$INFO_TAB_ID" ]]; then
-  printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"
-fi
+#
+# A miss is reported here, on stderr and in radio's log, rather than surfacing
+# hours later as task-done's "no tab id captured" (#242). It never aborts the
+# launch — the worker is already running.
+aw_record_tab_id "$SLUG" "$INFO_FILE" task-work
 # endregion:info-tab-id

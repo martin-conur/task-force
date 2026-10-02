@@ -404,7 +404,4 @@ trap - ERR
 
 # Persist the zellij tab_id so task-done can scope close-tab-by-id to this
 # reviewer's tab (same pattern task-work uses for workers).
-INFO_TAB_ID=$(aw_zellij_tab_id_by_name "$SLUG" || true)
-if [[ -n "$INFO_TAB_ID" ]]; then
-  printf 'TAB_ID=%s\n' "$INFO_TAB_ID" >> "$INFO_FILE"
-fi
+aw_record_tab_id "$SLUG" "$INFO_FILE" task-reviewer

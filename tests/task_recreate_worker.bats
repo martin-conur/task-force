@@ -501,13 +501,33 @@ dead_worker_symlinked_base() {
   assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
-@test "without --auto, no auto-submit is injected" {
+@test "without --auto, no auto-submit is injected — radio restores the recorded one (#246)" {
   dead_worker issue-42
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_success
   run launch_cmd_for issue-42
+  # Unset, not `0`: an unset value is what tells radio register to restore the
+  # role's auto-submit sidecar, which is the point of a recovery.
   refute_output --partial "TASK_FORCE_AUTO_SUBMIT"
   refute_output --partial "--permission-mode auto"
+}
+
+@test "--auto-submit opts into auto-submit without auto permission mode (#246)" {
+  dead_worker issue-42
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --auto-submit
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+  refute_output --partial "--permission-mode auto"
+}
+
+@test "--auto --no-auto-submit keeps auto mode and turns auto-submit off explicitly (#246)" {
+  dead_worker issue-42
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --no-auto-submit --auto
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "--permission-mode auto"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
 }
 
 @test "--auto keeps focus on the calling tab" {

@@ -27,7 +27,14 @@ usage() {
   echo "  -p, --plan          Launch claude with --permission-mode plan, running"
   echo "                      /planner instead of /worker. Mutually exclusive with --auto."
   echo "      --auto          Launch claude with --permission-mode auto (auto-accept"
-  echo "                      low-risk tool calls). Mutually exclusive with --plan."
+  echo "                      low-risk tool calls) and opt into radio auto-submit, as"
+  echo "                      --auto-submit does. Mutually exclusive with --plan."
+  echo "      --auto-submit   Opt into radio auto-submit only: an incoming PM ping is"
+  echo "                      submitted for the agent instead of sitting in its prompt"
+  echo "                      box until someone presses Enter. Leaves the permission"
+  echo "                      mode alone, so it composes with --plan or no mode at all."
+  echo "      --no-auto-submit"
+  echo "                      Keep the Enter gate on radio wakes even with --auto."
   echo "  -h, --help          Show this help"
   echo ""
   echo "Examples:"
@@ -45,6 +52,7 @@ BASE_BRANCH_OVERRIDE=""
 FROM_REF_OVERRIDE=""
 POSITIONAL=()
 AUTO_MODE=""
+AUTO_SUBMIT_FLAG=""
 PLAN_MODE=""
 
 while [[ $# -gt 0 ]]; do
@@ -56,7 +64,11 @@ while [[ $# -gt 0 ]]; do
     -f|--from)
       [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
       FROM_REF_OVERRIDE="$2"; shift 2 ;;
+# region:auto-flags
     --auto) AUTO_MODE="1"; shift ;;
+    --auto-submit) AUTO_SUBMIT_FLAG="1"; shift ;;
+    --no-auto-submit) AUTO_SUBMIT_FLAG="0"; shift ;;
+# endregion:auto-flags
     --plan|-p) PLAN_MODE="1"; shift ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -192,11 +204,23 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # gated launch-time identity (step 1), so the ping reaches THIS repo's PM
 # (pm-<reponame>) and never a different repo's PM tab.
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
-# Opt --auto workers into radio's CR (auto-submit) wake-up so PM pings process
-# without a manual Enter (#128). PM and non-auto workers leave this unset, so
-# radio keeps using LF — preserves the human gate that protects a partially-
-# typed prompt from being corrupted by an incoming `radio check`.
-[[ -n "${AUTO_MODE:-}" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+# Radio's CR (auto-submit) wake-up, so PM pings process without a manual Enter
+# (#128). It is its own setting, not a side effect of permission mode (#246):
+# --auto implies it, and --auto-submit / --no-auto-submit set it either way,
+# whichever order they come in. Without it radio keeps using LF — the human
+# gate that protects a partially-typed prompt from an incoming `radio check`.
+# Injected explicitly even when off: radio reads an *unset* value as "a repair —
+# restore whatever this role had", which a fresh launch must never inherit.
+case "${AUTO_SUBMIT_FLAG:-}" in
+  1) AUTO_SUBMIT="1" ;;
+  0) AUTO_SUBMIT="" ;;
+  *) AUTO_SUBMIT="${AUTO_MODE:-}" ;;
+esac
+if [[ -n "$AUTO_SUBMIT" ]]; then
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+else
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 "
+fi
 # endregion:radio-env-injection
 
 echo "Opening zellij tab '$SLUG'..."

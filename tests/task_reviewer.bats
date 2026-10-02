@@ -284,10 +284,28 @@ teardown() {
   assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
-@test "claude task-reviewer: --no-auto omits TASK_FORCE_AUTO_SUBMIT" {
+@test "claude task-reviewer: --no-auto drops permission mode but keeps auto-submit (#246)" {
   AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-auto
   assert_success
-  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
+  run grep -F "permission-mode" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude task-reviewer: --no-auto-submit keeps auto mode, injects TASK_FORCE_AUTO_SUBMIT=0 (#246)" {
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-auto-submit
+  assert_success
+  assert_stub_called zellij "claude --permission-mode auto"
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude task-reviewer: --no-auto --no-auto-submit turns both off (#246)" {
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-auto --no-auto-submit
+  assert_success
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  run grep -F "permission-mode" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
@@ -639,10 +657,11 @@ teardown() {
   assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
-@test "kiro task-reviewer: --no-trust-all omits TASK_FORCE_AUTO_SUBMIT (#139 round-4)" {
+@test "kiro task-reviewer: --no-trust-all injects TASK_FORCE_AUTO_SUBMIT=0 (#139 round-4, #246)" {
   run "$TASK_REVIEWER_KIRO" 42 --no-trust-all
   assert_success
-  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 

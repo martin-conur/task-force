@@ -110,24 +110,33 @@ kiro_launch() {
 # Without --auto: unchanged (LF wake-up, human gate)
 # ---------------------------------------------------------------------------
 
-@test "kiro-gh: no --auto → no TASK_FORCE_AUTO_SUBMIT" {
+@test "kiro-gh: no --auto → explicit TASK_FORCE_AUTO_SUBMIT=0 (#246)" {
   kiro_launch gh
   assert_success
-  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  # Off is said out loud, not left unset: radio reads unset as "restore this
+  # role's recorded setting", which a fresh launch must never inherit.
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
-@test "kiro-local: no --auto → no TASK_FORCE_AUTO_SUBMIT" {
+@test "kiro-local: no --auto → explicit TASK_FORCE_AUTO_SUBMIT=0 (#246)" {
   kiro_launch local
   assert_success
-  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  # Off is said out loud, not left unset: radio reads unset as "restore this
+  # role's recorded setting", which a fresh launch must never inherit.
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
-@test "kiro-notion: no --auto → no TASK_FORCE_AUTO_SUBMIT" {
+@test "kiro-notion: no --auto → explicit TASK_FORCE_AUTO_SUBMIT=0 (#246)" {
   kiro_launch notion
   assert_success
-  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  # Off is said out loud, not left unset: radio reads unset as "restore this
+  # role's recorded setting", which a fresh launch must never inherit.
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
@@ -147,7 +156,7 @@ kiro_launch() {
   kiro_launch gh --trust-all
   assert_success
   assert_stub_called zellij "--trust-all-tools"
-  run grep -F "TASK_FORCE_AUTO_SUBMIT" "$STUB_CALLS_DIR/zellij.calls"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 

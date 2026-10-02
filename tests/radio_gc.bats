@@ -200,12 +200,14 @@ put_msg() {
   put_msg "$MAILBOX/deadworker/processed/old.md" "$OLD_TS"
   printf 'claude-gh' > "$SESSIONS/deadworker.loadout"
   printf 'claude'    > "$SESSIONS/deadworker.agent"
+  printf '1'         > "$SESSIONS/deadworker.auto-submit"   # #246
 
   run "$RADIO" gc
   assert_success
   assert [ ! -d "$MAILBOX/deadworker" ]
   assert [ ! -f "$SESSIONS/deadworker.loadout" ]
   assert [ ! -f "$SESSIONS/deadworker.agent" ]
+  assert [ ! -f "$SESSIONS/deadworker.auto-submit" ]
 }
 
 @test "gc keeps sidecars for a stale-heartbeat role that still has a session file (#188)" {
@@ -218,12 +220,14 @@ put_msg() {
   put_msg "$MAILBOX/staleworker/processed/old.md" "$OLD_TS"
   printf 'claude-gh' > "$SESSIONS/staleworker.loadout"
   printf 'claude'    > "$SESSIONS/staleworker.agent"
+  printf '1'         > "$SESSIONS/staleworker.auto-submit"   # #246
 
   run "$RADIO" gc
   assert_success
   assert [ ! -d "$MAILBOX/staleworker" ]   # mailbox reclaim is unchanged
   assert [ -f "$SESSIONS/staleworker.loadout" ]
   assert [ -f "$SESSIONS/staleworker.agent" ]
+  assert [ -f "$SESSIONS/staleworker.auto-submit" ]
 }
 
 @test "gc --dry-run leaves sidecars alone (#188)" {

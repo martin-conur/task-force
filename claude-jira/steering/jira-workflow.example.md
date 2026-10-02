@@ -55,7 +55,9 @@ Reference the Jira key as a prefix: `{KEY}-123: <short description>`
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
 - `-p, --plan` — launch the worker in Claude plan mode (runs `/planner`); mutually exclusive with `--auto`
-- `--auto` — launch the worker in Claude auto permission mode (runs `/worker`); mutually exclusive with `--plan`
+- `--auto` — launch the worker in Claude auto permission mode (runs `/worker`) **and** opt it into radio auto-submit; mutually exclusive with `--plan`
+- `--auto-submit` — radio auto-submit only: an incoming wake submits itself instead of waiting in the prompt box for an Enter. No permission mode, so it composes with `--plan` — and a worker kept off `--auto` because its task is destructive still gets its handoffs (#246)
+- `--no-auto-submit` — keep the Enter gate on radio wakes, even with `--auto` (wins in either order)
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
@@ -109,6 +111,9 @@ that is new work, and it refuses and names `task-work`.
 - `--auto` — radio auto-submit plus keeping focus on the tab you ran it from;
   on claude it also launches in auto permission mode, on kiro it governs
   auto-submit only, exactly as `task-work --auto` does on each (#206).
+- `--auto-submit` / `--no-auto-submit` — set radio auto-submit alone. With none
+  of these three the rebuilt role keeps the setting radio recorded for it
+  before it died — its `<role>.auto-submit` sidecar (#246).
 - `--no-launch` — open the tab, start nothing; the role stays unregistered.
 - `--force` — proceed although a session still looks live.
 
@@ -345,6 +350,8 @@ It works with no `$TASK_FORCE_ROLE` since #229 — before that the dispatcher
 discarded the call before ever reading `--role`, so the documented way out of a
 roleless session was itself a silent no-op — and it now says on stderr whether
 the role came back wakeable, warning explicitly when `TAB_ID` ended up empty.
+It also keeps the role's radio auto-submit setting: the shell you repair from
+has no `TASK_FORCE_AUTO_SUBMIT`, and an unset value means "as recorded" (#246).
 
 Full command form:
 
@@ -443,10 +450,11 @@ and wipe the session silently. Pass `--manual` when you mean to tear the
 session down; that is what `task-done` does, and it still works from any
 stdin shape.
 
-The session file is a soft cache, not the source of truth (#188). Two tiny
-sidecars sit beside it — `<role>.loadout` and `<role>.agent` — holding the
-values a re-seed cannot read out of the `.info` file it is replacing, and they
-deliberately **survive `unregister`**, `task-done`'s `--manual` one included.
+The session file is a soft cache, not the source of truth (#188). Three tiny
+sidecars sit beside it — `<role>.loadout`, `<role>.agent` and `<role>.auto-submit`
+(#246) — holding the values a re-seed cannot read out of the `.info` file it
+is replacing, and they deliberately **survive `unregister`**, `task-done`'s
+`--manual` one included.
 Only a genuine `register` overwrites them, and `radio gc` reclaims them once
 the role has no session file left at all. So when a wipe is followed by a
 `busy` / `ready` self-heal, the rebuilt session keeps the real `LOADOUT` /
@@ -456,6 +464,15 @@ misses. An empty `TAB_ID` — the state that makes a role permanently unwakeable
 since `radio send` then queues with no wake attempt — is now written only when
 there is genuinely no binding anywhere (non-zellij / CI paths), and the log
 says so distinctly.
+
+The auto-submit sidecar is what lets a hand repair keep `AUTO_SUBMIT` (#246).
+`register` reads `TASK_FORCE_AUTO_SUBMIT` as tri-state: `1` is on, any other
+non-empty value is an explicit off (launchers say `0`), and **unset** restores
+whatever the sidecar recorded. Every launcher states its choice, so only a
+session nobody launched with an opinion inherits — which is exactly a
+`radio register --role …` typed from a plain shell. Before this, that repair
+brought a role back without `AUTO_SUBMIT`, and every wake to it needed an Enter
+for the rest of its life.
 
 The mailbox and log self-prune (#169): a fresh `SessionStart` register runs a
 quiet `radio gc` (14-day default) that deletes dead roles' mailboxes (no session
@@ -477,7 +494,7 @@ mailbox.
 | Symptom | Cause and check |
 |---------|-----------------|
 | Pinged a role, nothing happened | Re-read the sender's own outcome line — only `delivered` means a keystroke landed; every other line names its own reason. Then `ls ~/.task-force/radio/sessions/` (is the role there, spelled exactly?) and `radio orphans` (a >1h-stale heartbeat means the tab is gone). In the recipient's own tab, `radio check` tells you whether the message arrived and simply wasn't acted on. |
-| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. To stop it recurring, relaunch the PM with plain `task-pm` (auto-submit is the default; `--no-auto-submit` is the opt-out) or the worker with `task-work --auto`. The flag is read off the **recipient's** file, after any `--also` alias hop. |
+| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. To stop it recurring, relaunch the PM with plain `task-pm` (auto-submit is the default; `--no-auto-submit` is the opt-out) or the worker with `task-work --auto-submit` (or `--auto`, which on claude adds auto permission mode). The flag is read off the **recipient's** file, after any `--also` alias hop. |
 | A role keeps vanishing from `sessions/` | Session flapping — something fires a session-end wipe on an intra-session event and takes `TAB_ID` with it. Compare `grep -c 'unregister role='`, `'unregister: proceeding'` and `'unregister: skipping'` in the log: post-#187 `skipping` should carry the bulk of the traffic, and `role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=`, and anything calling it in a loop inflates that counter alone — a test suite that has not isolated `$TASK_FORCE_HOME` will do exactly this against your live role. Otherwise an **old `radio` binary** is on `PATH`, since every non-`--manual` call now logs one or the other; `PATH`'s `radio` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
 | PM merged but the worker never cleaned up | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered. Since #201 gc archives such mail instead of keeping a mailbox nobody will open alive forever — look in `~/.task-force/radio/dead-letter/<role>/`, and `grep 'gc: dead-lettered' ~/.task-force/radio/log` for everything it has archived. The message is intact with its id and frontmatter; only the worktree needs cleaning by hand. |

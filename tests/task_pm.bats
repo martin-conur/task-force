@@ -153,11 +153,15 @@ teardown() {
   assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
-@test "claude task-pm --no-auto-submit leaves TASK_FORCE_AUTO_SUBMIT unset (#189)" {
+@test "claude task-pm --no-auto-submit exports an explicit TASK_FORCE_AUTO_SUBMIT=0 (#189, #246)" {
   AW_IMPL=claude-gh run "$TASK_PM" --no-auto-submit
   assert_success
   run cat "$STUB_CALLS_DIR/claude.env"
   refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+  # `0`, not unset: radio register reads an unset value as "restore the role's
+  # recorded setting", so unsetting would silently ignore the opt-out on any
+  # PM that had once been registered with auto-submit (#246).
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
   # Still launched — the opt-out is not an error path.
   run stub_calls claude
   assert_output --partial "/pm"
@@ -171,6 +175,7 @@ teardown() {
   assert_success
   run cat "$STUB_CALLS_DIR/claude.env"
   refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
 }
 
 @test "claude task-pm accepts --auto-submit / --auto as explicit no-ops (#189)" {

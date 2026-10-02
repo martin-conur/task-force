@@ -18,6 +18,7 @@ GROUPS_DEFAULT=(
   "task-work-local|board-regen-source|claude-local/bin/task-work kiro-local/bin/task-work"
   "task-work-local|board-regen|claude-local/bin/task-work kiro-local/bin/task-work"
   "task-work|ci-guard-hook|claude-gh/bin/task-work claude-jira/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work kiro-gh/bin/task-work kiro-local/bin/task-work kiro-notion/bin/task-work"
+  "task-work|auto-flags|claude-gh/bin/task-work claude-jira/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work kiro-gh/bin/task-work kiro-local/bin/task-work kiro-notion/bin/task-work"
   "task-work|radio-env-injection|claude-gh/bin/task-work claude-jira/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work kiro-gh/bin/task-work kiro-local/bin/task-work kiro-notion/bin/task-work"
   "task-work|info-tab-id|claude-gh/bin/task-work claude-jira/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work kiro-gh/bin/task-work kiro-local/bin/task-work kiro-notion/bin/task-work"
   "radio-install-hooks|radio-hook-cmds|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"

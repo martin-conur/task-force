@@ -181,13 +181,19 @@ miss_reason() {
 # ---------------------------------------------------------------------------
 # task-done: the skip message names which source came up empty
 # ---------------------------------------------------------------------------
+#
+# These run the canonical bin/task-done with AW_IMPL pinning the loadout. #242
+# landed against claude-gh/bin/task-done, one of seven copies; #236 collapsed
+# those into one body composing a tracker module, so there is a single place for
+# this skip line to live now. The behaviour asserted is unchanged, and it is in
+# the shared body — no tracker or agent hook goes anywhere near tab-id capture.
 
 @test "task-done: a sidecar without TAB_ID= points at the launch-time tab-id: log line" {
   setup_worktree my-feature
   cd "$WORKTREE_BASE/my-feature"
   export ZELLIJ=fake-session
   unset TASK_FORCE_ROLE
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "Skipping zellij close-tab (no tab id captured"
   assert_output --partial ".my-feature.info has no TAB_ID= line; the launch logged why: grep 'tab-id:.*slug=my-feature ' $TASK_FORCE_HOME/radio/log"
@@ -197,7 +203,7 @@ miss_reason() {
   setup_worktree my-feature
   cd "$WORKTREE_BASE/my-feature"
   unset ZELLIJ TASK_FORCE_ROLE
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "(task-done is not running inside zellij (\$ZELLIJ unset))"
 }
@@ -208,7 +214,7 @@ miss_reason() {
   git checkout -q -b some-other-branch
   export ZELLIJ=fake-session
   unset TASK_FORCE_ROLE
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_output --partial "(no sidecar at "
   assert_output --partial "(branch 'some-other-branch')"
 }

@@ -53,7 +53,11 @@ teardown() {
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
   run "$TASK_DONE_DISPATCHER" --force
   assert_success
-  # kiro-notion's task-done prints branch/base lines
+  # Detection reached the notion tracker module and the shared body ran: the
+  # branch/base lines come from bin/task-done itself, not from a per-loadout
+  # copy (there has been exactly one since #236). What this test pins is the
+  # detection, which is why it asserts on output the shared body produces —
+  # the notion-specific half is asserted in tests/task_done.bats.
   assert_output --partial "Branch:   task/$SLUG"
   assert_output --partial "Base:     main"
 }

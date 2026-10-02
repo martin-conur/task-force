@@ -32,35 +32,39 @@ fi
 
 KIRO_TASK_WORK="$REPO_ROOT_REAL/kiro-notion/bin/task-work"
 JIRA_TASK_WORK="$REPO_ROOT_REAL/claude-jira/bin/task-work"
-KIRO_TASK_DONE="$REPO_ROOT_REAL/kiro-notion/bin/task-done"
-JIRA_TASK_DONE="$REPO_ROOT_REAL/claude-jira/bin/task-done"
 JIRA_TASK_INIT="$REPO_ROOT_REAL/claude-jira/bin/task-init"
 TASK_INIT_DISPATCHER="$REPO_ROOT_REAL/task-init"
 TASK_WORK_DISPATCHER="$REPO_ROOT_REAL/bin/task-work"
-TASK_DONE_DISPATCHER="$REPO_ROOT_REAL/bin/task-done"
 TASK_BOARD_DISPATCHER="$REPO_ROOT_REAL/bin/task-board"
+# task-done is a canonical single copy since #236 — one body composing one
+# tracker module out of lib/trackers/, in place of seven near-identical files.
+# Behaviour suites pin a loadout with `AW_IMPL=<impl>` on the `run`, exactly as
+# the #170 canonical scripts above are driven. The six per-loadout
+# *_TASK_DONE vars are retired with the files they pointed at.
+#
+# Two names for one path on purpose: TASK_DONE is what a behaviour test runs,
+# TASK_DONE_DISPATCHER is what tests/task_done_dispatcher.bats runs when the
+# thing under test is impl *detection* rather than cleanup. Same file, different
+# question, and keeping the names apart keeps those suites readable.
+TASK_DONE="$REPO_ROOT_REAL/bin/task-done"
+TASK_DONE_DISPATCHER="$REPO_ROOT_REAL/bin/task-done"
 JIRA_TEMPLATE="$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
 CLAUDE_NOTION_TASK_WORK="$REPO_ROOT_REAL/claude-notion/bin/task-work"
-CLAUDE_NOTION_TASK_DONE="$REPO_ROOT_REAL/claude-notion/bin/task-done"
 CLAUDE_NOTION_TASK_INIT="$REPO_ROOT_REAL/claude-notion/bin/task-init"
 CLAUDE_NOTION_TEMPLATE="$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
 KIRO_TASK_INIT="$REPO_ROOT_REAL/kiro-notion/bin/task-init"
 KIRO_TEMPLATE="$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
 CLAUDE_GH_TASK_WORK="$REPO_ROOT_REAL/claude-gh/bin/task-work"
-CLAUDE_GH_TASK_DONE="$REPO_ROOT_REAL/claude-gh/bin/task-done"
 CLAUDE_GH_TASK_INIT="$REPO_ROOT_REAL/claude-gh/bin/task-init"
 CLAUDE_GH_TEMPLATE="$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
 KIRO_GH_TASK_WORK="$REPO_ROOT_REAL/kiro-gh/bin/task-work"
-KIRO_GH_TASK_DONE="$REPO_ROOT_REAL/kiro-gh/bin/task-done"
 KIRO_GH_TASK_INIT="$REPO_ROOT_REAL/kiro-gh/bin/task-init"
 KIRO_GH_TEMPLATE="$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
 CLAUDE_LOCAL_TASK_WORK="$REPO_ROOT_REAL/claude-local/bin/task-work"
-CLAUDE_LOCAL_TASK_DONE="$REPO_ROOT_REAL/claude-local/bin/task-done"
 CLAUDE_LOCAL_TASK_INIT="$REPO_ROOT_REAL/claude-local/bin/task-init"
 CLAUDE_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/claude-local/bin/task-board"
 CLAUDE_LOCAL_TEMPLATE="$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
 KIRO_LOCAL_TASK_WORK="$REPO_ROOT_REAL/kiro-local/bin/task-work"
-KIRO_LOCAL_TASK_DONE="$REPO_ROOT_REAL/kiro-local/bin/task-done"
 KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
 KIRO_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/kiro-local/bin/task-board"
 KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"

@@ -9,6 +9,9 @@
 #   aw_all_impls                -> every valid impl name, one per line
 #   aw_impl_list                -> the same, on one line, for an error or a hint
 #   aw_impl_workflow_doc <root> <impl> -> the workflow doc that marks that impl
+#   aw_tracker_module <root> <tracker>  -> lib/trackers/<tracker>.sh, or an error
+#   aw_agent_module <root> <agent>      -> lib/agents/<agent>.sh, or an error
+#   aw_all_trackers / aw_all_agents     -> the axis names, derived from aw_all_impls
 #   aw_detect_matches <root>    -> every impl configured in <root>, one per line
 #   aw_collect_matches <root> [<pin>]  -> populates AW_MATCHES; 0 or many is fine
 #   aw_require_configured <root> <pin> -> refuses a pin naming an impl that is not
@@ -61,6 +64,46 @@ aw_impl_workflow_doc() {
     *)      return 1 ;;
   esac
 }
+
+# The two module files a canonical leaf script composes a loadout out of (#236).
+#
+# A loadout is {tracker × agent}, so the behaviour that used to live in seven
+# copies of a script lives in four tracker modules and two agent modules instead.
+# These resolve the paths, and they live here rather than in the leaf scripts for
+# the same reason aw_all_impls does: "which loadouts exist" and "where does a
+# loadout's behaviour come from" are one question, and the kiro-jira hole (#92)
+# closes by adding a name to that list, not a file to a directory.
+#
+# Both print the path and return 0 only when the file is readable. The caller is
+# expected to `|| exit 1` — a missing module is a broken checkout, and letting
+# `source` fail on it instead produces bash's own "No such file or directory"
+# naming a path the user never typed.
+aw_tracker_module() { _aw_module tracker "$1" "$2"; }
+aw_agent_module()   { _aw_module agent   "$1" "$2"; }
+
+# _aw_module <kind> <root> <name>
+#
+# `kind` is singular for the message and plural for the directory, which is the
+# only reason this is not two one-liners: `lib/trackers/gh.sh` reads better in a
+# tree than `lib/tracker/gh.sh`, and "unknown tracker" reads better in an error
+# than "unknown trackers".
+_aw_module() {
+  local kind="$1" root="$2" name="$3" path
+  path="$root/lib/${kind}s/${name}.sh"
+  if [[ ! -r "$path" ]]; then
+    echo "Error: no $kind module for '$name' (expected $path)" >&2
+    echo "       Is the repository complete?" >&2
+    return 1
+  fi
+  printf '%s\n' "$path"
+}
+
+# Every tracker / agent name a loadout can be built from, derived from
+# aw_all_impls rather than listed again. The parity suite reads these, so a
+# loadout added to the list above with no module file behind it fails a test
+# instead of failing at someone's next task-done.
+aw_all_trackers() { aw_all_impls | sed 's/.*-//' | sort -u; }
+aw_all_agents()   { aw_all_impls | sed 's/-.*//' | sort -u; }
 
 # Every impl configured in <root>, one per line. Zero, one or many — the caller
 # decides what to do about it. aw_detect_impl treats anything but one as an

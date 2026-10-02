@@ -12,9 +12,12 @@
 # task-done captures TAB_ID *before* `radio unregister` wipes the session
 # file, then uses `zellij action close-tab-by-id <id>` at the end.
 #
-# All four acceptance scenarios from the spec are covered below against
-# claude-gh/bin/task-done. Drift check (tools/check-drift.sh) keeps the
-# other 6 loadouts byte-identical in the templated region.
+# All four acceptance scenarios from the spec are covered below against the
+# canonical bin/task-done, pinned to claude-gh. Pinning any loadout would do:
+# close-tab lives in the shared body and there is no tracker or agent hook
+# anywhere near it, so since #236 there is exactly one copy to get right. The
+# six drift-manifest entries that used to hold the other loadouts byte-identical
+# here are retired along with their files.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -77,7 +80,7 @@ zellij_close_calls() {
   export TASK_FORCE_ROLE="$ROLE"
   write_session_file 7
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   # Per-id close lands on the worker's persisted tab_id.
   assert_stub_called zellij "action close-tab-by-id 7"
@@ -107,7 +110,7 @@ zellij_close_calls() {
   export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":99}]'
   export STUB_ZELLIJ_PANES_JSON='[{"id":9900,"is_plugin":false,"is_focused":true,"tab_id":99}]'
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_stub_called zellij "action close-tab-by-id 7"
   # Defense in depth: assert the close call was by id 7, not id 99 or
@@ -126,7 +129,7 @@ zellij_close_calls() {
   export TASK_FORCE_ROLE="$ROLE"
   write_session_file ""   # TAB_ID= present but empty
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "Skipping zellij close-tab"
   # Worktree cleanup still completes.
@@ -144,7 +147,7 @@ zellij_close_calls() {
   export TASK_FORCE_ROLE="$ROLE"
   # Deliberately do NOT create the session file.
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "Skipping zellij close-tab"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
@@ -163,7 +166,7 @@ zellij_close_calls() {
   export TASK_FORCE_ROLE="$ROLE"
   write_session_file 7
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "Skipping zellij close-tab"
   run zellij_close_calls
@@ -188,7 +191,7 @@ zellij_close_calls() {
   write_info_tab_id 12
   write_session_file ""
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_stub_called zellij "action close-tab-by-id 12"
   run zellij_close_calls
@@ -204,7 +207,7 @@ zellij_close_calls() {
   # Do NOT call write_info_tab_id — $INFO_FILE has BASE_BRANCH/SLUG only.
   write_session_file 7
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_stub_called zellij "action close-tab-by-id 7"
 }
@@ -216,7 +219,7 @@ zellij_close_calls() {
   write_info_tab_id 12
   # No write_session_file call → no radio session file on disk.
 
-  run "$CLAUDE_GH_TASK_DONE" --remove-worktree --force
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_stub_called zellij "action close-tab-by-id 12"
 }

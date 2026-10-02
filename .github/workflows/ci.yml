@@ -32,7 +32,7 @@ jobs:
         run: |
           shellcheck -x \
             install.sh task-init run_tests.sh \
-            bin/* lib/*.sh tools/*.sh \
+            bin/* lib/*.sh lib/trackers/*.sh lib/agents/*.sh tools/*.sh \
             tests/helpers/*.bash tests/setup_suite.bash \
             */install.sh */bin/*
 

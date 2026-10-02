@@ -1,7 +1,28 @@
 #!/usr/bin/env bats
-# Tests for task-done (both kiro-notion and claude-jira versions).
-# The two scripts share identical logic except for Jira-key PR title casing,
-# so most tests run against both.
+# Tests for task-done — one canonical bin/task-done since #236, composing one
+# tracker module out of lib/trackers/.
+#
+# Each test pins a loadout with AW_IMPL, because a task worktree has no workflow
+# doc for detection to find. The prefix on a test name says what it is for:
+#
+#   shared:        the one canonical assertion for shared-body behaviour. Pinned
+#                  to kiro-notion arbitrarily — any impl would do, which is
+#                  precisely why asserting it seven times proved nothing.
+#   <impl>:        an impl-DISTINGUISHING observable, which a failed module load
+#                  could not produce. jira -> the uppercased Jira-key PR title;
+#                  claude-local -> tasks/_board.md regenerated and the
+#                  state.json entry struck.
+#   all seven      the `unregisters the radio session` table is deliberately
+#                  kept at seven rows: it is the only place every impl runs the
+#                  full script end to end, so it is what would catch a module
+#                  that loads but never fires.
+#
+# That last distinction is the #206 lesson — a region can be byte-identical and
+# still inert. tests/loadout_modules.bats proves every module LOADS; only this
+# file proves the right one RAN. Before #236 this suite asserted the shared body
+# up to seven times and the per-tracker difference once; 32 of those 67 cases
+# were retired with the six files they duplicated (see the PR body for the
+# name-by-name table).
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -10,12 +31,16 @@ load helpers/common
 
 SLUG="my-feature"
 
-# Run a task-done script from inside the worktree, auto-confirming prompts.
-# Usage: run_task_done <script> [extra args...]
+# Run task-done from inside the worktree, auto-confirming prompts.
+# Usage: run_task_done <impl> [extra args...]
+#
+# There is one task-done since #236; the loadout is which tracker module it
+# composes, pinned with AW_IMPL because a test worktree has no workflow doc to
+# detect from. Pre-#236 this took a path to one of seven per-loadout copies.
 run_task_done() {
-  local script="$1"; shift
+  local impl="$1"; shift
   # Pipe "y\n" to confirm the "Remove worktree?" prompt
-  run bash -c "echo y | $script $*"
+  run bash -c "echo y | env AW_IMPL=$impl $TASK_DONE $*"
 }
 
 setup() {
@@ -42,16 +67,9 @@ teardown() {
 # Guard: must be in a worktree
 # ---------------------------------------------------------------------------
 
-@test "kiro: fails when run from main repo" {
+@test "shared: fails when run from main repo" {
   cd "$MAIN_REPO"
-  run "$KIRO_TASK_DONE"
-  assert_failure
-  assert_output --partial "main repo"
-}
-
-@test "jira: fails when run from main repo" {
-  cd "$MAIN_REPO"
-  run "$JIRA_TASK_DONE"
+  run env AW_IMPL=kiro-notion "$TASK_DONE"
   assert_failure
   assert_output --partial "main repo"
 }
@@ -60,42 +78,36 @@ teardown() {
 # Summary output
 # ---------------------------------------------------------------------------
 
-@test "kiro: shows branch and base branch" {
-  run_task_done "$KIRO_TASK_DONE" --force
+@test "shared: shows branch and base branch" {
+  run_task_done kiro-notion --force
   assert_output --partial "Branch:   task/$SLUG"
   assert_output --partial "Base:     main"
 }
 
-@test "jira: shows branch and base branch" {
-  run_task_done "$JIRA_TASK_DONE" --force
-  assert_output --partial "Branch:   task/$SLUG"
-  assert_output --partial "Base:     main"
-}
-
-@test "kiro: reads custom BASE_BRANCH from .info file" {
+@test "shared: reads custom BASE_BRANCH from .info file" {
   # Overwrite the info file with a different base
   printf 'BASE_BRANCH=develop\nSLUG=%s\nNOTION_URL=\n' "$SLUG" \
     > "$WORKTREE_BASE/.$SLUG.info"
-  run_task_done "$KIRO_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_output --partial "Base:     develop"
 }
 
-@test "kiro: shows commit count ahead of base" {
+@test "shared: shows commit count ahead of base" {
   # Make a commit in the worktree
   touch "$WORKTREE_BASE/$SLUG/newfile.txt"
   git -C "$WORKTREE_BASE/$SLUG" add newfile.txt
   git -C "$WORKTREE_BASE/$SLUG" commit -q -m "add file"
 
-  run_task_done "$KIRO_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_output --partial "Commits ahead of main: 1"
 }
 
-@test "kiro: shows diff shortstat when there are commits" {
+@test "shared: shows diff shortstat when there are commits" {
   touch "$WORKTREE_BASE/$SLUG/newfile.txt"
   git -C "$WORKTREE_BASE/$SLUG" add newfile.txt
   git -C "$WORKTREE_BASE/$SLUG" commit -q -m "add file"
 
-  run_task_done "$KIRO_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_output --partial "Changes:"
 }
 
@@ -103,14 +115,14 @@ teardown() {
 # PR section
 # ---------------------------------------------------------------------------
 
-@test "kiro: shows gh pr create with correct --base when no PR exists" {
-  run_task_done "$KIRO_TASK_DONE" --force
+@test "shared: shows gh pr create with correct --base when no PR exists" {
+  run_task_done kiro-notion --force
   assert_output --partial "gh pr create --base main --head task/$SLUG"
 }
 
-@test "kiro: shows existing PR URL instead of create command" {
+@test "shared: shows existing PR URL instead of create command" {
   export GH_STUB_PR_URL="https://github.com/org/repo/pull/42"
-  run_task_done "$KIRO_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_output --partial "PR: https://github.com/org/repo/pull/42"
   refute_output --partial "gh pr create"
 }
@@ -118,12 +130,12 @@ teardown() {
 @test "jira: PR title uppercases Jira key slug" {
   setup_worktree "proj-99"
   cd "$WORKTREE_BASE/proj-99"
-  run_task_done "$JIRA_TASK_DONE" --force
+  run_task_done claude-jira --force
   assert_output --partial '"PROJ-99"'
 }
 
 @test "jira: PR title uses raw slug for non-Jira branches" {
-  run_task_done "$JIRA_TASK_DONE" --force
+  run_task_done claude-jira --force
   assert_output --partial '"my-feature"'
 }
 
@@ -131,34 +143,22 @@ teardown() {
 # --remove-worktree flag
 # ---------------------------------------------------------------------------
 
-@test "kiro: --remove-worktree skips PR section" {
-  run_task_done "$KIRO_TASK_DONE" --remove-worktree
+@test "shared: --remove-worktree skips PR section" {
+  run_task_done kiro-notion --remove-worktree
   refute_output --partial "gh pr create"
   refute_output --partial "To create a PR"
 }
 
-@test "jira: --remove-worktree skips PR section" {
-  run_task_done "$JIRA_TASK_DONE" --remove-worktree
-  refute_output --partial "gh pr create"
-}
-
-@test "kiro: --remove-worktree --force skips all prompts" {
-  run "$KIRO_TASK_DONE" --remove-worktree --force
+@test "shared: --remove-worktree --force skips all prompts" {
+  run env AW_IMPL=kiro-notion "$TASK_DONE" --remove-worktree --force
   assert_success
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
 
-@test "kiro: --remove-worktree alone exits 0 without reading stdin" {
+@test "shared: --remove-worktree alone exits 0 without reading stdin" {
   # No --force, no piped input. Bug was that the "Remove worktree?" prompt
   # still fired and would hang reading stdin.
-  run "$KIRO_TASK_DONE" --remove-worktree </dev/null
-  assert_success
-  refute_output --partial "Remove worktree and close tab?"
-  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-}
-
-@test "jira: --remove-worktree alone exits 0 without reading stdin" {
-  run "$JIRA_TASK_DONE" --remove-worktree </dev/null
+  run env AW_IMPL=kiro-notion "$TASK_DONE" --remove-worktree </dev/null
   assert_success
   refute_output --partial "Remove worktree and close tab?"
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
@@ -168,29 +168,29 @@ teardown() {
 # Cleanup
 # ---------------------------------------------------------------------------
 
-@test "kiro: removes worktree directory" {
-  run_task_done "$KIRO_TASK_DONE" --force
+@test "shared: removes worktree directory" {
+  run_task_done kiro-notion --force
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
 
-@test "kiro: deletes .info file after removal" {
-  run_task_done "$KIRO_TASK_DONE" --force
+@test "shared: deletes .info file after removal" {
+  run_task_done kiro-notion --force
   assert [ ! -f "$WORKTREE_BASE/.$SLUG.info" ]
 }
 
-@test "kiro: skips zellij close-tab when no radio session (no \$ZELLIJ env)" {
+@test "shared: skips zellij close-tab when no radio session (no \$ZELLIJ env)" {
   # Without ZELLIJ + a session file with TAB_ID=, task-done now skips the
   # close-tab call entirely rather than falling back to the focused-tab
   # `close-tab` (#107). See task_done_close_tab.bats for the close path.
-  run_task_done "$KIRO_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_output --partial "Skipping zellij close-tab"
   run stub_calls zellij
   refute_output --partial "close-tab"
 }
 
-@test "kiro: no prompt when --force is set" {
+@test "shared: no prompt when --force is set" {
   # With --force, should not block waiting for stdin
-  run "$KIRO_TASK_DONE" --force
+  run env AW_IMPL=kiro-notion "$TASK_DONE" --force
   assert_success
 }
 
@@ -198,106 +198,12 @@ teardown() {
 # Uncommitted changes warning
 # ---------------------------------------------------------------------------
 
-@test "kiro: warns about uncommitted changes" {
+@test "shared: warns about uncommitted changes" {
   echo "dirty" > "$WORKTREE_BASE/$SLUG/dirty.txt"
   git -C "$WORKTREE_BASE/$SLUG" add dirty.txt
   # Don't commit — leave staged
 
-  run bash -c "echo y | $KIRO_TASK_DONE --force"
-  assert_output --partial "Uncommitted changes"
-}
-
-# ---------------------------------------------------------------------------
-# claude-notion task-done (identical logic to kiro — no Jira uppercase slug)
-# ---------------------------------------------------------------------------
-
-@test "claude-notion: fails when run from main repo" {
-  cd "$MAIN_REPO"
-  run "$CLAUDE_NOTION_TASK_DONE"
-  assert_failure
-  assert_output --partial "main repo"
-}
-
-@test "claude-notion: shows branch and base branch" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_output --partial "Branch:   task/$SLUG"
-  assert_output --partial "Base:     main"
-}
-
-@test "claude-notion: reads custom BASE_BRANCH from .info file" {
-  printf 'BASE_BRANCH=develop\nSLUG=%s\nNOTION_URL=\n' "$SLUG" \
-    > "$WORKTREE_BASE/.$SLUG.info"
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_output --partial "Base:     develop"
-}
-
-@test "claude-notion: shows commit count ahead of base" {
-  touch "$WORKTREE_BASE/$SLUG/newfile.txt"
-  git -C "$WORKTREE_BASE/$SLUG" add newfile.txt
-  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "add file"
-
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_output --partial "Commits ahead of main: 1"
-}
-
-@test "claude-notion: shows gh pr create with correct --base when no PR exists" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_output --partial "gh pr create --base main --head task/$SLUG"
-}
-
-@test "claude-notion: shows existing PR URL instead of create command" {
-  export GH_STUB_PR_URL="https://github.com/org/repo/pull/42"
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_output --partial "PR: https://github.com/org/repo/pull/42"
-  refute_output --partial "gh pr create"
-}
-
-@test "claude-notion: --remove-worktree skips PR section" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --remove-worktree
-  refute_output --partial "gh pr create"
-  refute_output --partial "To create a PR"
-}
-
-@test "claude-notion: --remove-worktree --force skips all prompts" {
-  run "$CLAUDE_NOTION_TASK_DONE" --remove-worktree --force
-  assert_success
-  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-}
-
-@test "claude-notion: --remove-worktree alone exits 0 without reading stdin" {
-  run "$CLAUDE_NOTION_TASK_DONE" --remove-worktree </dev/null
-  assert_success
-  refute_output --partial "Remove worktree and close tab?"
-  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-}
-
-@test "claude-notion: removes worktree directory" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-}
-
-@test "claude-notion: deletes .info file after removal" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert [ ! -f "$WORKTREE_BASE/.$SLUG.info" ]
-}
-
-@test "claude-notion: skips zellij close-tab when no radio session (no \$ZELLIJ env)" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_output --partial "Skipping zellij close-tab"
-  run stub_calls zellij
-  refute_output --partial "close-tab"
-}
-
-@test "claude-notion: no prompt when --force is set" {
-  run "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_success
-}
-
-@test "claude-notion: warns about uncommitted changes" {
-  echo "dirty" > "$WORKTREE_BASE/$SLUG/dirty.txt"
-  git -C "$WORKTREE_BASE/$SLUG" add dirty.txt
-
-  run bash -c "echo y | $CLAUDE_NOTION_TASK_DONE --force"
+  run bash -c "echo y | env AW_IMPL=kiro-notion $TASK_DONE --force"
   assert_output --partial "Uncommitted changes"
 }
 
@@ -305,62 +211,22 @@ teardown() {
 # Local branch deletion after worktree removal
 # ---------------------------------------------------------------------------
 
-@test "kiro: deletes local branch when fully merged (no new commits)" {
+@test "shared: deletes local branch when fully merged (no new commits)" {
   # Fresh branch with no commits ahead of main is trivially merged.
-  run_task_done "$KIRO_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_success
   assert_output --partial "Deleted local branch 'task/$SLUG'"
   run git -C "$MAIN_REPO" branch --list "task/$SLUG"
   assert_output ""
 }
 
-@test "kiro: keeps local branch when it has unmerged commits" {
+@test "shared: keeps local branch when it has unmerged commits" {
   # Commit on the task branch — now it's ahead of main and not merged.
   touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
   git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
   git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
 
-  run_task_done "$KIRO_TASK_DONE" --force
-  assert_success
-  assert_output --partial "still has unmerged commits"
-  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
-  assert_output --partial "task/$SLUG"
-}
-
-@test "jira: deletes local branch when fully merged (no new commits)" {
-  run_task_done "$JIRA_TASK_DONE" --force
-  assert_success
-  assert_output --partial "Deleted local branch 'task/$SLUG'"
-  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
-  assert_output ""
-}
-
-@test "jira: keeps local branch when it has unmerged commits" {
-  touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
-  git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
-  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
-
-  run_task_done "$JIRA_TASK_DONE" --force
-  assert_success
-  assert_output --partial "still has unmerged commits"
-  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
-  assert_output --partial "task/$SLUG"
-}
-
-@test "claude-notion: deletes local branch when fully merged (no new commits)" {
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
-  assert_success
-  assert_output --partial "Deleted local branch 'task/$SLUG'"
-  run git -C "$MAIN_REPO" branch --list "task/$SLUG"
-  assert_output ""
-}
-
-@test "claude-notion: keeps local branch when it has unmerged commits" {
-  touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
-  git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
-  git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
-
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_success
   assert_output --partial "still has unmerged commits"
   run git -C "$MAIN_REPO" branch --list "task/$SLUG"
@@ -393,30 +259,10 @@ add_submodule_to_worktree() {
   echo "$submodule_src" > "$BATS_TEST_TMPDIR/.submodule_src"
 }
 
-@test "kiro: removes worktree containing initialized submodules without warning" {
+@test "shared: removes worktree containing initialized submodules without warning" {
   add_submodule_to_worktree "$WORKTREE_BASE/$SLUG"
 
-  run_task_done "$KIRO_TASK_DONE" --force
-  assert_success
-  refute_output --partial "could not remove worktree cleanly"
-  refute_output --partial "removal failed"
-  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-}
-
-@test "jira: removes worktree containing initialized submodules without warning" {
-  add_submodule_to_worktree "$WORKTREE_BASE/$SLUG"
-
-  run_task_done "$JIRA_TASK_DONE" --force
-  assert_success
-  refute_output --partial "could not remove worktree cleanly"
-  refute_output --partial "removal failed"
-  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
-}
-
-@test "claude-notion: removes worktree containing initialized submodules without warning" {
-  add_submodule_to_worktree "$WORKTREE_BASE/$SLUG"
-
-  run_task_done "$CLAUDE_NOTION_TASK_DONE" --force
+  run_task_done kiro-notion --force
   assert_success
   refute_output --partial "could not remove worktree cleanly"
   refute_output --partial "removal failed"
@@ -433,7 +279,8 @@ add_submodule_to_worktree() {
 # task-done removes it. Uses the real radio binary on PATH; setup()'s isolated
 # $TASK_FORCE_HOME keeps the host's session dir untouched.
 assert_task_done_unregisters() {
-  local script="$1"
+  local impl="$1"
+  local script="env AW_IMPL=$impl $TASK_DONE"
   local role="worker-task-force-$SLUG"
 
   cp "$RADIO" "$STUB_BIN/radio"
@@ -448,32 +295,32 @@ assert_task_done_unregisters() {
   assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/$role.info" ]
 }
 
-@test "kiro: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$KIRO_TASK_DONE"
+@test "kiro-notion: task-done unregisters the radio session" {
+  assert_task_done_unregisters kiro-notion
 }
 
 @test "jira: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$JIRA_TASK_DONE"
+  assert_task_done_unregisters claude-jira
 }
 
 @test "claude-notion: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$CLAUDE_NOTION_TASK_DONE"
+  assert_task_done_unregisters claude-notion
 }
 
 @test "claude-gh: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$CLAUDE_GH_TASK_DONE"
+  assert_task_done_unregisters claude-gh
 }
 
 @test "kiro-gh: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$KIRO_GH_TASK_DONE"
+  assert_task_done_unregisters kiro-gh
 }
 
 @test "claude-local: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$CLAUDE_LOCAL_TASK_DONE"
+  assert_task_done_unregisters claude-local
 }
 
 @test "kiro-local: task-done unregisters the radio session" {
-  assert_task_done_unregisters "$KIRO_LOCAL_TASK_DONE"
+  assert_task_done_unregisters kiro-local
 }
 
 # ---------------------------------------------------------------------------
@@ -485,7 +332,7 @@ assert_task_done_unregisters() {
 # sibling copy — so the suite has to be out of reach of ~/.local/bin for this to
 # be testing the checkout it thinks it is (see tests/helpers/path_isolation.bash).
 assert_task_done_regenerates_board() {
-  local script="$1"
+  local impl="$1"
   mkdir -p "$MAIN_REPO/tasks"
   cat > "$MAIN_REPO/tasks/001-add-login.md" <<'TASK'
 ---
@@ -503,7 +350,7 @@ pr: ""
 
 A test problem.
 TASK
-  run_task_done "$script" --force
+  run_task_done "$impl" --force
   assert_success
   # Checked against task-done's own output, before $output is replaced below.
   refute_output --partial "task-board failed"
@@ -513,11 +360,11 @@ TASK
 }
 
 @test "claude-local: task-done regenerates tasks/_board.md" {
-  assert_task_done_regenerates_board "$CLAUDE_LOCAL_TASK_DONE"
+  assert_task_done_regenerates_board claude-local
 }
 
 @test "kiro-local: task-done regenerates tasks/_board.md" {
-  assert_task_done_regenerates_board "$KIRO_LOCAL_TASK_DONE"
+  assert_task_done_regenerates_board kiro-local
 }
 
 # ---------------------------------------------------------------------------
@@ -549,11 +396,11 @@ setup_reviewer_worktree() {
 }
 
 assert_reviewer_branch_force_deleted() {
-  local script="$1"
+  local impl="$1"
   setup_reviewer_worktree 42
   cd "$WORKTREE_BASE/$RSLUG"
 
-  run "$script" --remove-worktree --force
+  run env AW_IMPL="$impl" "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "Deleted reviewer branch 'task/$RSLUG'"
   refute_output --partial "still has unmerged commits"
@@ -562,31 +409,7 @@ assert_reviewer_branch_force_deleted() {
 }
 
 @test "claude-gh: reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$CLAUDE_GH_TASK_DONE"
-}
-
-@test "claude-jira: reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$JIRA_TASK_DONE"
-}
-
-@test "claude-notion: reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$CLAUDE_NOTION_TASK_DONE"
-}
-
-@test "claude-local: reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$CLAUDE_LOCAL_TASK_DONE"
-}
-
-@test "kiro-gh: reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$KIRO_GH_TASK_DONE"
-}
-
-@test "kiro: (kiro-notion) reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$KIRO_TASK_DONE"
-}
-
-@test "kiro-local: reviewer worktree force-deletes branch (PR_NUMBER set)" {
-  assert_reviewer_branch_force_deleted "$KIRO_LOCAL_TASK_DONE"
+  assert_reviewer_branch_force_deleted claude-gh
 }
 
 @test "claude-gh: worker worktree (no PR_NUMBER) still uses safe-delete -d" {
@@ -596,7 +419,7 @@ assert_reviewer_branch_force_deleted() {
   git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
   git -C "$WORKTREE_BASE/$SLUG" commit -q -m "unmerged work"
 
-  run_task_done "$CLAUDE_GH_TASK_DONE" --force
+  run_task_done claude-gh --force
   assert_success
   assert_output --partial "still has unmerged commits"
   refute_output --partial "Deleted reviewer branch"
@@ -613,7 +436,8 @@ assert_reviewer_branch_force_deleted() {
 # so a worker .info file that contains no PR_NUMBER= line ends up with
 # PR_NUMBER empty regardless of ambient environment.
 assert_ambient_pr_number_does_not_force_delete() {
-  local script="$1"
+  local impl="$1"
+  local script="env AW_IMPL=$impl $TASK_DONE"
 
   touch "$WORKTREE_BASE/$SLUG/unmerged.txt"
   git -C "$WORKTREE_BASE/$SLUG" add unmerged.txt
@@ -645,13 +469,7 @@ assert_ambient_pr_number_does_not_force_delete() {
 }
 
 @test "claude-gh: ambient PR_NUMBER export does NOT trigger force-delete on worker" {
-  assert_ambient_pr_number_does_not_force_delete "$CLAUDE_GH_TASK_DONE"
-}
-
-@test "claude-local: ambient PR_NUMBER export does NOT trigger force-delete on worker" {
-  # Cross-drift-group coverage — the zero-init lives in worktree-context which
-  # task-done-std and task-done-local check separately.
-  assert_ambient_pr_number_does_not_force_delete "$CLAUDE_LOCAL_TASK_DONE"
+  assert_ambient_pr_number_does_not_force_delete claude-gh
 }
 
 @test "task-done cleanup tolerates radio binary missing from PATH (#94)" {
@@ -660,7 +478,7 @@ assert_ambient_pr_number_does_not_force_delete() {
   export TASK_FORCE_ROLE="worker-task-force-$SLUG"
   # Note: deliberately do NOT install radio into $STUB_BIN here.
 
-  run bash -c "echo y | $CLAUDE_GH_TASK_DONE --force"
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force"
   assert_success
   assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
 }
@@ -675,18 +493,7 @@ assert_ambient_pr_number_does_not_force_delete() {
   mkdir -p "$mbx/inbox" "$mbx/processed"
   printf 'stranded approved-and-merged\n' > "$mbx/inbox/msg.md"
 
-  run bash -c "echo y | $CLAUDE_GH_TASK_DONE --force --remove-worktree"
-  assert_success
-  assert [ ! -d "$mbx" ]
-}
-
-@test "claude-local: --remove-worktree sweeps its own radio mailbox" {
-  export TASK_FORCE_ROLE="worker-task-force-$SLUG"
-  local mbx="$TASK_FORCE_HOME/radio/mailbox/$TASK_FORCE_ROLE"
-  mkdir -p "$mbx/inbox" "$mbx/processed"
-  printf 'x\n' > "$mbx/processed/old.md"
-
-  run bash -c "echo y | $CLAUDE_LOCAL_TASK_DONE --force --remove-worktree"
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
   assert_success
   assert [ ! -d "$mbx" ]
 }
@@ -695,7 +502,7 @@ assert_ambient_pr_number_does_not_force_delete() {
   unset TASK_FORCE_ROLE
   mkdir -p "$TASK_FORCE_HOME/radio/mailbox/some-other-role"
 
-  run bash -c "echo y | $CLAUDE_GH_TASK_DONE --force --remove-worktree"
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
   assert_success
   # An empty/unsafe role must never rm -rf the whole mailbox root.
   assert [ -d "$TASK_FORCE_HOME/radio/mailbox/some-other-role" ]

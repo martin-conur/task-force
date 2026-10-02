@@ -11,16 +11,6 @@ set -euo pipefail
 
 # region:default-manifest
 GROUPS_DEFAULT=(
-  "task-done-std|flag-parsing|claude-gh/bin/task-done claude-jira/bin/task-done claude-notion/bin/task-done kiro-gh/bin/task-done kiro-notion/bin/task-done"
-  "task-done-std|worktree-context|claude-gh/bin/task-done claude-jira/bin/task-done claude-notion/bin/task-done kiro-gh/bin/task-done kiro-notion/bin/task-done"
-  "task-done-std|diff-summary|claude-gh/bin/task-done claude-jira/bin/task-done claude-notion/bin/task-done kiro-gh/bin/task-done kiro-notion/bin/task-done"
-  "task-done-std|confirm-and-cleanup|claude-gh/bin/task-done claude-jira/bin/task-done claude-notion/bin/task-done kiro-gh/bin/task-done kiro-notion/bin/task-done"
-  "task-done-local|flag-parsing|claude-local/bin/task-done kiro-local/bin/task-done"
-  "task-done-local|worktree-context|claude-local/bin/task-done kiro-local/bin/task-done"
-  "task-done-local|diff-summary|claude-local/bin/task-done kiro-local/bin/task-done"
-  "task-done-local|confirm-and-cleanup|claude-local/bin/task-done kiro-local/bin/task-done"
-  "task-done-local|board-regen-source|claude-local/bin/task-done kiro-local/bin/task-done"
-  "task-done-local|board-regen|claude-local/bin/task-done kiro-local/bin/task-done"
   "task-work|lib-source-header|claude-gh/bin/task-work claude-jira/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work kiro-gh/bin/task-work kiro-local/bin/task-work kiro-notion/bin/task-work"
   "task-work|worktree-creation-pre-info|claude-gh/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work kiro-gh/bin/task-work kiro-local/bin/task-work kiro-notion/bin/task-work"
   "task-work-claude|worktree-creation-post-info|claude-gh/bin/task-work claude-local/bin/task-work claude-notion/bin/task-work"

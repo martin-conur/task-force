@@ -75,6 +75,11 @@ Options:
                       ran this from. On claude it also launches in auto
                       permission mode; on kiro it governs auto-submit only, as
                       `task-work --auto` does there (#206).
+      --auto-submit   Opt the rebuilt role into radio auto-submit only.
+      --no-auto-submit
+                      Rebuild it with the Enter gate on radio wakes.
+                      With none of these three, the role keeps the auto-submit
+                      setting it had before it died: radio recorded it (#246).
       --no-launch     Open the tab at the worktree but do NOT start the agent.
                       The role stays unregistered until something does.
       --force         Proceed even though a session still looks live for this
@@ -109,6 +114,7 @@ set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 POSITIONAL=()
 RESUME=""
 AUTO_MODE=""
+AUTO_SUBMIT_FLAG=""
 NO_LAUNCH=""
 FORCE=""
 
@@ -117,6 +123,8 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage 0 ;;
     --resume) RESUME="1"; shift ;;
     --auto) AUTO_MODE="1"; shift ;;
+    --auto-submit) AUTO_SUBMIT_FLAG="1"; shift ;;
+    --no-auto-submit) AUTO_SUBMIT_FLAG="0"; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --force) FORCE="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
@@ -375,7 +383,15 @@ aw_install_ci_guard_hook "$MAIN_WORKTREE"
 # and `radio send --to pm` reports as itself instead of `from: unknown`.
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$ROLE") ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
-[[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+# Auto-submit is its own setting (#246): an explicit flag wins, --auto implies
+# it, and with neither nothing is injected — radio then restores what this role
+# had from its auto-submit sidecar, which is what a recovery should do. This is
+# the one launcher that leaves it unset on purpose; task-work always says.
+case "$AUTO_SUBMIT_FLAG" in
+  1) RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 " ;;
+  0) RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 " ;;
+  *) [[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 " ;;
+esac
 
 # The session id of this role's last session, when it can be established beyond
 # doubt — otherwise nothing, and `--resume` falls back to Claude's own picker.

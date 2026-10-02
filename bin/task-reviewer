@@ -73,6 +73,10 @@ Options:
                           rule out anything destructive (no merge, no push, no
                           Status edits) — running the review hands-off matches
                           the "dispatch and walk away" goal of this command.
+      --no-auto-submit    Keep the Enter gate on radio wakes into the reviewer.
+                          Auto-submit is on by default and independent of the
+                          permission mode (#246): --no-auto alone keeps it.
+      --auto-submit       Explicitly opt into auto-submit (the default).
       --no-launch         Open the worktree tab but do NOT start claude.
   -h, --help              Show this help.
 
@@ -139,12 +143,19 @@ set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 POSITIONAL=()
 NO_LAUNCH=""
 AUTO_MODE="1"
+# Radio auto-submit is a separate setting (#246): on by default for the same
+# dispatch-and-walk-away reason, and NOT switched off by --no-auto — wanting to
+# click through a reviewer's tool calls says nothing about whether its PM pings
+# should need an Enter.
+AUTO_SUBMIT="1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
     --auto) AUTO_MODE="1"; shift ;;
     --no-auto) AUTO_MODE=""; shift ;;
+    --auto-submit) AUTO_SUBMIT="1"; shift ;;
+    --no-auto-submit) AUTO_SUBMIT=""; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
@@ -370,7 +381,13 @@ RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
 # resolved by radio's shim; this injected value is the shim's registration-gated
 # launch-time identity so the verdict reaches THIS repo's PM (pm-<reponame>).
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
-[[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+# Explicit even when off: radio reads an unset value as "restore this role's
+# prior setting", which a fresh launch must not inherit (#246).
+if [[ -n "$AUTO_SUBMIT" ]]; then
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+else
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 "
+fi
 
 # ---------------- launch ----------------
 # 4th arg to aw_launch_tab is `stay_on_caller_tab=1` — keep focus on the

@@ -53,6 +53,10 @@ Options:
                       -a/--trust-all and stays separate. Also keeps focus on
                       the calling tab instead of switching to the new one.
                       (No effect with --no-launch.)
+      --auto-submit   Auto-submit without the focus behaviour of --auto.
+      --no-auto-submit
+                      Keep the Enter gate on radio wakes even with --auto
+                      (which then only keeps focus on the calling tab).
   -h, --help          Show this help.
 
 Environment:
@@ -78,6 +82,7 @@ MODEL="${TASK_WORK_MODEL:-}"
 TRUST_ALL=""
 NO_LAUNCH=""
 AUTO_MODE=""
+AUTO_SUBMIT_FLAG=""
 BASE_BRANCH_OVERRIDE=""
 FROM_REF_OVERRIDE=""
 
@@ -100,7 +105,11 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
       FROM_REF_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
+# region:auto-flags
     --auto) AUTO_MODE="1"; shift ;;
+    --auto-submit) AUTO_SUBMIT_FLAG="1"; shift ;;
+    --no-auto-submit) AUTO_SUBMIT_FLAG="0"; shift ;;
+# endregion:auto-flags
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -267,11 +276,23 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # gated launch-time identity (step 1), so the ping reaches THIS repo's PM
 # (pm-<reponame>) and never a different repo's PM tab.
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
-# Opt --auto workers into radio's CR (auto-submit) wake-up so PM pings process
-# without a manual Enter (#128). PM and non-auto workers leave this unset, so
-# radio keeps using LF — preserves the human gate that protects a partially-
-# typed prompt from being corrupted by an incoming `radio check`.
-[[ -n "${AUTO_MODE:-}" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+# Radio's CR (auto-submit) wake-up, so PM pings process without a manual Enter
+# (#128). It is its own setting, not a side effect of permission mode (#246):
+# --auto implies it, and --auto-submit / --no-auto-submit set it either way,
+# whichever order they come in. Without it radio keeps using LF — the human
+# gate that protects a partially-typed prompt from an incoming `radio check`.
+# Injected explicitly even when off: radio reads an *unset* value as "a repair —
+# restore whatever this role had", which a fresh launch must never inherit.
+case "${AUTO_SUBMIT_FLAG:-}" in
+  1) AUTO_SUBMIT="1" ;;
+  0) AUTO_SUBMIT="" ;;
+  *) AUTO_SUBMIT="${AUTO_MODE:-}" ;;
+esac
+if [[ -n "$AUTO_SUBMIT" ]]; then
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+else
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 "
+fi
 # endregion:radio-env-injection
 
 # region:worktree-creation-post-info

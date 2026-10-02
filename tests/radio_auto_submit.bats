@@ -11,6 +11,10 @@
 #   - The CR/LF choice is driven by the *recipient's* session file, never the
 #     sender's env — and it's read after the #165 alias hop, so a `task-pm
 #     --also` alias inherits its primary PM's setting (#189).
+#   - The setting survives a hand repair (#246): register records it in a
+#     `<role>.auto-submit` sidecar, and a register or re-seed whose env has no
+#     TASK_FORCE_AUTO_SUBMIT at all restores it. A non-empty value other than
+#     `1` (launchers say `0`) is an explicit off and overwrites the sidecar.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -158,5 +162,71 @@ teardown() {
   "$RADIO" busy
 
   run cat "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  refute_output --partial "AUTO_SUBMIT"
+}
+
+# ----- the sidecar: a hand repair keeps auto-submit (#246) ------------------
+
+_info() { cat "$TASK_FORCE_HOME/radio/sessions/$1.info"; }
+_sidecar() { cat "$TASK_FORCE_HOME/radio/sessions/$1.auto-submit"; }
+
+@test "register records the resolved setting in the auto-submit sidecar (#246)" {
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  run _sidecar worker-foo
+  assert_output "1"
+  TASK_FORCE_AUTO_SUBMIT=0 "$RADIO" register --role worker-bar --tab worker-foo --agent claude
+  run _sidecar worker-bar
+  assert_output "0"
+}
+
+@test "a hand re-register with no env restores AUTO_SUBMIT=1 and the CR wake (#246)" {
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  # The machine restarts: the session file is gone, the sidecars survive.
+  "$RADIO" unregister --manual --role worker-foo </dev/null 2>/dev/null \
+    || rm -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  [[ ! -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info" ]]
+
+  # The #229 repair, typed from a shell that never had the launch env.
+  env -u TASK_FORCE_AUTO_SUBMIT "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  run _info worker-foo
+  assert_output --partial "AUTO_SUBMIT=1"
+
+  # And the behaviour the field exists for: the repaired role still self-submits.
+  TASK_FORCE_ROLE=pm "$RADIO" send --to worker-foo --intent changes-requested --body "rework"
+  run grep -cF $'radio check\r' "$STUB_CALLS_DIR/zellij.calls"
+  assert_output "1"
+}
+
+@test "an explicit off overrides a recorded on, and the repair then keeps it off (#246)" {
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  TASK_FORCE_AUTO_SUBMIT=0 "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  run _info worker-foo
+  refute_output --partial "AUTO_SUBMIT"
+  env -u TASK_FORCE_AUTO_SUBMIT "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  run _info worker-foo
+  refute_output --partial "AUTO_SUBMIT"
+
+  TASK_FORCE_ROLE=pm "$RADIO" send --to worker-foo --intent changes-requested --body "rework"
+  run grep -cF $'radio check\r' "$STUB_CALLS_DIR/zellij.calls"
+  assert_output "0"
+  assert_stub_called zellij "action write-chars --pane-id 800 radio check"
+}
+
+@test "_ensure_session_file restores AUTO_SUBMIT=1 from the sidecar when env has none (#246)" {
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  rm -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo env -u TASK_FORCE_AUTO_SUBMIT "$RADIO" busy
+  run _info worker-foo
+  assert_output --partial "AUTO_SUBMIT=1"
+  assert_output --partial "STATE=busy"
+}
+
+@test "_ensure_session_file honours an explicit off over the sidecar (#246)" {
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role worker-foo --tab worker-foo --agent claude
+  rm -f "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+
+  TASK_FORCE_ROLE=worker-foo ZELLIJ_TAB=worker-foo TASK_FORCE_AUTO_SUBMIT=0 "$RADIO" busy
+  run _info worker-foo
   refute_output --partial "AUTO_SUBMIT"
 }

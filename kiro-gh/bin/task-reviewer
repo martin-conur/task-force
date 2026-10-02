@@ -254,7 +254,13 @@ RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
 # opt into radio's CR auto-submit wake-up so PM pings process without a
 # manual Enter (mirrors task-work --auto's behavior — see kiro-gh/bin/task-
 # work line 216 for the equivalent on the worker side).
-[[ -n "$TRUST_ALL" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+# Explicit `0` when off: radio reads an unset value as "restore this role's
+# prior setting", which a fresh launch must not inherit (#246).
+if [[ -n "$TRUST_ALL" ]]; then
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
+else
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 "
+fi
 
 # ---------------- launch ----------------
 # 4th arg to aw_launch_tab is `stay_on_caller_tab=1` — keep focus on the

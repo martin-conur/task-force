@@ -753,6 +753,37 @@ _agent_sidecar() {
   printf '%s/%s.agent' "$SESSIONS_DIR" "$1"
 }
 
+# Auto-submit sidecar (#246). AUTO_SUBMIT is the one session field whose loss is
+# silent: a role that drops it still registers, still gets mail, and simply
+# starts needing an Enter per wake. It used to come from the launch env alone,
+# so a hand repair (`radio register --role …`, the documented #229 recovery,
+# run from a shell that has no TASK_FORCE_AUTO_SUBMIT) came back without it.
+# Holds `1` or `0`; written on every register, survives unregister like its
+# siblings (#188), and swept by gc with them.
+_auto_submit_sidecar() {
+  printf '%s/%s.auto-submit' "$SESSIONS_DIR" "$1"
+}
+
+# Whether <role> auto-submits its wakes: prints `1`, or nothing. The launch env
+# is tri-state, because a repair must be told apart from an opt-out:
+#   TASK_FORCE_AUTO_SUBMIT=1         on   (task-work --auto / --auto-submit, task-pm)
+#   any other non-empty value        off  (an explicit --no-auto-submit says `0`)
+#   unset or empty                   whatever the sidecar recorded last time —
+#                                    a hand repair or a resumed process restores
+#                                    the prior state instead of asking for it.
+# Every launcher sets it explicitly, so inheritance only ever applies to a
+# session nobody launched with an opinion.
+_resolve_auto_submit() {
+  local env="${TASK_FORCE_AUTO_SUBMIT:-}" recorded
+  if [[ -n "$env" ]]; then
+    [[ "$env" == "1" ]] && printf '1'
+    return 0
+  fi
+  recorded=$(cat "$(_auto_submit_sidecar "$1")" 2>/dev/null || true)
+  [[ "$recorded" == "1" ]] && printf '1'
+  return 0
+}
+
 # Alias-list sidecar for a primary PM (#165 RC-4a). `task-pm --also` records
 # each alias here (one `pm-<other>|<repo>` per line) so cmd_register can re-seed
 # the alias session files on every SessionStart — self-heal parity with the
@@ -887,12 +918,13 @@ _ensure_session_file() {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
       "$TASK_FORCE_ROLE" "$ZELLIJ_TAB" "$tab_id" "$zsession" "$repo" "$repo_name" "$(_now)" \
       "$agent" "$loadout"
-    # Preserve the --auto opt-in across self-heal so cmd_send keeps using CR
-    # for wake-up after an intra-session re-seed (#128). Use `if` rather than
+    # Preserve the auto-submit opt-in across self-heal so cmd_send keeps using
+    # CR for wake-up after an intra-session re-seed (#128) — off the env when
+    # it says, else off the sidecar register wrote (#246). Use `if` rather than
     # `&&` so the brace group exits 0 when the flag is absent — otherwise
     # pipefail would surface a stray exit-1 through `| _atomic_write` and
     # `set -e` would abort the re-seed.
-    if [[ "${TASK_FORCE_AUTO_SUBMIT:-}" == "1" ]]; then
+    if [[ -n "$(_resolve_auto_submit "$TASK_FORCE_ROLE")" ]]; then
       printf 'AUTO_SUBMIT=1\n'
     fi
   } | _atomic_write "$f"
@@ -1379,19 +1411,25 @@ cmd_register() {
     printf '%s' "$loadout" | _atomic_write "$(_loadout_sidecar "$role")"
   fi
   printf '%s' "$agent" | _atomic_write "$(_agent_sidecar "$role")"
+  # Resolved before the sidecar is rewritten, so an unset env re-records the
+  # prior value rather than clearing it (#246). Same sidecar-first order as above.
+  local auto_submit
+  auto_submit=$(_resolve_auto_submit "$role")
+  printf '%s' "${auto_submit:-0}" | _atomic_write "$(_auto_submit_sidecar "$role")"
 
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
       "$role" "$tab" "$tab_id" "$zsession" "$repo" "$repo_name" "$(_now)" "$agent" "$loadout"
-    # Persist the --auto opt-in (#128). task-work --auto / task-reviewer and
-    # task-pm (on by default since #189) export TASK_FORCE_AUTO_SUBMIT=1 into
-    # the tab's env; cmd_send reads AUTO_SUBMIT off the recipient's session
-    # file and flips wake-up from LF (manual) to CR (auto-submit). Default
-    # workers — and a `task-pm --no-auto-submit` PM — never export this, so
-    # they keep the human-gated default. `if` rather than `&&` so the brace
-    # group exits 0 even when the flag is absent — pipefail + set -e would
-    # otherwise abort register on every non-auto worker.
-    if [[ "${TASK_FORCE_AUTO_SUBMIT:-}" == "1" ]]; then
+    # Persist the auto-submit opt-in (#128). task-work --auto / --auto-submit,
+    # task-reviewer and task-pm (on by default since #189) export
+    # TASK_FORCE_AUTO_SUBMIT=1 into the tab's env; cmd_send reads AUTO_SUBMIT
+    # off the recipient's session file and flips wake-up from LF (manual) to CR
+    # (auto-submit). Opted-out launches export `0` and keep the human-gated
+    # default; a register with no value at all — a hand repair — inherits the
+    # sidecar (#246). `if` rather than `&&` so the brace group exits 0 even
+    # when the flag is absent — pipefail + set -e would otherwise abort
+    # register on every non-auto worker.
+    if [[ -n "$auto_submit" ]]; then
       printf 'AUTO_SUBMIT=1\n'
     fi
   } | _atomic_write "$f"
@@ -2880,7 +2918,8 @@ cmd_gc() {
             # _session_dead — a live-but-quiet role that lost its sidecars is
             # the #188 bug being fixed here, and gc must not re-create it.
             if [[ ! -f "$(_session_file "$role")" ]]; then
-              rm -f "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")"
+              rm -f "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")" \
+                    "$(_auto_submit_sidecar "$role")"
             fi
           fi
           removed_dirs=$(( removed_dirs + 1 ))

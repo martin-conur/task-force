@@ -183,8 +183,10 @@ if [[ -n "$AUTO_SUBMIT" ]]; then
   export TASK_FORCE_AUTO_SUBMIT=1
 else
   # An inherited value from the launching shell must not silently re-enable the
-  # opt-in the user just declined.
-  unset TASK_FORCE_AUTO_SUBMIT
+  # opt-in the user just declined — and neither may radio's auto-submit
+  # sidecar, which an *unset* value tells register to restore (#246). `0` is
+  # the explicit off.
+  export TASK_FORCE_AUTO_SUBMIT=0
 fi
 case "$AGENT" in
   claude) exec claude "/pm" ;;

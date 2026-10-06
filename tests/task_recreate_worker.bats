@@ -241,6 +241,14 @@ dead_worker_keyed() {
   assert_output --partial "kiro-cli chat --agent worker \"Implement task: https://www.notion.so/abc123def456abc123def456abc123de\""
 }
 
+@test "kiro-local: the TASK_FILE reaches kiro-cli's worker prompt too (#240)" {
+  dead_worker_keyed add-auth TASK_FILE tasks/007-add-auth.md
+  AW_IMPL=kiro-local run "$TASK_RECREATE_WORKER" add-auth
+  assert_success
+  run launch_cmd_for add-auth
+  assert_output --partial "kiro-cli chat --agent worker \"Implement task: tasks/007-add-auth.md\""
+}
+
 @test "a sidecar with no ref under the tracker's key says so and passes no task (#240)" {
   # A GH_URL left on a notion sidecar is NOT this tracker's key and must not be
   # picked up as if it were.

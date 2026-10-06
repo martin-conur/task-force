@@ -373,10 +373,10 @@ echo ""
 # from this file when its zellij name lookup misses (#218), and the new session's
 # SessionStart can fire before we get to write the new id — so the stale one must
 # already be gone by then, leaving the name lookup (which now resolves) as the
-# only source. Every other line is preserved; the three task-work fields (the
-# ref under this tracker's key) are
-# ensured, because radio's roleless role-recovery keys off `SLUG=` (#229) and a
-# sidecar missing it leaves the rebuilt worker unrecoverable a second time.
+# only source. Every other line is preserved; the three task-work fields —
+# BASE_BRANCH, SLUG and this tracker's ref key ($INFO_KEY) — are ensured,
+# because radio's roleless role-recovery keys off `SLUG=` (#229) and a sidecar
+# missing it leaves the rebuilt worker unrecoverable a second time.
 _tmp_info=$(mktemp "${INFO_FILE}.XXXXXX")
 {
   printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"

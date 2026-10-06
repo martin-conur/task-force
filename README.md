@@ -380,7 +380,7 @@ Nothing covered getting back in. `task-work <slug>` refuses, because the branch 
 
 ```bash
 task-recreate-worker issue-223           # fresh session; tab, role and mail rebound
-task-recreate-worker issue-223 --auto    # hands-off; focus stays on your tab
+task-recreate-worker issue-223 --auto    # hands-off: auto-submit (and auto permission mode on claude)
 task-recreate-worker issue-223 --auto-submit   # auto-submit only; otherwise as recorded
 task-recreate-worker add-auth --resume   # resume the old session (id recovered, else picker)
 task-recreate-worker issue-223 --force   # a session still looks live; do it anyway
@@ -616,7 +616,7 @@ Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (pe
 
 `radio send` reads the recipient's session file. If `STATE=idle`, it resolves the recipient's tab/pane id via `zellij action list-tabs --json` / `list-panes --json --tab` and writes `radio check\n` straight into that pane with `zellij action write-chars --pane-id` — no focus switch, so the sender's tab stays put. A persisted `TAB_ID` is only meaningful within one zellij server lifetime, so before driving a wake by id, `send` **verifies the tab still at that id still bears the recipient's own tab name** (one `list-tabs` call, emoji prefix stripped from both sides). A `.info` that outlived a zellij restart carries a `TAB_ID` that now addresses an unrelated tab — the name won't match, so `send` re-resolves by tab name and repairs the file on a hit, or queues on a miss, never blindly writing into whatever tab inherited the id. `ZELLIJ_SESSION=` (the server name at register time) is a diagnostic and drives one extra guard: if it names a *different but still-live* server (`zellij list-sessions`), the real owner is unreachable from here, so `send` queues rather than misdeliver into this server's same-named look-alike tab. If `STATE=busy`, the message is queued with no wake attempt — no interrupting the recipient mid-turn. Delivery then happens at the end of the recipient's current turn: its `Stop` hook (`radio stop-hook`) sees the non-empty inbox and emits Stop-hook block JSON, which makes Claude Code continue the agent so it drains the queue immediately (`radio check`, then `radio read` each message). A `stop_hook_active` payload — this `Stop` was itself caused by the previous block — only re-blocks when the inbox has grown since: the hook records the ids each block was about in `BLOCKED_IDS=` and compares the unread set against them, so a message that lands mid-drain earns its own continuation while the same ids ignored twice still stop (#197).
 
-**The wake-up's last byte decides whether the agent acts on it.** `write-chars` types into the recipient's TUI input buffer, so terminating with LF leaves `radio check` sitting in the prompt box until a human presses Enter, while CR is the Enter. The recipient picks: a session file carrying `AUTO_SUBMIT=1` gets CR, everything else gets LF. `task-work --auto` / `--auto-submit`, `task-reviewer`, and `task-pm` (on by default since #189 — a PM tab sits idle between handoffs, and it's the most-addressed role in the system, so an unsubmitted wake there was the most-felt delivery defect) export `TASK_FORCE_AUTO_SUBMIT=1` for their `radio register` to persist. Default workers keep LF, and `--no-auto-submit` opts back into it on any of them — the human gate is what stops an incoming wake from submitting a half-typed prompt. The choice is read off the *recipient's* session file, after the `--also` alias hop, so aliases inherit their primary PM's setting.
+**The wake-up's last byte decides whether the agent acts on it.** `write-chars` types into the recipient's TUI input buffer, so terminating with LF leaves `radio check` sitting in the prompt box until a human presses Enter, while CR is the Enter. The recipient picks: a session file carrying `AUTO_SUBMIT=1` gets CR, everything else gets LF. `task-work` and `task-reviewer` export `TASK_FORCE_AUTO_SUBMIT=1` by default for their `radio register` to persist (#254) — nobody types in a worker's or a reviewer's tab, so an LF wake there is a `radio check` nobody will ever submit. `task-pm` is the other way round: off by default since #254, because the PM's box is the one the user types in and a CR wake submits whatever is half-typed there; `task-pm --auto-submit` opts in for a PM left to run unattended (#189 had it on by default). `--no-auto-submit` restores LF on any launcher — use it for a worker you mean to step into and steer by hand, since the human gate is what stops an incoming wake from submitting a half-typed prompt. The choice is read off the *recipient's* session file, after the `--also` alias hop, so aliases inherit their primary PM's setting.
 
 **Auto-submit survives a hand repair (#246).** `register` also records the setting in a `<role>.auto-submit` sidecar beside `<role>.loadout` / `<role>.agent`, and treats the env as tri-state: `1` is on, any other non-empty value (launchers say `0`) is an explicit off, and **unset** means "restore what this role had". Every launcher states its choice, so inheritance only ever applies to a session nobody launched with an opinion — which is exactly the documented #229 repair, `radio register --role … --tab …` typed from a shell that never had the launch env. Before this, that repair brought a role back without `AUTO_SUBMIT`, silently costing a keypress per wake for the rest of its life. gc sweeps the sidecar with its siblings.
 
@@ -681,10 +681,11 @@ register report — and the other two are open questions rather than dead ends:
 - **The zellij wake works.** It always did — the logs show `send: woke … via tab_id=N`
   for kiro roles on the rare occasions a session file existed. Registration, not the
   wake, was the defect.
-- **Dispatch kiro workers with `--auto` (or `--auto-submit`) so the push path can finish.**
-  Either opts the worker into the CR (auto-submit) wake-up, so a wake that lands is acted
-  on instead of sitting in the prompt box for a human Enter (#206). Neither touches
-  kiro's permission model — that is still `-a/--trust-all`.
+- **Kiro workers auto-submit by default, so the push path can finish.** A plain
+  `task-work` opts the worker into the CR (auto-submit) wake-up (#254; before that it took
+  `--auto` or `--auto-submit`, #206), so a wake that lands is acted on instead of sitting
+  in the prompt box for a human Enter. It does not touch kiro's permission model — that
+  is still `-a/--trust-all`.
 
 Re-deriving what kiro can now support — prompt-hook, the Stop drain, and whether
 #190's "declare kiro best-effort" decision still holds — is tracked in **#221**.
@@ -775,7 +776,7 @@ needed attention. So when radio looks broken, start at the **log**
 | Symptom | Likely cause | What to check |
 |---------|--------------|---------------|
 | **"I pinged the worker and nothing happened."** | The send never had a live, wakeable recipient — no session file, a stale one, or an empty/unresolvable `TAB_ID`. | 1. Re-read the sender's own outcome line (see [the outcome table](#how-wake-up-works)) — only `delivered` means a keystroke landed; every other line names its own reason. 2. `ls ~/.task-force/radio/sessions/` — is the role there at all, spelled exactly? 3. `radio orphans` — a >1h-stale heartbeat means the tab is gone. 4. `grep 'to=<role>' ~/.task-force/radio/log \| tail` and read the `send:` line right after each `send id=`. 5. In the recipient's own tab, `radio check`: if the message is listed, delivery worked and the agent simply didn't act on it. |
-| **"The agent has `radio check` sitting unsubmitted in its prompt box."** | The wake was delivered but not submitted: the recipient's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). | `grep AUTO_SUBMIT ~/.task-force/radio/sessions/<role>.info` — no line means LF. Pressing Enter completes that delivery by hand. For good: relaunch the PM with plain `task-pm` (auto-submit is the default since #189; `--no-auto-submit` is the opt-out), or the worker with `task-work --auto-submit` (auto-submit alone) or `--auto` (with auto permission mode). The flag is read off the **recipient's** file, after any `--also` alias hop. A role that lost it to a hand `radio register` before #246 regains it on its next register, as long as it had been recorded once. |
+| **"The agent has `radio check` sitting unsubmitted in its prompt box."** | The wake was delivered but not submitted: the recipient's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). | `grep AUTO_SUBMIT ~/.task-force/radio/sessions/<role>.info` — no line means LF. Pressing Enter completes that delivery by hand. On a **PM** this is the default since #254 — the box is yours, and a submitting wake would send whatever you had half-typed; relaunch with `task-pm --auto-submit` only for a PM meant to run unattended. On a **worker** it is not: it was launched with `--no-auto-submit`, or registered before #254 without `--auto` / `--auto-submit`. Relaunch it with plain `task-work` (or `task-recreate-worker --auto-submit`) for good. The flag is read off the **recipient's** file, after any `--also` alias hop. A role that lost it to a hand `radio register` before #246 regains it on its next register, as long as it had been recorded once. |
 | **"A role keeps disappearing from `sessions/`."** | Session flapping — something fires `SessionEnd` → `radio unregister` on intra-session events (`/clear`, `/compact`, resume, or an unexplained cascade) and the wipe takes `TAB_ID` with it. #187 / #198 made `unregister` refuse unless a wipe is explicitly authorized. | Compare the three counters below. Post-#187, `skipping` should carry the bulk of the traffic and `unregister role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=` — anything calling it in a loop inflates that counter alone, notably a test suite that hasn't isolated `$TASK_FORCE_HOME` and is unregistering your live role (#205). Otherwise an **old `radio` binary** is running, since every non-`--manual` call now logs one or the other; `radio` on `PATH` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | **"I ran `radio unregister` and nothing happened."** | Expected behaviour since #198, not a bug. A bare `unregister` has no `SessionEnd` payload naming a real exit, so it refuses. | It printed `refusing to wipe <role> … re-run with --manual` on stderr, and logged a `skipping` line. Pass `--manual` if you actually meant to tear the session down. |
 | **"The PM merged, but the worker never cleaned up its worktree."** | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered — and the worker never heard to run `task-done`. Since #201 gc archives such mail rather than keeping a mailbox nobody will open alive forever. | `ls ~/.task-force/radio/dead-letter/<role>/` — the message is there, id and frontmatter intact. `grep 'gc: dead-lettered' ~/.task-force/radio/log` lists every message gc has archived and when. Remove the stranded worktree by hand (`task-done --remove-worktree` from inside it). See [Undelivered mail is never deleted](#undelivered-mail-is-never-deleted). |
@@ -920,7 +921,7 @@ Here's what an end-to-end PR cycle looks like once everything is wired up. Eight
 task-pm
 ```
 
-Renames the current tab to `pm-<reponame>`, registers via the `SessionStart` hook, and starts the PM agent in-place. Radio wakes addressed to it auto-submit, so workers' reports are drained without a keypress in this tab; `task-pm --no-auto-submit` keeps the manual Enter.
+Renames the current tab to `pm-<reponame>`, registers via the `SessionStart` hook, and starts the PM agent in-place. Radio wakes addressed to it type `radio check` and wait for your Enter, since this is the tab you type in (#254); `task-pm --auto-submit` makes them submit themselves, for a PM left to run unattended.
 
 **2. PM grooms the backlog and dispatches a worker.** From the PM tab:
 
@@ -935,7 +936,7 @@ PM picks one and spawns a worker:
 task-work issue-42 https://github.com/<owner>/<repo>/issues/42 --auto
 ```
 
-This creates a worktree, opens a new zellij tab, and launches the worker agent. `--auto` is the recommended default — it runs the worker under auto-approve since PM-filed specs should be self-contained.
+This creates a worktree, opens a new zellij tab, and launches the worker agent. Focus stays on the PM's tab (`--focus` jumps to the new one), and radio wakes into the worker submit themselves, so the PM's pings reach it without anyone pressing Enter there (#254; `--no-auto-submit` if you plan to type in the worker's tab). `--auto` is the recommended permission mode — it runs the worker under auto-approve since PM-filed specs should be self-contained.
 
 **3. Planner (optional).** If the issue needs a design pass first, the PM dispatches a planner instead (`task-work … --plan`). The planner reads the code, writes the spec into the issue body, and ends with:
 
@@ -979,7 +980,7 @@ If requesting changes (worker roles are `worker-<reponame>-<slug>`; see `ls ~/.t
 radio send --to worker-task-force-issue-42 --intent changes-requested --pr 42
 ```
 
-The worker tab is focused, picks up the comments, pushes fixes, and pings back:
+The worker picks up the comments, pushes fixes, and pings back:
 
 ```bash
 radio send --to pm --intent re-review-requested --pr 42
@@ -1110,14 +1111,15 @@ Common to every combo:
 - `--no-launch` — create the worktree and open the tab at that directory, but don't auto-start the agent (you pick the model/command yourself)
 - `--impl <name>` — force a specific combo, bypassing auto-detection
 
-Radio auto-submit, on every combo (#246):
+Radio auto-submit and focus, on every combo (#246, #254):
 
-- `--auto-submit` — radio wakes submit themselves (CR) instead of waiting in the prompt box for an Enter. Nothing else: no permission mode, no focus change.
-- `--no-auto-submit` — keep the Enter gate, even alongside `--auto`. Wins over `--auto` in either order.
+- `--auto-submit` — radio wakes submit themselves (CR) instead of waiting in the prompt box for an Enter. **The default** since #254, `--plan` included: nobody types in a worker's tab. The flag only makes a launch line explicit.
+- `--no-auto-submit` — keep the Enter gate. Use it for a worker you mean to step into and steer by hand: an incoming wake would otherwise submit whatever is half-typed in its box.
+- `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254; before that only `--auto` kept it).
 
-`claude-*` combos also accept `-p/--plan` and `--auto`. On claude, `--auto` is shorthand for `--permission-mode auto` **plus** `--auto-submit` (plus keeping focus on your tab), so every existing invocation behaves as before. What changed is that the two halves can now be had apart: a worker can answer a wake hands-off without auto-accepting edits (`--auto-submit`, which also composes with `--plan`), and a worker kept off auto mode because its task is destructive — a release cut that tags and publishes — no longer loses auto-submit as a side effect. Before #246 permission policy and radio delivery were one flag, so the worker you supervised most carefully was also the one whose handoffs stalled.
+`claude-*` combos also accept `-p/--plan` and `--auto`. On claude, `--auto` is `--permission-mode auto` and nothing else since #254 — auto-submit and stay-on-your-tab, which it used to imply, are now every launch's defaults. #246 had already split the halves: a worker can answer a wake hands-off without auto-accepting edits (`--auto-submit`, which also composes with `--plan`), and a worker kept off auto mode because its task is destructive — a release cut that tags and publishes — no longer loses auto-submit as a side effect. Before #246 permission policy and radio delivery were one flag, so the worker you supervised most carefully was also the one whose handoffs stalled.
 
-`kiro-*` combos also accept `-m/--model MODEL`, `-a/--trust-all`, and `--auto`. On kiro, `--auto` governs **radio auto-submit only** (plus focus) — the permission model is `-a/--trust-all` and stays separate (#206). Before #206 kiro had no `--auto` case at all, so the flag aborted the launch and a kiro worker could never be woken without a keypress. With #246 the two agents agree: on both, auto-submit is its own setting, and `--auto` merely implies it.
+`kiro-*` combos also accept `-m/--model MODEL`, `-a/--trust-all`, and `--auto`. On kiro, `--auto` is accepted and does nothing since #254 — the permission model is `-a/--trust-all` (#206), and the auto-submit and focus it once governed are now the defaults. Before #206 kiro had no `--auto` case at all, so the flag aborted the launch and a kiro worker could never be woken without a keypress.
 
 ---
 

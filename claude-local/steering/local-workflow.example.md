@@ -82,9 +82,10 @@ Use the task title as prefix: `<Task title>: <short description>`
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
 - `-p, --plan` — launch the worker in Claude plan mode (runs `/planner`); mutually exclusive with `--auto`
-- `--auto` — launch the worker in Claude auto permission mode (runs `/worker`) **and** opt it into radio auto-submit; mutually exclusive with `--plan`
-- `--auto-submit` — radio auto-submit only: an incoming wake submits itself instead of waiting in the prompt box for an Enter. No permission mode, so it composes with `--plan` — and a worker kept off `--auto` because its task is destructive still gets its handoffs (#246)
-- `--no-auto-submit` — keep the Enter gate on radio wakes, even with `--auto` (wins in either order)
+- `--auto` — launch the worker in Claude auto permission mode (runs `/worker`); permission mode only, mutually exclusive with `--plan`
+- `--auto-submit` — radio auto-submit: an incoming wake submits itself instead of waiting in the prompt box for an Enter. **The default** on every launch, `--plan` included, since nobody types in a worker's tab (#254); the flag only makes a launch line explicit
+- `--no-auto-submit` — keep the Enter gate on radio wakes. Use it for a worker you mean to step into and steer by hand: a wake would otherwise submit whatever is half-typed in its box
+- `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254)
 - `--no-launch` — open the worktree tab but do NOT start Claude
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
@@ -134,9 +135,10 @@ that is new work, and it refuses and names `task-work`.
   established beyond doubt. Worth it when there is uncommitted exploration to
   keep. Fresh is the default and the safer one: the register-time backlog drain
   (#168) means a fresh agent opens with its queued handoff already surfaced.
-- `--auto` — radio auto-submit plus keeping focus on the tab you ran it from;
-  on claude it also launches in auto permission mode, on kiro it governs
-  auto-submit only, exactly as `task-work --auto` does on each (#206).
+- `--auto` — radio auto-submit; on claude it also launches in auto permission
+  mode, on kiro it governs auto-submit only (#206).
+- `--focus` — switch to the new tab. By default focus stays on the tab you ran
+  it from, as with `task-work` (#254).
 - `--auto-submit` / `--no-auto-submit` — set radio auto-submit alone. With none
   of these three the rebuilt role keeps the setting radio recorded for it
   before it died — its `<role>.auto-submit` sidecar (#246).
@@ -157,7 +159,7 @@ write finds nothing to adopt and resolves the new tab by name instead.
 
 ```bash
 task-recreate-worker issue-223           # fresh session; tab, role and mail rebound
-task-recreate-worker issue-223 --auto    # hands-off; focus stays where you are
+task-recreate-worker issue-223 --auto    # hands-off: auto-submit (and auto permission mode on claude)
 task-recreate-worker add-auth --resume   # resume the old session (id recovered, else picker)
 ```
 
@@ -302,7 +304,7 @@ the hook records the message ids each block was about and compares the inbox
 against that set, so a genuinely new arrival still gets a continuation while an
 agent that ignores the same ids twice is still allowed to stop. Before this,
 the second `Stop` gave up on the flag alone and the new message sat unread —
-terminal for an idle `--auto` worker nobody was going to prompt again.
+terminal for an idle auto-submitting worker nobody was going to prompt again.
 
 Likewise, every submitted prompt runs `radio prompt-hook` (the
 `UserPromptSubmit` hook): if the inbox has unread messages, a line like
@@ -416,15 +418,20 @@ workers reach it by sending `--to pm`, which radio resolves to this repo's
 several repos from one PM tab, pass `task-pm --also <other-repo>` (repeatable):
 it writes an alias radio session so `pm-<other>` routes into this one inbox.
 
-Radio wakes addressed to a PM **auto-submit** (#189): the wake types
-`radio check` into the PM's prompt box and presses Enter for it, so a worker's
-report is drained without a keypress. Before this, every PM-bound wake sat
-unsubmitted in the input box while the sender was told `delivered` — the PM
-being the most-addressed role, that was the most-felt delivery defect in the
-system. Pass `task-pm --no-auto-submit` to keep the old human gate (the wake
-types `radio check` and waits for your Enter); worth it if you type long
-prompts into the PM box, since an incoming wake would otherwise submit whatever
-is half-typed there. `--also` aliases inherit the primary PM's setting.
+Radio wakes addressed to a PM do **not** auto-submit by default (#254): the wake
+types `radio check` into the PM's prompt box and waits for your Enter. That box
+is the one you type in, and a submitting wake would send whatever is half-typed
+there. Pass `task-pm --auto-submit` for a PM left to run unattended — the wake
+then presses Enter for it, so a worker's report drains without a keypress (#189
+made that the default; #254 reversed it). Either way nothing is lost: the
+`UserPromptSubmit` hook puts the unread summary in front of the PM at your next
+prompt. `--also` aliases inherit the primary
+PM's setting.
+
+Workers are the other way round: `task-work` launches them auto-submitting and
+leaves focus on your tab, because the PM's tab is where you work and nobody
+types in a worker's. The one exception is a worker you step into to steer by
+hand — launch that one with `--no-auto-submit`.
 
 ### Reviewer role (single-shot, self-cleaning)
 
@@ -520,7 +527,7 @@ mailbox.
 | Symptom | Cause and check |
 |---------|-----------------|
 | Pinged a role, nothing happened | Re-read the sender's own outcome line — only `delivered` means a keystroke landed; every other line names its own reason. Then `ls ~/.task-force/radio/sessions/` (is the role there, spelled exactly?) and `radio orphans` (a >1h-stale heartbeat means the tab is gone). In the recipient's own tab, `radio check` tells you whether the message arrived and simply wasn't acted on. |
-| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. To stop it recurring, relaunch the PM with plain `task-pm` (auto-submit is the default; `--no-auto-submit` is the opt-out) or the worker with `task-work --auto-submit` (or `--auto`, which on claude adds auto permission mode). The flag is read off the **recipient's** file, after any `--also` alias hop. |
+| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. On a **PM** that is the default since #254 — the box is yours, and a submitting wake would send whatever you had half-typed; relaunch with `task-pm --auto-submit` only if the PM is meant to run unattended. On a **worker** it is not the default: it was launched with `--no-auto-submit`, or registered before #254 without `--auto` / `--auto-submit`. Relaunch it with plain `task-work` (or `task-recreate-worker --auto-submit`) to stop it recurring. The flag is read off the **recipient's** file, after any `--also` alias hop. |
 | A role keeps vanishing from `sessions/` | Session flapping — something fires a session-end wipe on an intra-session event and takes `TAB_ID` with it. Compare `grep -c 'unregister role='`, `'unregister: proceeding'` and `'unregister: skipping'` in the log: post-#187 `skipping` should carry the bulk of the traffic, and `role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=`, and anything calling it in a loop inflates that counter alone — a test suite that has not isolated `$TASK_FORCE_HOME` will do exactly this against your live role. Otherwise an **old `radio` binary** is on `PATH`, since every non-`--manual` call now logs one or the other; `PATH`'s `radio` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
 | PM merged but the worker never cleaned up | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered. Since #201 gc archives such mail instead of keeping a mailbox nobody will open alive forever — look in `~/.task-force/radio/dead-letter/<role>/`, and `grep 'gc: dead-lettered' ~/.task-force/radio/log` for everything it has archived. The message is intact with its id and frontmatter; only the worktree needs cleaning by hand. |

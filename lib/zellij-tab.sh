@@ -119,9 +119,10 @@ aw_record_tab_id() {
 #
 # Optional 4th arg `stay_on_caller_tab`: when "1", capture the caller's tab
 # position before `new-tab` and snap focus back via `go-to-tab` afterwards
-# (#130). Used by `task-work --auto` so PM can dispatch workers without
-# losing focus. Any other value (including empty/missing) preserves the
-# legacy focus-shift behavior.
+# (#130). task-work, task-recreate-worker and task-reviewer all pass it by
+# default so PM can dispatch without losing focus (#254); task-work /
+# task-recreate-worker --focus pass "" instead. Any other value (including
+# empty/missing) shifts focus to the new tab.
 #
 # Failure modes (no $ZELLIJ, no jq, empty position lookup, non-zero
 # go-to-tab) fall through to the legacy behavior — the worker spawn must
@@ -129,8 +130,8 @@ aw_record_tab_id() {
 # aw_zellij_tab_id_by_name above.
 #
 # Note on the ~100-300ms flicker window between new-tab and go-to-tab:
-# keystrokes typed during that window can land in the new tab. Acceptable
-# for --auto (explicit autonomy opt-in; PM is typically idle on radio).
+# keystrokes typed during that window can land in the new tab. Acceptable:
+# the dispatching PM is typically idle on radio while the launch runs.
 aw_launch_tab() {
   local slug="$1"
   local cwd="$2"

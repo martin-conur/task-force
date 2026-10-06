@@ -5,7 +5,8 @@
 #   - exports TASK_FORCE_ROLE / ZELLIJ_TAB = pm-<reponame>
 #   - exec's `claude /pm` (claude impls) / `kiro-cli chat --agent pm` (kiro)
 #   - --also aliases other repos onto this PM
-#   - exports TASK_FORCE_AUTO_SUBMIT=1 by default, honoring --no-auto-submit (#189)
+#   - exports an explicit TASK_FORCE_AUTO_SUBMIT=0 by default, =1 under
+#     --auto-submit (#189, default flipped in #254)
 #   - errors out cleanly outside a git repo
 #
 # The loadout is pinned per-test via AW_IMPL (lib/detect-impl.sh resolution
@@ -137,86 +138,120 @@ teardown() {
   rm -rf "$outside"
 }
 
-# ----- radio auto-submit opt-in (#189) --------------------------------------
+# ----- radio auto-submit: off by default (#189, #254) -----------------------
 #
 # task-pm exports TASK_FORCE_AUTO_SUBMIT so the SessionStart hook's
-# `radio register` persists AUTO_SUBMIT=1 into pm-<reponame>.info, which is
-# what flips `radio send`'s wake terminator from LF (types "radio check" and
-# waits for a human Enter) to CR (submits). Before #189 no PM ever set it, so
-# every ping to a PM sat unsubmitted in its input box. The session-file and
-# wake-terminator halves of the contract live in tests/radio_auto_submit.bats.
+# `radio register` persists it into pm-<reponame>.info, which decides whether
+# `radio send`'s wake ends in LF (types "radio check" and waits for a human
+# Enter) or CR (submits). #189 made CR the PM default; #254 reversed it, because
+# the PM's box is the one the user types in and a CR wake submits whatever is
+# half-typed there. Off is an explicit `0`, never unset: radio reads unset as
+# "restore the recorded setting", and a PM registered under #189 recorded `1`.
 
-@test "claude task-pm exports TASK_FORCE_AUTO_SUBMIT=1 by default (#189)" {
+# The AUTO_SUBMIT a PM launched this way ends up with in its session file:
+# register under exactly the env the stubbed agent received, read it back.
+# Prints `1` or nothing.
+_pm_session_auto_submit() {
+  local envfile="$1" kv role="pm-as-$RANDOM"
+  kv=$(grep -oE 'TASK_FORCE_AUTO_SUBMIT=[^ ]*' "$envfile" | tail -1 || true)
+  [[ -n "$kv" ]] || { echo "no TASK_FORCE_AUTO_SUBMIT in $envfile" >&2; return 1; }
+  env -u TASK_FORCE_AUTO_SUBMIT "$kv" "$RADIO" register --role "$role" --tab "$role" --agent claude
+  sed -n 's/^AUTO_SUBMIT=//p' "$TASK_FORCE_HOME/radio/sessions/$role.info"
+}
+
+@test "claude task-pm exports TASK_FORCE_AUTO_SUBMIT=0 by default (#254)" {
+  setup_task_force_home
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
   run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
-}
-
-@test "claude task-pm --no-auto-submit exports an explicit TASK_FORCE_AUTO_SUBMIT=0 (#189, #246)" {
-  AW_IMPL=claude-gh run "$TASK_PM" --no-auto-submit
-  assert_success
-  run cat "$STUB_CALLS_DIR/claude.env"
   refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
-  # `0`, not unset: radio register reads an unset value as "restore the role's
-  # recorded setting", so unsetting would silently ignore the opt-out on any
-  # PM that had once been registered with auto-submit (#246).
   assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
-  # Still launched — the opt-out is not an error path.
-  run stub_calls claude
-  assert_output --partial "/pm"
+  run _pm_session_auto_submit "$STUB_CALLS_DIR/claude.env"
+  assert_success
+  assert_output ""
 }
 
-@test "claude task-pm --no-auto-submit wins over an inherited env value (#189)" {
+@test "claude task-pm's default overrides a PM that recorded auto-submit under #189 (#254)" {
+  setup_task_force_home
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role "pm-$PM_REPO_NAME" --tab "pm-$PM_REPO_NAME" --agent claude
+  AW_IMPL=claude-gh run "$TASK_PM"
+  assert_success
+  local kv
+  kv=$(grep -oE 'TASK_FORCE_AUTO_SUBMIT=[^ ]*' "$STUB_CALLS_DIR/claude.env" | tail -1)
+  env -u TASK_FORCE_AUTO_SUBMIT "$kv" "$RADIO" register --role "pm-$PM_REPO_NAME" --tab "pm-$PM_REPO_NAME" --agent claude
+  run grep -F "AUTO_SUBMIT=" "$TASK_FORCE_HOME/radio/sessions/pm-$PM_REPO_NAME.info"
+  assert_failure
+}
+
+@test "claude task-pm --auto-submit / --auto opt in: AUTO_SUBMIT=1 in the session file (#254)" {
+  setup_task_force_home
+  local flag
+  for flag in --auto-submit --auto; do
+    rm -f "$STUB_CALLS_DIR/claude.env"
+    AW_IMPL=claude-gh run "$TASK_PM" "$flag"
+    assert_success
+    run cat "$STUB_CALLS_DIR/claude.env"
+    assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+    run _pm_session_auto_submit "$STUB_CALLS_DIR/claude.env"
+    assert_success
+    assert_output "1"
+  done
+}
+
+@test "claude task-pm --no-auto-submit / --no-auto state the default (#189, #246)" {
+  local flag
+  for flag in --no-auto-submit --no-auto; do
+    rm -f "$STUB_CALLS_DIR/claude.env"
+    AW_IMPL=claude-gh run "$TASK_PM" "$flag"
+    assert_success
+    run cat "$STUB_CALLS_DIR/claude.env"
+    refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+    assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
+    # Still launched — the opt-out is not an error path.
+    run stub_calls claude
+    assert_output --partial "/pm"
+  done
+}
+
+@test "claude task-pm ignores an inherited TASK_FORCE_AUTO_SUBMIT=1 (#189, #254)" {
   # A PM launched from a shell that already exported the flag (e.g. a tab
-  # spawned by task-work --auto) must still honor the explicit opt-out.
+  # spawned by task-work) must not inherit an opt-in nobody gave it.
   export TASK_FORCE_AUTO_SUBMIT=1
-  AW_IMPL=claude-gh run "$TASK_PM" --no-auto-submit
+  AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
   run cat "$STUB_CALLS_DIR/claude.env"
   refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
   assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
 }
 
-@test "claude task-pm accepts --auto-submit / --auto as explicit no-ops (#189)" {
-  AW_IMPL=claude-gh run "$TASK_PM" --auto-submit
-  assert_success
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
-
-  rm -f "$STUB_CALLS_DIR/claude.env"
-  AW_IMPL=claude-gh run "$TASK_PM" --auto
-  assert_success
-  run cat "$STUB_CALLS_DIR/claude.env"
-  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
-}
-
-@test "claude task-pm --no-auto is accepted as an alias for --no-auto-submit (#189)" {
-  AW_IMPL=claude-gh run "$TASK_PM" --no-auto
-  assert_success
-  run cat "$STUB_CALLS_DIR/claude.env"
-  refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
-}
-
-@test "kiro task-pm exports TASK_FORCE_AUTO_SUBMIT=1 by default (#189)" {
+@test "kiro task-pm exports TASK_FORCE_AUTO_SUBMIT=0 by default, =1 with --auto-submit (#254)" {
+  setup_task_force_home
   AW_IMPL=kiro-gh run "$TASK_PM"
   assert_success
   run cat "$STUB_CALLS_DIR/kiro-cli.env"
-  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
+  run _pm_session_auto_submit "$STUB_CALLS_DIR/kiro-cli.env"
+  assert_output ""
+
+  rm -f "$STUB_CALLS_DIR/kiro-cli.env"
+  AW_IMPL=kiro-gh run "$TASK_PM" --auto-submit
+  assert_success
+  run _pm_session_auto_submit "$STUB_CALLS_DIR/kiro-cli.env"
+  assert_output "1"
 }
 
-@test "task-pm --no-auto-submit composes with --also (#189)" {
+@test "task-pm --auto-submit composes with --also (#189, #254)" {
   setup_task_force_home
   local primary other
   primary=$(_clean_repo pmrepo)
   other=$(_clean_repo otherrepo)
   cd "$primary"
 
-  AW_IMPL=claude-gh run "$TASK_PM" --also "$other" --no-auto-submit
+  AW_IMPL=claude-gh run "$TASK_PM" --also "$other" --auto-submit
   assert_success
   assert_output --partial "Aliased pm-otherrepo → pm-pmrepo"
   run cat "$STUB_CALLS_DIR/claude.env"
-  refute_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
+  assert_output --partial "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
 # ----- --also alias sessions (#165) -----------------------------------------

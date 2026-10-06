@@ -164,22 +164,21 @@ _launch_line() {
   done
 }
 
-# --auto's effect on the radio prefix is the canonical body's, and no module may
-# redefine it (#237 seam 2). On claude --auto also means --permission-mode auto,
-# on kiro it does not — so the one thing both must share is this.
-@test "--auto sets TASK_FORCE_AUTO_SUBMIT=1 on every impl; plain sets =0" {
+# The radio prefix is the canonical body's, and no module may redefine it (#237
+# seam 2). Auto-submit is on by default (#254); --no-auto-submit is the off.
+@test "plain sets TASK_FORCE_AUTO_SUBMIT=1 on every impl; --no-auto-submit sets =0" {
   local impl line n=0
   for impl in $(_impls); do
     n=$((n + 1))
     _seed_impl "$impl"
-    run "$TASK_WORK_DISPATCHER" "on-$n" --auto
-    [[ "$status" -eq 0 ]] || { echo "$impl --auto: exit $status: $output" >&2; return 1; }
-    line=$(_launch_line "on-$n")
-    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=1 "* ]] || { echo "$impl --auto: $line" >&2; return 1; }
-
-    run "$TASK_WORK_DISPATCHER" "off-$n"
+    run "$TASK_WORK_DISPATCHER" "on-$n"
     [[ "$status" -eq 0 ]] || { echo "$impl plain: exit $status: $output" >&2; return 1; }
+    line=$(_launch_line "on-$n")
+    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=1 "* ]] || { echo "$impl plain: $line" >&2; return 1; }
+
+    run "$TASK_WORK_DISPATCHER" "off-$n" --no-auto-submit
+    [[ "$status" -eq 0 ]] || { echo "$impl --no-auto-submit: exit $status: $output" >&2; return 1; }
     line=$(_launch_line "off-$n")
-    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$impl plain: $line" >&2; return 1; }
+    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$impl --no-auto-submit: $line" >&2; return 1; }
   done
 }

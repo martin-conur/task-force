@@ -15,9 +15,9 @@
 # ---------------- task-work hooks ----------------
 #
 # Globals this module owns: PLAN_MODE. It READS the body's AUTO_MODE, and only
-# in aw_agent_validate_flags / aw_agent_launch_cmd: --auto's effect on radio
-# auto-submit is the canonical body's, identical across agents, and no module
-# may redefine it (#237).
+# in aw_agent_validate_flags / aw_agent_launch_cmd. Radio auto-submit is the
+# canonical body's, identical across agents, and no module may redefine it
+# (#237, #254).
 
 aw_agent_name() { echo claude; }
 
@@ -27,14 +27,9 @@ aw_agent_usage_options() {
                       /planner instead of /worker. Mutually exclusive with --auto.
                       (No effect with --no-launch.)
       --auto          Launch claude with --permission-mode auto (auto-accept
-                      low-risk tool calls) and opt into radio auto-submit, as
-                      --auto-submit does. Mutually exclusive with --plan.
-      --auto-submit   Opt into radio auto-submit only: an incoming PM ping is
-                      submitted for the agent instead of sitting in its prompt
-                      box until someone presses Enter. Leaves the permission
-                      mode alone, so it composes with --plan or no mode at all.
-      --no-auto-submit
-                      Keep the Enter gate on radio wakes even with --auto.
+                      low-risk tool calls). Permission mode only: radio
+                      auto-submit is on by default either way (#254).
+                      Mutually exclusive with --plan.
 OPTS
 }
 

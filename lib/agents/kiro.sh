@@ -11,13 +11,13 @@
 # agent was in it.
 #
 # task-work is where the kiro divergence lives: -m/--model, -a/--trust-all,
-# TASK_WORK_TRUST_ALL normalization, the aw_require_kiro_agent preflight (#218),
-# and --auto meaning auto-submit only rather than a permission mode — kiro's
-# permission model is --trust-all-tools, and stays separate.
+# TASK_WORK_TRUST_ALL normalization, and the aw_require_kiro_agent preflight
+# (#218). kiro's permission model is --trust-all-tools, so --auto is not a
+# permission mode here; since radio auto-submit and stay-on-caller-tab became
+# the defaults (#254), it has no effect on kiro at all.
 #
 # Globals this module owns: MODEL, TRUST_ALL. It reads the body's AUTO_MODE
-# nowhere: on kiro --auto's whole effect is the radio prefix, which is the
-# canonical body's.
+# nowhere.
 
 # The agent preflight (#218). Lived outside the drift-guarded header on the three
 # kiro task-work copies, since the claude ones have no kiro agent to check.
@@ -34,17 +34,9 @@ aw_agent_usage_options() {
   -a, --trust-all     Pass --trust-all-tools to kiro-cli so the worker can run
                       commands without per-tool confirmation. Defaults to
                       $TASK_WORK_TRUST_ALL=1 if set.
-      --auto          Opt this worker into radio's auto-submit wake-up: an
-                      incoming ping is submitted for the agent instead of
-                      sitting in its prompt box until someone presses Enter.
-                      Governs auto-submit ONLY — kiro's permission model is
-                      -a/--trust-all and stays separate. Also keeps focus on
-                      the calling tab instead of switching to the new one.
-                      (No effect with --no-launch.)
-      --auto-submit   Auto-submit without the focus behaviour of --auto.
-      --no-auto-submit
-                      Keep the Enter gate on radio wakes even with --auto
-                      (which then only keeps focus on the calling tab).
+      --auto          Accepted for symmetry with claude; a no-op on kiro.
+                      kiro's permission model is -a/--trust-all, and radio
+                      auto-submit is on by default (#254).
 OPTS
 }
 
@@ -59,7 +51,7 @@ ENV
 
 aw_agent_usage_examples() {
   echo "  task-work refactor-auth -m claude-opus-4.6 --trust-all"
-  echo "  task-work refactor-auth --trust-all --auto   # radio pings submit themselves"
+  echo "  task-work refactor-auth --trust-all --no-auto-submit   # you will type in its tab"
   echo "  TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing"
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared commit-msg hook installer for ci-guard. Sourced by every
-# <impl>/bin/task-work.
+# Shared commit-msg hook installer for ci-guard. Sourced by bin/task-work
+# (one canonical copy since #237).
 #
 # Exports:
 #   aw_install_ci_guard_hook <repo_dir>

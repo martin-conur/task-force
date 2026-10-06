@@ -13,6 +13,11 @@ bats_load_library bats-assert
 
 load helpers/common
 
+# Only the #206 test builds a repo; teardown_all skips whatever was never set.
+teardown() {
+  teardown_all
+}
+
 CLAUDE_TEMPLATES=(
   "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
   "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
@@ -220,11 +225,20 @@ runbook_block() {
   # runbook was right to withhold the advice. #206 added the flag, so the
   # advice is now correct — and this pins both halves together so a doc that
   # recommends the flag can never outlive the flag itself.
-  for tw in "$REPO_ROOT_REAL/kiro-gh/bin/task-work" \
-            "$REPO_ROOT_REAL/kiro-local/bin/task-work" \
-            "$REPO_ROOT_REAL/kiro-notion/bin/task-work"; do
-    run grep -cE '^\s*--auto\) AUTO_MODE="1"; shift ;;$' "$tw"
-    refute_output "0"
+  #
+  # One canonical task-work since #237, so the flag is exercised on every kiro
+  # loadout rather than grepped out of three copies: a launch with it must
+  # succeed and inject the auto-submit opt-in it exists for.
+  setup_repo
+  setup_kiro_agents
+  setup_stubs
+  mkdir -p "$MAIN_REPO/tasks"
+  local impl
+  for impl in $(bash -c "source '$REPO_ROOT_REAL/lib/detect-impl.sh'; aw_all_impls" | grep '^kiro-'); do
+    : > "$STUB_CALLS_DIR/zellij.calls"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'auto-$impl' --auto"
+    assert_success
+    assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1 kiro-cli"
   done
   for f in "${KIRO_TEMPLATES[@]}"; do
     run grep -cF 'task-work --auto' "$f"

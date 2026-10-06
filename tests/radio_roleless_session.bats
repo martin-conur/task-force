@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # A session that never registered (#229). The identity env is a command prefix on
 # the `claude` process — `bash -ic "TASK_FORCE_ROLE=… ZELLIJ_TAB=… claude …"`, see
-# claude-gh/bin/task-work's radio-env-injection region — so it lives in no shell
+# bin/task-work's radio env injection — so it lives in no shell
 # and nothing hands it back. `SessionStart` DOES fire on resume (verified against
 # all four sources: startup / resume / compact / clear), but in a new process it
 # fires with an empty environment, and every radio beat keyed off the variable

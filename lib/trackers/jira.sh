@@ -28,3 +28,46 @@ aw_tracker_pr_section() {
   echo "To create a PR:"
   echo "  gh pr create --base $base_branch --head $branch --title \"$pr_title\" --fill"
 }
+
+# ---------------- task-work hooks ----------------
+#
+# A ref is a Jira browse URL or a bare key. Both derive the lowercased key as
+# the slug; the ref passed to the worker is whatever was typed, URL or key.
+#
+# Before #237 claude-jira/bin/task-work had its own resolution order and took
+# only one positional. It now runs the shared chain in _default.sh, which is
+# what gives it the `<slug> <ref>` form the other trackers already had.
+aw_tracker_is_ref() {
+  [[ "$1" =~ atlassian\.net/browse/[A-Z][A-Z0-9_]+-[0-9]+ ]] \
+    || [[ "$1" =~ ^[A-Z][A-Z0-9_]+-[0-9]+$ ]]
+}
+
+aw_tracker_ref_slug() {
+  local key
+  if [[ "$1" =~ atlassian\.net/browse/([A-Z][A-Z0-9_]+-[0-9]+) ]]; then
+    key="${BASH_REMATCH[1]}"
+  else
+    key="$1"
+  fi
+  echo "$key" | tr '[:upper:]' '[:lower:]'
+}
+
+aw_tracker_info_key() { echo JIRA_REF; }
+
+aw_tracker_worker_prompt() { printf 'Implement Jira issue: %s' "$1"; }
+
+aw_tracker_usage_synopsis() {
+  echo "  task-work <slug> <jira-key-or-url> [options]   # explicit slug + Jira issue"
+  echo "  task-work <jira-key-or-url> [options]          # slug derived from the key (proj-123)"
+  echo "  task-work <free-form-slug> [options]           # ad-hoc, no Jira issue"
+}
+
+aw_tracker_usage_examples() {
+  echo "  task-work PROJ-123"
+  echo "  task-work https://your.atlassian.net/browse/PROJ-123"
+  echo "  task-work add-store-filtering"
+  echo "  task-work --base develop PROJ-456"
+  echo "  task-work spike-idea --no-launch"
+  echo "  # Stack a follow-up on top of an in-flight branch:"
+  echo "  task-work PROJ-789 --from task/proj-456 --base main"
+}

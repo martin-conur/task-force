@@ -91,7 +91,7 @@ miss_reason() {
 @test "task-work: a missed capture is reported on stderr and logged, and the launch still succeeds" {
   export ZELLIJ=fake-session
   export STUB_ZELLIJ_TABS_JSON='[{"name":"someone-else","tab_id":4}]'
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run env AW_IMPL=claude-gh "$TASK_WORK" my-feature
   assert_success
   assert_output --partial "Started worker in"
   assert_output --partial "Could not capture the zellij tab id for 'my-feature'"
@@ -105,7 +105,7 @@ miss_reason() {
 
 @test "task-work: the log line says not-in-zellij when run outside zellij" {
   unset ZELLIJ
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run env AW_IMPL=claude-gh "$TASK_WORK" my-feature
   assert_success
   assert_output --partial "not running inside zellij"
   run grep -c 'tab-id: task-work capture missed slug=my-feature reason=not-in-zellij ' "$LOG"
@@ -115,7 +115,7 @@ miss_reason() {
 @test "task-work: a successful capture prints nothing extra and logs nothing" {
   export ZELLIJ=fake-session
   export STUB_ZELLIJ_TABS_JSON='[{"name":"my-feature","tab_id":12}]'
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run env AW_IMPL=claude-gh "$TASK_WORK" my-feature
   assert_success
   local hit_output="$output"
   source "$WORKTREE_BASE/.my-feature.info"
@@ -131,7 +131,7 @@ miss_reason() {
 @test "task-work (kiro-gh): the shared region reports a miss in the kiro loadout too" {
   setup_kiro_agents
   export ZELLIJ=fake-session
-  run "$KIRO_GH_TASK_WORK" my-feature
+  run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature
   assert_success
   assert_output --partial "Could not capture the zellij tab id for 'my-feature'"
   run grep -c 'tab-id: task-work capture missed slug=my-feature reason=list-tabs-empty ' "$LOG"

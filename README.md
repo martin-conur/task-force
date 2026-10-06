@@ -177,11 +177,15 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
-`task-work` and `task-init` are **project-aware dispatchers** that live at the repo root: they detect the loadout and `exec` that loadout's own copy. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-board`, `task-pm`, `radio`, `ci-guard`, `task-config`, `task-remove` and `task-recreate-worker` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why `task-config` and `task-remove` in particular cannot be dispatchers.)
+`task-init` is a **project-aware dispatcher** that lives at the repo root: it detects the loadout and `exec`s that loadout's own copy. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-board`, `task-pm`, `radio`, `ci-guard`, `task-config`, `task-remove` and `task-recreate-worker` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why `task-config` and `task-remove` in particular cannot be dispatchers.)
 
-**`task-done` is a third thing, as of #236: it detects like a dispatcher and then composes instead of dispatching.** There is one `bin/task-done`, and the loadout decides which *tracker module* it sources out of `lib/trackers/` — because the seven per-loadout copies it replaced were a three-variant file wearing seven hats. `claude-gh`, `claude-notion`, `kiro-gh` and `kiro-notion` were byte-identical; `claude-local` and `kiro-local` were byte-identical to each other; `claude-jira` differed by seven lines. Removing a worktree, sweeping radio state and closing a tab never depended on which *agent* was in the tab, so there is no agent axis here at all — `lib/agents/` exists and is parity-checked, but contributes nothing until `task-work` moves too (#237).
+**`task-done` and `task-work` are a third thing: they detect like a dispatcher and then compose instead of dispatching** (#236, #237). There is one `bin/task-done` and one `bin/task-work`, and the loadout decides which *modules* they source — a tracker module out of `lib/trackers/` and, for `task-work`, an agent module out of `lib/agents/`.
 
-A loadout is therefore {tracker × agent}, and the modules are keyed on the axes rather than on the combo: four tracker files and two agent files, not seven of each. `gh.sh` and `notion.sh` override nothing for `task-done`, because `lib/trackers/_default.sh` already *is* their behaviour — if they had to restate an identical PR section, seven copies would just have become four.
+`task-done` composes a tracker only: its seven per-loadout copies were a three-variant file wearing seven hats (`claude-gh`, `claude-notion`, `kiro-gh` and `kiro-notion` byte-identical; the two locals byte-identical to each other; `claude-jira` seven lines off), and removing a worktree, sweeping radio state and closing a tab never depended on which *agent* was in the tab.
+
+`task-work` composes both, because its 2124 lines of variation ran along two orthogonal axes rather than seven shapes. The **tracker** decides ref parsing, the slug a ref derives, the usage synopsis, the `.info` key (`GH_URL` / `JIRA_REF` / `NOTION_URL` / `TASK_FILE`), the worker-prompt payload and — on `local` only — the `state.json` + board bookkeeping. The **agent** decides the extra flags (`--plan` on claude; `-m` / `-a` on kiro), the preflight (kiro's #218 agent check), the launch line and the completion message. Everything else — worktree creation, the auto-refresh, the commit-msg guard, the radio env prefix, `--auto`'s effect on radio auto-submit, the tab id capture — is the one shared body. The agent module gets first refusal on each command-line token, so its flags cannot be interleaved into the shared `case`; `tests/task_work_agents.bats` pins that no agent module claims a shared flag.
+
+A loadout is therefore {tracker × agent}, and the modules are keyed on the axes rather than on the combo: four tracker files and two agent files, not seven of each. `lib/trackers/_default.sh` carries the behaviour most trackers share, so a module overrides only what differs — `gh.sh` and `notion.sh` override nothing for `task-done`, and for `task-work` the trackers supply two predicates (`aw_tracker_is_ref`, `aw_tracker_ref_slug`) that drive one shared positional-resolution chain.
 
 When you run one of them inside a project, the dispatcher detects the impl by looking at which workflow doc is present:
 
@@ -221,7 +225,7 @@ Every loadout links it anyway, on purpose: a command that explains itself beats 
 
 ## `task-config` — which loadout is this repo on, and switching it
 
-`task-config` is the one task-force command that is deliberately **not** a dispatcher. `task-work` dispatches, `task-done` composes (#236) and `task-board` refuses off the local loadouts (#215), because all three act *within* one loadout and only need to resolve which; `task-config` acts *across* them, has to know about a loadout the repo is not on, and has to keep working when detection is ambiguous — which is exactly when you reach for it. So it is a canonical single copy, like `task-pm` and `radio`.
+`task-config` is the one task-force command that is deliberately **not** a dispatcher. `task-work` and `task-done` compose (#236, #237) and `task-board` refuses off the local loadouts (#215), because all three act *within* one loadout and only need to resolve which; `task-config` acts *across* them, has to know about a loadout the repo is not on, and has to keep working when detection is ambiguous — which is exactly when you reach for it. So it is a canonical single copy, like `task-pm` and `radio`.
 
 ### `task-config show`
 
@@ -1164,21 +1168,18 @@ bug survived.
 | `install.bats`                    | Root `install.sh` — direct args, fzf/gum TUI, numbered-menu fallback |
 | `task_init_dispatcher.bats`       | Root `task-init` — impl dispatch, passthrough flags, TUI selector |
 | `task_work_dispatcher.bats`       | Root `bin/task-work` — auto-detect impl, `--impl`/`AW_IMPL` overrides, passthrough |
+| `task_work.bats`                  | Canonical `bin/task-work`'s shared body, run as `claude-gh` — slugs, worktree + `--from` / auto-refresh, `.info` + `TAB_ID`, launch quoting |
+| `task_work_impls.bats`            | The per-impl table — one row per `aw_all_impls` entry: its tracker's `.info` key, its agent's launch line, both axes in `--help`, `--auto` → `TASK_FORCE_AUTO_SUBMIT=1` |
+| `task_work_trackers.bats`         | `task-work`'s tracker axis — notion / jira / local ref parsing, payloads, local's `state.json` + board |
+| `task_work_agents.bats`           | `task-work`'s agent axis — claude `--plan` / `--auto` / auto-submit, kiro `-m` / `-a`, shared flags identical under both |
 | `task_done_dispatcher.bats`       | Root `bin/task-done` — same detection + worktree-aware fallback |
 | `loadout_modules.bats`            | `lib/trackers/` + `lib/agents/` — every axis name in `aw_all_impls` has a module, no orphan modules, every hook resolves for all seven impls, and removing any module fails loudly |
-| `jira_task_work.bats`             | `claude-jira/bin/task-work` — input parsing, worktree, zellij launch |
 | `jira_task_init.bats`             | `claude-jira/bin/task-init` — placeholder substitution, CLAUDE.md, `--force` |
-| `claude_notion_task_work.bats`    | `claude-notion/bin/task-work` — URL/slug detection, worktree, zellij launch |
 | `claude_notion_task_init.bats`    | `claude-notion/bin/task-init` — template copy, CLAUDE.md, `--force` |
-| `claude_gh_task_work.bats`        | `claude-gh/bin/task-work` — GitHub URL → `issue-N` slug, launch |
 | `claude_gh_task_init.bats`        | `claude-gh/bin/task-init` — owner/repo/project substitution, remote auto-detect |
-| `claude_local_task_work.bats`     | `claude-local/bin/task-work` — `tasks/NNN-slug.md` → kebab `slug` (NNN- stripped), frontmatter bump, board regen |
 | `claude_local_task_init.bats`     | `claude-local/bin/task-init` — `tasks/` scaffolding, `.claude/local-workflow.md`, slash commands |
-| `kiro_task_work.bats`             | `kiro-notion/bin/task-work` — URL/slug detection, model/trust-all flags |
 | `kiro_notion_task_init.bats`      | `kiro-notion/bin/task-init` — template copy, `--force` |
-| `kiro_gh_task_work.bats`          | `kiro-gh/bin/task-work` — same as `claude-gh` but launching `kiro-cli` |
 | `kiro_gh_task_init.bats`          | `kiro-gh/bin/task-init` — owner/repo/project substitution |
-| `kiro_local_task_work.bats`       | `kiro-local/bin/task-work` — same as `claude-local` but launching `kiro-cli` |
 | `kiro_local_task_init.bats`       | `kiro-local/bin/task-init` — `tasks/` scaffolding, `.kiro/steering/local-workflow.md`, agents |
 | `task_board.bats`                 | `bin/task-board` rendering — frontmatter parsing, sidecar overlay, `_board.md` regen |
 | `task_board_dispatcher.bats`      | `bin/task-board` detection — local-loadout render, `--repo`-driven detection, refusal on gh/jira/notion |
@@ -1206,12 +1207,12 @@ Infrastructure:
 
 ### Add a new combo
 
-1. Create `<impl-name>/` with `install.sh`, `bin/task-work`, `bin/task-init`, and a `steering/*.example.md`. **No `bin/task-done`** — that is composed from `lib/trackers/<tracker>.sh` (#236), so a combo reusing an existing tracker and an existing agent needs no new module file at all.
+1. Create `<impl-name>/` with `install.sh`, `bin/task-init`, and a `steering/*.example.md`. **No `bin/task-work` and no `bin/task-done`** — both are composed from `lib/trackers/<tracker>.sh` and `lib/agents/<agent>.sh` (#236, #237), so a combo reusing an existing tracker and an existing agent needs no new module file at all.
 2. Add `<impl-name>` to the picker and `case` statement in the root `install.sh`.
 3. Add `<impl-name>` to the picker and `case` statement in the root `task-init`.
 4. Add `<impl-name>` to `aw_all_impls` in `lib/detect-impl.sh`, and the workflow doc filename to `aw_impl_workflow_doc`, so dispatchers can route to it. If the combo introduces a *new* tracker or agent (rather than a new pairing of existing ones), add `lib/trackers/<tracker>.sh` or `lib/agents/<agent>.sh` — `tests/loadout_modules.bats` derives from `aw_all_impls` and will fail until you do.
 5. Add a row to the loadout table and a per-combo section in this README.
-6. Write tests — one `.bats` file per script.
+6. Write tests — one `.bats` file per script, and a row's expectations in `tests/task_work_impls.bats` if the combo brings a new tracker or agent (the table fails on an axis value it has no expectation for).
 
 ### Test pattern
 

@@ -1,5 +1,20 @@
 #!/usr/bin/env bats
-# Tests for claude-gh/bin/task-work
+# The canonical bin/task-work's shared body (#237).
+#
+# Seven per-loadout copies used to re-assert this body up to seven times each.
+# It is one file now, so it is asserted once, here, pinned to claude-gh. What
+# genuinely differs per loadout is asserted elsewhere, against the module that
+# owns it:
+#
+#   tests/task_work_impls.bats     the per-impl table — one row per impl, each an
+#                                  observable a failed module load cannot produce
+#   tests/task_work_trackers.bats  ref parsing, .info keys, prompts, local's board
+#   tests/task_work_agents.bats    claude's --plan / --auto, kiro's -m / -a, and
+#                                  the shared flags behaving alike under both
+#
+# The gh-flavoured and claude-flavoured tests below stay here because claude-gh
+# is the impl this suite runs as; their tracker/agent counterparts live in the
+# two suites above.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -10,6 +25,7 @@ setup() {
   setup_repo
   setup_stubs
   cd "$MAIN_REPO"
+  export AW_IMPL=claude-gh
 }
 
 teardown() {
@@ -26,7 +42,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "free-form slug: lowercase and sanitize" {
-  run "$CLAUDE_GH_TASK_WORK" "My Feature Task"
+  run "$TASK_WORK" "My Feature Task"
   assert_success
   assert [ -d "$WORKTREE_BASE/my-feature-task" ]
 }
@@ -34,26 +50,26 @@ teardown() {
 @test "free-form slug: truncated to 50 chars" {
   local long_slug
   long_slug=$(printf 'abcde%.0s' {1..20})  # "abcde" x20 = 100 chars
-  run "$CLAUDE_GH_TASK_WORK" "$long_slug"
+  run "$TASK_WORK" "$long_slug"
   assert_success
   run bash -c "ls '$WORKTREE_BASE' | head -1"
   assert [ "${#output}" -le 50 ]
 }
 
 @test "github issue URL: derives slug as issue-N" {
-  run "$CLAUDE_GH_TASK_WORK" "https://github.com/owner/repo/issues/42"
+  run "$TASK_WORK" "https://github.com/owner/repo/issues/42"
   assert_success
   assert [ -d "$WORKTREE_BASE/issue-42" ]
 }
 
 @test "github issue URL with trailing params: still derives issue number" {
-  run "$CLAUDE_GH_TASK_WORK" "https://github.com/owner/repo/issues/99?foo=bar"
+  run "$TASK_WORK" "https://github.com/owner/repo/issues/99?foo=bar"
   assert_success
   assert [ -d "$WORKTREE_BASE/issue-99" ]
 }
 
 @test "explicit slug + URL: slug takes precedence over derived" {
-  run "$CLAUDE_GH_TASK_WORK" "my-explicit-slug" "https://github.com/owner/repo/issues/42"
+  run "$TASK_WORK" "my-explicit-slug" "https://github.com/owner/repo/issues/42"
   assert_success
   assert [ -d "$WORKTREE_BASE/my-explicit-slug" ]
 }
@@ -63,7 +79,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "creates git worktree on branch task/<slug>" {
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   local branches
   branches=$(git -C "$MAIN_REPO" branch --list "task/my-feature")
@@ -72,9 +88,9 @@ teardown() {
 }
 
 @test "parallel session: appends 5-char hash when worktree already exists" {
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   assert_output --partial "parallel session"
   run bash -c "ls '$WORKTREE_BASE' | grep -c '^my-feature'"
@@ -87,7 +103,7 @@ teardown() {
   git -C "$MAIN_REPO" add newfile.txt
   git -C "$MAIN_REPO" commit -q -m "advance main"
 
-  run "$CLAUDE_GH_TASK_WORK" stale-feature
+  run "$TASK_WORK" stale-feature
   assert_success
   assert_output --partial "Branch task/stale-feature already exists. Reusing it."
   assert_output --partial "Current HEAD on main"
@@ -112,7 +128,7 @@ teardown() {
   local main_head
   main_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
 
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/my-feature" rev-parse HEAD)
@@ -129,7 +145,7 @@ teardown() {
   feature_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
   git -C "$MAIN_REPO" checkout -q main
 
-  run "$CLAUDE_GH_TASK_WORK" --from feature-x stacked-feature
+  run "$TASK_WORK" --from feature-x stacked-feature
   assert_success
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/stacked-feature" rev-parse HEAD)
@@ -143,7 +159,7 @@ teardown() {
   git -C "$MAIN_REPO" commit -q -m "y"
   git -C "$MAIN_REPO" checkout -q main
 
-  run "$CLAUDE_GH_TASK_WORK" --from feature-y --base main stacked
+  run "$TASK_WORK" --from feature-y --base main stacked
   assert_success
   source "$WORKTREE_BASE/.stacked.info"
   assert_equal "$BASE_BRANCH" "main"
@@ -174,7 +190,7 @@ teardown() {
   git -C "$MAIN_REPO" remote add origin "$upstream"
   git -C "$MAIN_REPO" fetch -q origin
 
-  run "$CLAUDE_GH_TASK_WORK" --from origin/upstream-feature spike
+  run "$TASK_WORK" --from origin/upstream-feature spike
   assert_success
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/spike" rev-parse HEAD)
@@ -184,7 +200,7 @@ teardown() {
 }
 
 @test "--from <unknown-ref>: errors out" {
-  run "$CLAUDE_GH_TASK_WORK" --from no-such-ref my-feature
+  run "$TASK_WORK" --from no-such-ref my-feature
   assert_failure
   assert_output --partial "does not resolve to a commit"
   # No worktree should have been created.
@@ -192,7 +208,7 @@ teardown() {
 }
 
 @test "--from missing value: errors out" {
-  run "$CLAUDE_GH_TASK_WORK" --from
+  run "$TASK_WORK" --from
   assert_failure
   assert_output --partial "--from requires a value"
 }
@@ -206,7 +222,7 @@ teardown() {
   feat_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
   git -C "$MAIN_REPO" checkout -q main
 
-  run "$CLAUDE_GH_TASK_WORK" -f feature-z forked
+  run "$TASK_WORK" -f feature-z forked
   assert_success
   local wt_head
   wt_head=$(git -C "$WORKTREE_BASE/forked" rev-parse HEAD)
@@ -251,7 +267,7 @@ _setup_stale_local_base() {
   local_head=$(git -C "$MAIN_REPO" rev-parse main)
   [[ "$remote_head" != "$local_head" ]]
 
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   assert_output --partial "Local 'main' is behind 'origin/main'"
   assert_output --partial "Forking from origin/main"
@@ -274,7 +290,7 @@ _setup_stale_local_base() {
   local local_head
   local_head=$(git -C "$MAIN_REPO" rev-parse main)
 
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   refute_output --partial "is behind"
   local wt_head
@@ -292,7 +308,7 @@ _setup_stale_local_base() {
   local local_head
   local_head=$(git -C "$MAIN_REPO" rev-parse main)
 
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   refute_output --partial "is behind"
   local wt_head
@@ -312,7 +328,7 @@ _setup_stale_local_base() {
   feat_head=$(git -C "$MAIN_REPO" rev-parse HEAD)
   git -C "$MAIN_REPO" checkout -q main
 
-  run "$CLAUDE_GH_TASK_WORK" --from feature-w stacked
+  run "$TASK_WORK" --from feature-w stacked
   assert_success
   refute_output --partial "is behind"
   local wt_head
@@ -346,7 +362,7 @@ _setup_stale_local_base() {
   git -C "$sibling" push -q origin main
   rm -rf "$sibling"
 
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   refute_output --partial "is behind"
   local wt_head
@@ -359,7 +375,7 @@ _setup_stale_local_base() {
   local local_head
   local_head=$(git -C "$MAIN_REPO" rev-parse main)
 
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   refute_output --partial "is behind"
   local wt_head
@@ -372,7 +388,7 @@ _setup_stale_local_base() {
 # ---------------------------------------------------------------------------
 
 @test "writes .info file with BASE_BRANCH=current branch" {
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   local info="$WORKTREE_BASE/.my-feature.info"
   assert [ -f "$info" ]
@@ -381,7 +397,7 @@ _setup_stale_local_base() {
 }
 
 @test "--base flag overrides BASE_BRANCH in .info" {
-  run "$CLAUDE_GH_TASK_WORK" --base develop my-feature
+  run "$TASK_WORK" --base develop my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "$BASE_BRANCH" "develop"
@@ -389,14 +405,14 @@ _setup_stale_local_base() {
 
 @test ".info records GH_URL when URL is provided" {
   local url="https://github.com/owner/repo/issues/42"
-  run "$CLAUDE_GH_TASK_WORK" my-feature "$url"
+  run "$TASK_WORK" my-feature "$url"
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "$GH_URL" "$url"
 }
 
 @test ".info GH_URL is empty for free-form slugs" {
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${GH_URL:-}" ""
@@ -408,7 +424,7 @@ _setup_stale_local_base() {
   # name and appends TAB_ID= to $INFO_FILE so task-done has an authoritative
   # source independent of the radio session file's mid-life state.
   export STUB_ZELLIJ_TABS_JSON='[{"name":"my-feature","tab_id":12}]'
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${TAB_ID:-}" "12"
@@ -419,7 +435,7 @@ _setup_stale_local_base() {
   # returns empty → no TAB_ID= line is appended. task-done's fallback (radio
   # session file) covers this case; the miss itself is reported and logged at
   # launch — see tests/tab_id_capture.bats (#242).
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   run grep "^TAB_ID=" "$WORKTREE_BASE/.my-feature.info"
   assert_failure
@@ -431,7 +447,7 @@ _setup_stale_local_base() {
   # repaints the tab name to "▶️ my-feature". A literal-name jq match would
   # miss; aw_zellij_tab_id_by_name's prefix-stripping filter must still hit.
   export STUB_ZELLIJ_TABS_JSON='[{"name":"▶️ my-feature","tab_id":12}]'
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${TAB_ID:-}" "12"
@@ -440,7 +456,7 @@ _setup_stale_local_base() {
 @test ".info records TAB_ID when the tab is idle-painted (⏸️ <slug>) at lookup time (#117 review)" {
   # Symmetric to the busy-paint case — idle paint must also be stripped.
   export STUB_ZELLIJ_TABS_JSON='[{"name":"⏸️ my-feature","tab_id":12}]'
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${TAB_ID:-}" "12"
@@ -454,7 +470,7 @@ _setup_stale_local_base() {
   # awaiting state. Sync the lib's strip to the radio's bytes and assert
   # the lookup hits.
   export STUB_ZELLIJ_TABS_JSON='[{"name":"❓︎ my-feature","tab_id":12}]'
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${TAB_ID:-}" "12"
@@ -465,13 +481,13 @@ _setup_stale_local_base() {
 # ---------------------------------------------------------------------------
 
 @test "opens a new zellij tab named after the slug" {
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   assert_stub_called zellij "new-tab --name my-feature"
 }
 
 @test "--no-launch: opens tab but does not inject claude command" {
-  run "$CLAUDE_GH_TASK_WORK" --no-launch my-feature
+  run "$TASK_WORK" --no-launch my-feature
   assert_success
   assert_output --partial "claude NOT launched"
   run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
@@ -480,13 +496,13 @@ _setup_stale_local_base() {
 
 @test "claude command includes task URL when provided" {
   local url="https://github.com/owner/repo/issues/42"
-  run "$CLAUDE_GH_TASK_WORK" my-feature "$url"
+  run "$TASK_WORK" my-feature "$url"
   assert_success
   assert_stub_called zellij "Implement task: $url"
 }
 
 @test "claude command uses /worker for free-form slugs" {
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_success
   # Bare `claude "/worker"` (no URL suffix)
   assert_stub_called zellij 'claude "/worker"'
@@ -497,45 +513,45 @@ _setup_stale_local_base() {
 # ---------------------------------------------------------------------------
 
 @test "--plan: launches claude in plan mode running /planner" {
-  run "$CLAUDE_GH_TASK_WORK" --plan my-feature
+  run "$TASK_WORK" --plan my-feature
   assert_success
   assert_stub_called zellij 'claude --permission-mode plan "/planner"'
 }
 
 @test "--plan with URL: passes URL to /planner" {
   local url="https://github.com/owner/repo/issues/42"
-  run "$CLAUDE_GH_TASK_WORK" --plan my-feature "$url"
+  run "$TASK_WORK" --plan my-feature "$url"
   assert_success
   assert_stub_called zellij "claude --permission-mode plan \"/planner $url\""
 }
 
 @test "-p alias works the same as --plan" {
-  run "$CLAUDE_GH_TASK_WORK" -p my-feature
+  run "$TASK_WORK" -p my-feature
   assert_success
   assert_stub_called zellij 'claude --permission-mode plan "/planner"'
 }
 
 @test "--auto: launches claude in auto mode running /worker" {
-  run "$CLAUDE_GH_TASK_WORK" --auto my-feature
+  run "$TASK_WORK" --auto my-feature
   assert_success
   assert_stub_called zellij 'claude --permission-mode auto "/worker"'
 }
 
 @test "--auto with URL: keeps /worker Implement task prefix" {
   local url="https://github.com/owner/repo/issues/42"
-  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  run "$TASK_WORK" --auto my-feature "$url"
   assert_success
   assert_stub_called zellij "claude --permission-mode auto \"/worker Implement task: $url\""
 }
 
 @test "--auto --plan: errors out (mutually exclusive)" {
-  run "$CLAUDE_GH_TASK_WORK" --auto --plan my-feature
+  run "$TASK_WORK" --auto --plan my-feature
   assert_failure
   assert_output --partial "--auto and --plan are mutually exclusive"
 }
 
 @test "--no-launch with --plan: opens tab without invoking claude (mode flag is a no-op)" {
-  run "$CLAUDE_GH_TASK_WORK" --no-launch --plan my-feature
+  run "$TASK_WORK" --no-launch --plan my-feature
   assert_success
   assert_output --partial "claude NOT launched"
   run grep -F "claude " "$STUB_CALLS_DIR/zellij.calls"
@@ -548,38 +564,38 @@ _setup_stale_local_base() {
 
 @test "fails outside a git repo" {
   cd /tmp
-  run "$CLAUDE_GH_TASK_WORK" my-feature
+  run "$TASK_WORK" my-feature
   assert_failure
   assert_output --partial "not in a git repo"
 }
 
 @test "fails when --base missing its value" {
-  run "$CLAUDE_GH_TASK_WORK" --base
+  run "$TASK_WORK" --base
   assert_failure
   assert_output --partial "--base requires a value"
 }
 
 @test "fails on unknown flag" {
-  run "$CLAUDE_GH_TASK_WORK" --unknown-flag
+  run "$TASK_WORK" --unknown-flag
   assert_failure
 }
 
 # #144 round-5: GH_URL containing shell metacharacters must reach the
-# /worker prompt un-expanded. `printf %q` in build_claude_cmd shell-escapes
+# /worker prompt un-expanded. `printf %q` in bin/task-work shell-escapes
 # the URL before it's embedded in the assembled `claude "/worker ..."`
 # string. Without %q, the child `bash -ic` re-parse would expand `$var`,
 # `$(...)`, backticks, etc. inside the double-quoted /worker payload before
 # the agent ever saw the arg. GitHub URLs don't normally carry these
-# characters, but the dispatcher passes any URL matching `is_github_url`
+# characters, but task-work passes any URL matching gh's `aw_tracker_is_ref`
 # through verbatim — so a URL fragment / query string with a stray `$` is
 # theoretically possible.
 @test "task-work: GH_URL with '\$' in path lands escaped in /worker command (#144 round-5)" {
-  # is_github_url only checks for `github.com.../issues/` substring, so the
-  # query string is free to carry arbitrary characters that survive into
-  # build_claude_cmd. printf %q must escape the `$` before it lands in the
+  # gh's aw_tracker_is_ref only checks for a `github.com.../issues/` substring,
+  # so the query string is free to carry arbitrary characters that survive into
+  # the launch line. printf %q must escape the `$` before it lands in the
   # double-quoted /worker payload.
   local url='https://github.com/owner/repo/issues/42?$HOME'
-  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  run "$TASK_WORK" --auto my-feature "$url"
   assert_success
   # printf %q on bash 3.2 renders `$` as `\$`.
   assert_stub_called zellij '\$HOME'
@@ -589,7 +605,7 @@ _setup_stale_local_base() {
 
 @test "task-work: GH_URL with '\$(...)' lands escaped in /worker command (#144 round-5)" {
   local url='https://github.com/owner/repo/issues/42?q=$(date)'
-  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  run "$TASK_WORK" --auto my-feature "$url"
   assert_success
   # `$(date)` becomes `\$\(date\)`.
   assert_stub_called zellij '\$\(date\)'
@@ -599,11 +615,11 @@ _setup_stale_local_base() {
 # prefix must precede $RADIO_ENV_PREFIX so the env assignments bind to
 # `claude` (an external command), not the `set` builtin — `VAR=val cmd1;
 # cmd2` scopes VAR=val to `cmd1` only. Pins the ordering to catch a future
-# regression where someone re-introduces `set +H` inside build_claude_cmd's
+# regression where someone re-introduces `set +H` inside aw_agent_launch_cmd's
 # output (which is what broke round-2 in #144).
 @test "task-work: 'set +H' precedes RADIO_ENV_PREFIX so env vars reach claude (#144 round-4)" {
   local url="https://github.com/owner/repo/issues/42"
-  run "$CLAUDE_GH_TASK_WORK" --auto my-feature "$url"
+  run "$TASK_WORK" --auto my-feature "$url"
   assert_success
   local cmd_line
   cmd_line=$(grep -m1 -F "new-tab --name my-feature" "$STUB_CALLS_DIR/zellij.calls")

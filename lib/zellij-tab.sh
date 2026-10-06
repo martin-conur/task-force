@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared zellij tab launcher. Sourced by every <impl>/bin/task-work.
+# Shared zellij tab launcher. Sourced by bin/task-work and the other launchers.
 #
 # Exports:
 #   aw_launch_tab <slug> <cwd> <cmd>

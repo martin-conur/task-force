@@ -102,8 +102,8 @@ EOF
 }
 
 # The real callers name a root script as `self` (#238): the one task-board is
-# bin/task-board, and neither <impl>/bin/task-work nor lib/trackers/ has a copy
-# beside it any more. Pin that the names they pass resolve to it, so the
+# bin/task-board, and neither lib/trackers/ nor any per-loadout directory has a
+# copy beside it any more. Pin that the names they pass resolve to it, so the
 # fallback cannot quietly start finding nothing again.
 @test "resolve: the local callers' fallback is the root task-board" {
   local caller resolved
@@ -111,10 +111,12 @@ EOF
     resolved=$(aw_resolve_task_board "$caller")
     assert_equal "$resolved" "$REPO_ROOT_REAL/bin/task-board"
   done
-  run grep -c 'aw_regenerate_board "$REPO_ROOT" "$AW_ROOT_REAL/bin/task-work"' \
-    "$REPO_ROOT_REAL/claude-local/bin/task-work" "$REPO_ROOT_REAL/kiro-local/bin/task-work"
-  assert_success
-  refute_output --partial ":0"
+  # Both local callers live in the tracker module since #237, and each names
+  # its root script explicitly rather than letting `self` default to
+  # ${BASH_SOURCE[1]} — which from there would be lib/trackers/local.sh.
+  run grep -c 'aw_regenerate_board "$repo_root" "$AW_ROOT/bin/task-work"' \
+    "$REPO_ROOT_REAL/lib/trackers/local.sh"
+  assert_output "1"
   run grep -c 'aw_regenerate_board "$main_worktree" "$AW_ROOT/bin/task-done"' \
     "$REPO_ROOT_REAL/lib/trackers/local.sh"
   assert_output "1"

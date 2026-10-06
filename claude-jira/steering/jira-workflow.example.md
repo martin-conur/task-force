@@ -51,6 +51,7 @@ Reference the Jira key as a prefix: `{KEY}-123: <short description>`
 ### Shell Commands
 
 `task-work <JIRA-KEY-or-url-or-slug> [options]` — create worktree + zellij tab + worker session
+(`task-work <slug> <JIRA-KEY-or-url>` names the slug explicitly)
 
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
@@ -58,6 +59,7 @@ Reference the Jira key as a prefix: `{KEY}-123: <short description>`
 - `--auto` — launch the worker in Claude auto permission mode (runs `/worker`) **and** opt it into radio auto-submit; mutually exclusive with `--plan`
 - `--auto-submit` — radio auto-submit only: an incoming wake submits itself instead of waiting in the prompt box for an Enter. No permission mode, so it composes with `--plan` — and a worker kept off `--auto` because its task is destructive still gets its handoffs (#246)
 - `--no-auto-submit` — keep the Enter gate on radio wakes, even with `--auto` (wins in either order)
+- `--no-launch` — open the worktree tab but do NOT start Claude
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
@@ -65,8 +67,10 @@ Examples:
 ```bash
 task-work {KEY}-42
 task-work https://{SITE}.atlassian.net/browse/{KEY}-42
+task-work add-auth {KEY}-42
 task-work refactor-auth --plan
 task-work {KEY}-99 --from task/{KEY}-46 --base main --auto   # stack on an in-flight branch
+task-work spike-idea --no-launch
 ```
 
 `task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup

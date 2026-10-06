@@ -30,10 +30,14 @@ if [[ "${BATS_TEST_NAME:-}" != source ]]; then
   require_task_force_free_path || exit 1
 fi
 
-KIRO_TASK_WORK="$REPO_ROOT_REAL/kiro-notion/bin/task-work"
-JIRA_TASK_WORK="$REPO_ROOT_REAL/claude-jira/bin/task-work"
 JIRA_TASK_INIT="$REPO_ROOT_REAL/claude-jira/bin/task-init"
 TASK_INIT_DISPATCHER="$REPO_ROOT_REAL/task-init"
+# task-work is a canonical single copy since #237 — one body composing one
+# tracker module and one agent module, in place of seven per-loadout files whose
+# seven *_TASK_WORK vars are retired with them. Pin a loadout with `AW_IMPL=` as
+# for task-done. Same two-names-one-path split: TASK_WORK is what a behaviour
+# test runs, TASK_WORK_DISPATCHER what a test about impl detection runs.
+TASK_WORK="$REPO_ROOT_REAL/bin/task-work"
 TASK_WORK_DISPATCHER="$REPO_ROOT_REAL/bin/task-work"
 # task-board is a canonical single copy since #238: the render body moved into
 # the root file that used to dispatch to two byte-identical per-loadout copies,
@@ -56,21 +60,16 @@ TASK_BOARD_DISPATCHER="$REPO_ROOT_REAL/bin/task-board"
 TASK_DONE="$REPO_ROOT_REAL/bin/task-done"
 TASK_DONE_DISPATCHER="$REPO_ROOT_REAL/bin/task-done"
 JIRA_TEMPLATE="$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
-CLAUDE_NOTION_TASK_WORK="$REPO_ROOT_REAL/claude-notion/bin/task-work"
 CLAUDE_NOTION_TASK_INIT="$REPO_ROOT_REAL/claude-notion/bin/task-init"
 CLAUDE_NOTION_TEMPLATE="$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
 KIRO_TASK_INIT="$REPO_ROOT_REAL/kiro-notion/bin/task-init"
 KIRO_TEMPLATE="$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
-CLAUDE_GH_TASK_WORK="$REPO_ROOT_REAL/claude-gh/bin/task-work"
 CLAUDE_GH_TASK_INIT="$REPO_ROOT_REAL/claude-gh/bin/task-init"
 CLAUDE_GH_TEMPLATE="$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
-KIRO_GH_TASK_WORK="$REPO_ROOT_REAL/kiro-gh/bin/task-work"
 KIRO_GH_TASK_INIT="$REPO_ROOT_REAL/kiro-gh/bin/task-init"
 KIRO_GH_TEMPLATE="$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
-CLAUDE_LOCAL_TASK_WORK="$REPO_ROOT_REAL/claude-local/bin/task-work"
 CLAUDE_LOCAL_TASK_INIT="$REPO_ROOT_REAL/claude-local/bin/task-init"
 CLAUDE_LOCAL_TEMPLATE="$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
-KIRO_LOCAL_TASK_WORK="$REPO_ROOT_REAL/kiro-local/bin/task-work"
 KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
 KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
 # radio / task-pm / task-reviewer are canonical root binaries (#170). Tests

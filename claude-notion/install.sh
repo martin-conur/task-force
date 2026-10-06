@@ -6,10 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Installing claude-notion scripts..."
 
 # region:install-shared-symlinks
-# Shared root scripts. task-init / task-work are impl-dispatching
-# scripts at the repo root (they route per-project based on which workflow doc
-# is present); task-done resolves the same way but then composes a tracker
-# module out of lib/trackers/ instead of exec'ing a per-loadout copy (#236);
+# Shared root scripts. task-init is an impl-dispatching script at the repo
+# root (it routes per-project based on which workflow doc is present);
+# task-done and task-work resolve the same way but then compose modules out of
+# lib/trackers/ (and, for task-work, lib/agents/) instead of exec'ing a
+# per-loadout copy (#236, #237);
 # task-board, task-pm, radio, task-config, task-remove and
 # task-recreate-worker are canonical single copies (#170, #219, #220, #230, #238 —
 # task-config and task-remove act *across* loadouts, so a per-loadout copy would
@@ -24,7 +25,7 @@ mkdir -p ~/.local/bin
 ln -sf "$SCRIPT_DIR/../task-init" ~/.local/bin/task-init
 echo "  ✓ Script: task-init (shared dispatcher)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-work" ~/.local/bin/task-work
-echo "  ✓ Script: task-work (shared dispatcher)"; sleep 0.05
+echo "  ✓ Script: task-work (canonical + tracker × agent modules)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-done" ~/.local/bin/task-done
 echo "  ✓ Script: task-done (canonical + tracker modules)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-pm" ~/.local/bin/task-pm

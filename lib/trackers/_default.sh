@@ -158,3 +158,53 @@ aw_tracker_usage_examples() {
 # Fires after the worktree and its .info sidecar exist, before the tab opens.
 # Tracker-local bookkeeping — only `local` has any.
 aw_tracker_post_worktree() { :; }
+
+# ---------------- task-reviewer hooks ----------------
+#
+# task-reviewer's second positional is "the spec this PR claims to close", which
+# is not task-work's ref: a gh reviewer takes a bare issue number, and a local
+# one takes a slug for a file that need not exist in the PR's checkout. So these
+# are their own hooks rather than aw_tracker_is_ref reused (#239).
+#
+# The defaults are the opaque pass-through jira / notion / local all had (#144):
+# whatever was typed reaches /reviewer verbatim, and there is no PR-body
+# convention to fall back on.
+
+# aw_tracker_review_spec <input> <pr_url> <pr_body>
+#
+# Sets AW_SPEC_ID (written to the reviewer's .info as ISSUE_NUMBER, empty when
+# there is no spec) and AW_SPEC_REF (what /reviewer receives as its 2nd
+# argument, empty for none). Non-zero only when a non-empty <input> is not a
+# spec this tracker can name; the caller refuses on that.
+aw_tracker_review_spec() {
+  AW_SPEC_ID="$1"
+  AW_SPEC_REF="$1"
+}
+
+# aw_tracker_review_spec_shape
+#
+# The noun phrase the default usage block names the spec by.
+aw_tracker_review_spec_shape() { echo "this tracker's own task identifier"; }
+
+# aw_tracker_review_usage_spec
+#
+# The <spec> paragraph of task-reviewer's usage. Printed.
+aw_tracker_review_usage_spec() {
+  cat <<TXT
+  <spec-identifier>       Optional — the spec this PR claims to close:
+                          $(aw_tracker_review_spec_shape),
+                          passed to /reviewer as-is. PR-body auto-detect is
+                          GitHub-only, so pass it explicitly. With no spec id,
+                          the reviewer proceeds with a diff-only review.
+TXT
+}
+
+# aw_tracker_review_no_spec_warning <pr_number>
+#
+# Why there is no spec. Printed to stdout; the caller sends it to stderr and
+# adds the shared "diff-only review" line.
+aw_tracker_review_no_spec_warning() {
+  echo "⚠ No spec identifier passed for PR #$1."
+  echo "  PR-body auto-detect is GitHub-only — pass the spec id (Jira key, Notion URL,"
+  echo "  local task slug) as the 2nd positional arg to enable spec-compliance review."
+}

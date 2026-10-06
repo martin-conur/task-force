@@ -44,3 +44,9 @@ aw_tracker_usage_examples() {
   echo "  # Stack a follow-up on top of an in-flight branch:"
   echo "  task-work followup <notion-url> --from task/refactor-auth --base main"
 }
+
+# ---------------- task-reviewer hooks ----------------
+#
+# Only the noun differs from the default: the spec still passes to /reviewer
+# verbatim, with no PR-body convention to fall back on (#144, #239).
+aw_tracker_review_spec_shape() { echo "a Notion page URL"; }

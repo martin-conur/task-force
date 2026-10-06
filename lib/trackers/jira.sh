@@ -71,3 +71,9 @@ aw_tracker_usage_examples() {
   echo "  # Stack a follow-up on top of an in-flight branch:"
   echo "  task-work PROJ-789 --from task/proj-456 --base main"
 }
+
+# ---------------- task-reviewer hooks ----------------
+#
+# Only the noun differs from the default: the spec still passes to /reviewer
+# verbatim, with no PR-body convention to fall back on (#144, #239).
+aw_tracker_review_spec_shape() { echo "a Jira issue key (e.g. PROJ-123) or browse URL"; }

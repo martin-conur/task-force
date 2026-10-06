@@ -366,6 +366,64 @@ teardown() {
   assert_output --partial "unknown flag"
 }
 
+# ---------------------------------------------------------------------------
+# Spec resolution and help come from the tracker module (#239)
+# ---------------------------------------------------------------------------
+
+# Before #239 every loadout's --help printed all four trackers' shapes. Each now
+# prints only its own, so a row that names another tracker's shape is a wrong
+# module, not stale text.
+@test "--help names only this tracker's spec shape, on every claude loadout (#239)" {
+  local t want
+  for t in gh jira notion local; do
+    case "$t" in
+      gh)     want="auto-detected from the PR body's Closes/Fixes/Resolves" ;;
+      jira)   want="a Jira issue key (e.g. PROJ-123) or browse URL" ;;
+      notion) want="a Notion page URL" ;;
+      local)  want="a local task slug or filename" ;;
+    esac
+    AW_IMPL="claude-$t" run "$TASK_REVIEWER" --help
+    assert_success
+    assert_output --partial "$want"
+    refute_output --partial "claude-jira"
+    [[ "$t" == jira ]]   || refute_output --partial "Jira issue key"
+    [[ "$t" == notion ]] || refute_output --partial "Notion page URL"
+    [[ "$t" == local ]]  || refute_output --partial "local task slug or filename"
+  done
+}
+
+@test "--help outside a configured repo says the spec shape is the tracker's (#239)" {
+  local outside="$BATS_TEST_TMPDIR/not-a-repo"
+  mkdir -p "$outside"
+  cd "$outside"
+  run "$TASK_REVIEWER" --help
+  assert_success
+  assert_output --partial "<spec-identifier>"
+  assert_output --partial "Run"
+  assert_output --partial "--help inside a configured repo for its exact form."
+}
+
+# The .info file's ISSUE_NUMBER is the tracker's raw id: numeric on gh, the
+# typed identifier elsewhere. task-done reads it, so pin it per tracker.
+@test "writes the tracker's own spec id to .info as ISSUE_NUMBER, per tracker (#239)" {
+  local t arg want
+  for t in gh jira notion local; do
+    case "$t" in
+      gh)     arg="https://github.com/owner/repo/issues/38"; want="38" ;;
+      jira)   arg="PROJ-123"; want="PROJ-123" ;;
+      notion) arg="https://www.notion.so/Spec-1234abcd"; want="$arg" ;;
+      local)  arg="042-add-login"; want="042-add-login" ;;
+    esac
+    AW_IMPL="claude-$t" run "$TASK_REVIEWER" 42 "$arg"
+    assert_success
+    run grep -x "ISSUE_NUMBER=$want" "$WORKTREE_BASE/.review-pr42.info"
+    assert_success
+    git -C "$MAIN_REPO" worktree remove --force "$WORKTREE_BASE/review-pr42"
+    git -C "$MAIN_REPO" branch -q -D task/review-pr42
+    rm -f "$WORKTREE_BASE/.review-pr42.info"
+  done
+}
+
 # ===========================================================================
 # Per-loadout parity: jira / notion / local (same canonical body, AW_IMPL-pinned)
 # ===========================================================================

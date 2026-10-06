@@ -155,7 +155,9 @@ _pm_session_auto_submit() {
   local envfile="$1" kv role="pm-as-$RANDOM"
   kv=$(grep -oE 'TASK_FORCE_AUTO_SUBMIT=[^ ]*' "$envfile" | tail -1 || true)
   [[ -n "$kv" ]] || { echo "no TASK_FORCE_AUTO_SUBMIT in $envfile" >&2; return 1; }
-  env -u TASK_FORCE_AUTO_SUBMIT "$kv" "$RADIO" register --role "$role" --tab "$role" --agent claude
+  # register's stderr (an EMPTY TAB_ID warning wherever no tab resolves) is not
+  # the answer; under `run` it would be captured into $output with it.
+  env -u TASK_FORCE_AUTO_SUBMIT "$kv" "$RADIO" register --role "$role" --tab "$role" --agent claude 2>/dev/null
   sed -n 's/^AUTO_SUBMIT=//p' "$TASK_FORCE_HOME/radio/sessions/$role.info"
 }
 

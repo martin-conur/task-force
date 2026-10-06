@@ -101,3 +101,22 @@ aw_agent_launch_cmd() {
 
 # The noun in "Started <this> in <dir>".
 aw_agent_started_message() { echo "worker"; }
+
+# ---------------- task-recreate-worker hooks ----------------
+
+# aw_agent_resume_cmd <session-id>
+#
+# The launch line that resumes this role's previous session instead of starting
+# a fresh one (#239). An empty id hands over to Claude's own picker: the caller
+# found nothing that identifies the session beyond doubt, and resuming the wrong
+# one silently is worse than asking. Reads AUTO_MODE exactly as
+# aw_agent_launch_cmd does.
+aw_agent_resume_cmd() {
+  local id="$1" mode_prefix=""
+  [[ -n "${AUTO_MODE:-}" ]] && mode_prefix="--permission-mode auto "
+  if [[ -n "$id" ]]; then
+    echo "claude ${mode_prefix}--resume $id"
+  else
+    echo "claude ${mode_prefix}--resume"
+  fi
+}

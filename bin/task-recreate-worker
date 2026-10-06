@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # task-recreate-worker — rebind a worker whose tab died but whose worktree
-# survived (#230). Canonical single copy, all loadouts (#170): only the final
-# launch line differs by agent (claude vs kiro), resolved via lib/detect-impl.sh.
+# survived (#230). Canonical single copy, all loadouts (#170): what differs by
+# loadout — the sidecar's ref key, the worker prompt, the launch line, --resume,
+# the agent preflight — comes from the same lib/trackers + lib/agents modules
+# task-work composes (#239), so a recovered worker is launched the way task-work
+# would launch it rather than the way a second copy remembers.
 #
 # The gap this fills: a machine restart (or a killed zellij server) takes out
 # every tab on the box while leaving the work itself entirely intact. Nothing in
@@ -44,8 +47,6 @@ source "$AW_ROOT/lib/zellij-tab.sh"
 source "$AW_ROOT/lib/repo-name.sh"
 # shellcheck source=lib/ci-guard.sh
 source "$AW_ROOT/lib/ci-guard.sh"
-# shellcheck source=lib/kiro-agent.sh
-source "$AW_ROOT/lib/kiro-agent.sh"
 
 usage() {
   cat <<'EOF'
@@ -106,19 +107,29 @@ if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
   done
   exit 1
 fi
-AGENT="${IMPL%%-*}"
 
-# The tracker module, for the one thing this command needs from it: which key
-# task-work wrote the task ref under in the sidecar, and the prompt that ref is
-# relaunched with (#240). Resolved first and sourced second, as task-work does.
-# The agent / tracker `case` switches further down stay inline until #239.
+# Compose the loadout exactly as task-work does: resolve both modules first,
+# source second (see bin/task-done for why the order matters). The tracker says
+# which sidecar key holds the ref and what prompt it is relaunched with (#240);
+# the agent says how that prompt is launched, resumed and preflighted (#239).
+AGENT="${IMPL%%-*}"
 TRACKER="${IMPL##*-}"
 # shellcheck source=lib/trackers/_default.sh
 source "$AW_ROOT/lib/trackers/_default.sh"
 TRACKER_MODULE=$(aw_tracker_module "$AW_ROOT" "$TRACKER") || exit 1
+AGENT_MODULE=$(aw_agent_module "$AW_ROOT" "$AGENT") || exit 1
 # shellcheck source=/dev/null
 source "$TRACKER_MODULE"
+# shellcheck source=/dev/null
+source "$AGENT_MODULE"
 INFO_KEY=$(aw_tracker_info_key) || exit 1
+
+# task-work's agent flags are not this command's: a recovery has no --plan, and
+# it must never relaunch a worker with broader tool permissions than the
+# task-work run that created it. kiro's init reads TASK_WORK_MODEL and
+# TASK_WORK_TRUST_ALL from the environment, so they are scrubbed for this one
+# call — the recovered worker gets kiro-cli's defaults, as it always did.
+TASK_WORK_MODEL="" TASK_WORK_TRUST_ALL="" aw_agent_init_flags
 
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 
@@ -324,6 +335,80 @@ if [[ -z "$FORCE" && ( -n "$TAB_EXISTS" || -n "$SESSION_LOOKS_LIVE" ) ]]; then
   exit 1
 fi
 
+# ---------------- launch line ----------------
+# The session id of this role's last session, when it can be established beyond
+# doubt — otherwise nothing, and `--resume` falls back to Claude's own picker.
+#
+# radio logs the whole `SessionEnd` payload on an unregister, session_id and
+# transcript_path included, so the id of the session a reboot killed is usually
+# still on disk. "Usually" is why this is a hint and not a mechanism: the log is
+# an append-only debug log that self-rotates past ~1MB (#169), a hard kill fires
+# no SessionEnd at all, and a role that has run several times has several lines.
+# So the match is pinned three ways before the id is used — the role, the
+# payload's own `cwd` (this exact worktree, not another checkout of the same
+# repo), and a transcript file that still exists. Resuming the WRONG session
+# silently is far worse than the picker, which is what anything short of all
+# three falls back to.
+_resume_session_id() {
+  local log="$RADIO_HOME/log" line id tp phys
+  local -a cwd_pats
+  [[ -f "$log" ]] || return 0
+  # Match the physical form as well as the logical one. $WORKTREE_DIR is built by
+  # string-appending "<repo>-worktrees", which resolves nothing, while Claude
+  # records the cwd it actually ran in — so one symlink anywhere under the
+  # worktree base makes a single-form match miss every time. That does not fail
+  # safe, it fails INVISIBLY: --resume would look present and silently always
+  # fall through to the picker, defeating the very pin that makes the cwd check
+  # load-bearing. Both forms are matched rather than one replaced by the other,
+  # because the log is history: lines written before a path or symlink change
+  # legitimately carry the other spelling.
+  cwd_pats=( -e "\"cwd\":\"$WORKTREE_DIR\"" )
+  phys=$(cd "$WORKTREE_DIR" 2>/dev/null && pwd -P) || phys=""
+  [[ -n "$phys" && "$phys" != "$WORKTREE_DIR" ]] && cwd_pats+=( -e "\"cwd\":\"$phys\"" )
+  line=$( (grep -F "role=$ROLE " "$log" | grep -F "${cwd_pats[@]}" | tail -1) 2>/dev/null ) || true
+  [[ -n "$line" ]] || return 0
+  [[ "$line" == *'"session_id":"'* ]] || return 0
+  id=${line#*\"session_id\":\"}; id=${id%%\"*}
+  [[ "$id" =~ ^[0-9a-fA-F-]{8,64}$ ]] || return 0
+  [[ "$line" == *'"transcript_path":"'* ]] || return 0
+  tp=${line#*\"transcript_path\":\"}; tp=${tp%%\"*}
+  [[ -f "$tp" ]] || return 0
+  printf '%s' "$id"
+}
+
+# Resolve the launch line now, before the report and the sidecar rewrite, so a
+# refusal (kiro's --resume, kiro's agent preflight) leaves everything as it was.
+# Every agent-specific choice is the agent module's (#239); this body only picks
+# between a fresh launch and a resume.
+RESUME_SESSION_ID=""
+AGENT_CMD=""
+if [[ -z "$NO_LAUNCH" ]]; then
+  if [[ -n "$RESUME" ]]; then
+    # Mined before the hook is asked, so the hook alone decides whether a resume
+    # exists on this agent. On kiro the lookup is wasted, and harmless.
+    RESUME_SESSION_ID=$(_resume_session_id)
+    AGENT_CMD=$(aw_agent_resume_cmd "$RESUME_SESSION_ID") || exit 1
+  else
+    # %q the ref alone, never the sentence: the agent wraps the payload in double
+    # quotes for the `bash -ic` re-parse, exactly as task-work hands it over.
+    Q_TASK_REF=""
+    WORKER_PROMPT=""
+    if [[ -n "$TASK_REF" ]]; then
+      Q_TASK_REF=$(printf %q "$TASK_REF")
+      WORKER_PROMPT=$(aw_tracker_worker_prompt "$Q_TASK_REF")
+    fi
+    AGENT_CMD=$(aw_agent_launch_cmd "$Q_TASK_REF" "$WORKER_PROMPT")
+  fi
+  # kiro-cli does not fail on an unresolvable --agent, it falls back to a
+  # hookless built-in — which registers nothing, i.e. the exact state this
+  # command exists to get out of (#218). Checked against the MAIN worktree, as
+  # task-work checks it: kiro-cli will actually read the recovered worktree's own
+  # `.kiro/agents/`, but a repo that keeps those files untracked would then fail
+  # this check and block the recovery — and a false refusal here is worse than
+  # the conservative pass the guard's own docs describe.
+  aw_agent_preflight "$MAIN_WORKTREE" "$IMPL" || exit 1
+fi
+
 # ---------------- report ----------------
 # Printed before the launch so it lands in the tab the user is standing in — the
 # new tab immediately fills with the agent's own output.
@@ -409,107 +494,6 @@ case "$AUTO_SUBMIT_FLAG" in
   *) [[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 " ;;
 esac
 
-# The session id of this role's last session, when it can be established beyond
-# doubt — otherwise nothing, and `--resume` falls back to Claude's own picker.
-#
-# radio logs the whole `SessionEnd` payload on an unregister, session_id and
-# transcript_path included, so the id of the session a reboot killed is usually
-# still on disk. "Usually" is why this is a hint and not a mechanism: the log is
-# an append-only debug log that self-rotates past ~1MB (#169), a hard kill fires
-# no SessionEnd at all, and a role that has run several times has several lines.
-# So the match is pinned three ways before the id is used — the role, the
-# payload's own `cwd` (this exact worktree, not another checkout of the same
-# repo), and a transcript file that still exists. Resuming the WRONG session
-# silently is far worse than the picker, which is what anything short of all
-# three falls back to.
-_resume_session_id() {
-  local log="$RADIO_HOME/log" line id tp phys
-  local -a cwd_pats
-  [[ -f "$log" ]] || return 0
-  # Match the physical form as well as the logical one. $WORKTREE_DIR is built by
-  # string-appending "<repo>-worktrees", which resolves nothing, while Claude
-  # records the cwd it actually ran in — so one symlink anywhere under the
-  # worktree base makes a single-form match miss every time. That does not fail
-  # safe, it fails INVISIBLY: --resume would look present and silently always
-  # fall through to the picker, defeating the very pin that makes the cwd check
-  # load-bearing. Both forms are matched rather than one replaced by the other,
-  # because the log is history: lines written before a path or symlink change
-  # legitimately carry the other spelling.
-  cwd_pats=( -e "\"cwd\":\"$WORKTREE_DIR\"" )
-  phys=$(cd "$WORKTREE_DIR" 2>/dev/null && pwd -P) || phys=""
-  [[ -n "$phys" && "$phys" != "$WORKTREE_DIR" ]] && cwd_pats+=( -e "\"cwd\":\"$phys\"" )
-  line=$( (grep -F "role=$ROLE " "$log" | grep -F "${cwd_pats[@]}" | tail -1) 2>/dev/null ) || true
-  [[ -n "$line" ]] || return 0
-  [[ "$line" == *'"session_id":"'* ]] || return 0
-  id=${line#*\"session_id\":\"}; id=${id%%\"*}
-  [[ "$id" =~ ^[0-9a-fA-F-]{8,64}$ ]] || return 0
-  [[ "$line" == *'"transcript_path":"'* ]] || return 0
-  tp=${line#*\"transcript_path\":\"}; tp=${tp%%\"*}
-  [[ -f "$tp" ]] || return 0
-  printf '%s' "$id"
-}
-
-RESUME_SESSION_ID=""
-[[ -n "$RESUME" && "$AGENT" == claude ]] && RESUME_SESSION_ID=$(_resume_session_id)
-
-build_agent_cmd() {
-  local mode_prefix="" prompt=""   # mode_prefix is claude-only; see the kiro arm
-  # %q the ref alone, never the sentence: the payload is re-parsed inside the
-  # double quotes below, exactly as task-work hands it to aw_tracker_worker_prompt.
-  [[ -n "$TASK_REF" ]] && prompt=$(aw_tracker_worker_prompt "$(printf %q "$TASK_REF")")
-  case "$AGENT" in
-    claude)
-      [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
-      if [[ -n "$RESUME" ]]; then
-        if [[ -n "$RESUME_SESSION_ID" ]]; then
-          echo "claude ${mode_prefix}--resume $RESUME_SESSION_ID"
-        else
-          # Nothing identified this role's last session beyond doubt, so hand
-          # over to Claude's picker rather than guess. The caller is told.
-          echo "claude ${mode_prefix}--resume"
-        fi
-      elif [[ -n "$prompt" ]]; then
-        echo "claude ${mode_prefix}\"/worker $prompt\""
-      else
-        echo "claude ${mode_prefix}\"/worker\""
-      fi ;;
-    kiro)
-      # On kiro, --auto governs radio auto-submit ONLY (#206) — the permission
-      # model there is `-a/--trust-all`, which task-work keeps as a separate
-      # flag. Folding it in here would hand a recovered kiro worker broader
-      # tool permissions than the task-work invocation that first created it.
-      if [[ -n "$prompt" ]]; then
-        echo "kiro-cli chat --agent worker \"$prompt\""
-      else
-        echo "kiro-cli chat --agent worker"
-      fi ;;
-  esac
-}
-
-if [[ -z "$NO_LAUNCH" ]]; then
-  case "$AGENT" in
-    claude) : ;;
-    kiro)
-      if [[ -n "$RESUME" ]]; then
-        echo "Error: --resume is claude-only; kiro-cli has no session picker to hand you." >&2
-        echo "       Re-run without --resume for a fresh session on the same worktree." >&2
-        exit 1
-      fi
-      # kiro-cli does not fail on an unresolvable --agent, it falls back to a
-      # hookless built-in — which registers nothing, i.e. the exact state this
-      # command exists to get out of (#218). Checked against the MAIN worktree,
-      # as task-work checks it: kiro-cli will actually read the recovered
-      # worktree's own `.kiro/agents/`, but a repo that keeps those files
-      # untracked would then fail this check and block the recovery — and a
-      # false refusal here is worse than the conservative pass the guard's own
-      # docs describe, which can only let through a case that was already broken.
-      aw_require_kiro_agent worker "$MAIN_WORKTREE" "task-init ${IMPL}" || exit 1 ;;
-    *)
-      echo "Error: no worker launch line for agent '$AGENT' (impl '$IMPL')" >&2
-      exit 1 ;;
-  esac
-fi
-
 echo "Opening zellij tab '$SLUG'..."
 # `set +H; ` must come BEFORE $RADIO_ENV_PREFIX, never between it and the agent:
 # `VAR=val cmd1; cmd2` scopes the assignments to cmd1 only, so the env would
@@ -518,7 +502,7 @@ echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}$(build_agent_cmd)" "${AUTO_MODE:-}"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}${AGENT_CMD}" "${AUTO_MODE:-}"
 fi
 
 # ---------------- rebind TAB_ID ----------------

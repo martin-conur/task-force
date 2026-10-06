@@ -73,7 +73,9 @@ Options:
                       opens with the backlog in front of it.
       --auto          Opt the rebuilt role into radio auto-submit, so a PM ping
                       processes without a keypress. On claude it also launches
-                      in auto permission mode.
+                      in auto permission mode. Unlike task-work, whose default
+                      is already on, this command's default is the setting
+                      radio recorded for the role, so --auto still matters here.
       --auto-submit   Opt the rebuilt role into radio auto-submit only.
       --no-auto-submit
                       Rebuild it with the Enter gate on radio wakes.

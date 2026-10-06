@@ -122,12 +122,14 @@ that is new work, and it refuses and names `task-work`.
   keep. Fresh is the default and the safer one: the register-time backlog drain
   (#168) means a fresh agent opens with its queued handoff already surfaced.
 - `--auto` — radio auto-submit; on claude it also launches in auto permission
-  mode, on kiro it governs auto-submit only (#206).
-- `--focus` — switch to the new tab. By default focus stays on the tab you ran
-  it from, as with `task-work` (#254).
+  mode, on kiro it governs auto-submit only (#206). Unlike `task-work`, whose
+  default is already on, this command defaults to the auto-submit setting radio
+  recorded for the role, so `--auto` still changes something here on both agents.
 - `--auto-submit` / `--no-auto-submit` — set radio auto-submit alone. With none
   of these three the rebuilt role keeps the setting radio recorded for it
   before it died — its `<role>.auto-submit` sidecar (#246).
+- `--focus` — switch to the new tab. By default focus stays on the tab you ran
+  it from, as with `task-work` (#254).
 - `--no-launch` — open the tab, start nothing; the role stays unregistered.
 - `--force` — proceed although a session still looks live.
 

@@ -134,3 +134,9 @@ aw_tracker_post_worktree() {
 # JSON-escape a string (backslash and double-quote only — paths/slugs never
 # contain control chars in practice).
 _aw_json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# ---------------- task-reviewer hooks ----------------
+#
+# Only the noun differs from the default: the spec still passes to /reviewer
+# verbatim, with no PR-body convention to fall back on (#144, #239).
+aw_tracker_review_spec_shape() { echo "a local task slug or filename"; }

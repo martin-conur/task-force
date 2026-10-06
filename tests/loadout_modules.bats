@@ -55,6 +55,12 @@ TRACKER_HOOKS_TASK_WORK=(
   aw_tracker_worker_prompt
   aw_tracker_post_worktree
 )
+TRACKER_HOOKS_TASK_REVIEWER=(
+  aw_tracker_review_spec
+  aw_tracker_review_spec_shape
+  aw_tracker_review_usage_spec
+  aw_tracker_review_no_spec_warning
+)
 # No _default.sh on the agent axis: every agent module defines every hook, so
 # this list is what a new agent module has to implement.
 AGENT_HOOKS_TASK_WORK=(
@@ -201,6 +207,18 @@ _compose() {
   assert [ -n "$impls" ]
   for impl in $impls; do
     for hook in "${TRACKER_HOOKS_TASK_WORK[@]}"; do
+      run _compose "$impl" "declare -F $hook >/dev/null"
+      [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
+    done
+  done
+}
+
+@test "every impl composes a tracker module defining all task-reviewer hooks" {
+  local impls impl hook
+  impls=$(bash -c "source '$DETECT'; aw_all_impls")
+  assert [ -n "$impls" ]
+  for impl in $impls; do
+    for hook in "${TRACKER_HOOKS_TASK_REVIEWER[@]}"; do
       run _compose "$impl" "declare -F $hook >/dev/null"
       [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
     done

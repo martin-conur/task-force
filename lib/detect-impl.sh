@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Shared impl-detection logic for the root task-work / task-done dispatchers.
+# Shared impl-detection logic for the root task-work / task-done scripts (and
+# the remaining dispatchers).
 #
 # This file is meant to be sourced, not executed.
 #

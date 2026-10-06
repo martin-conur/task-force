@@ -180,12 +180,18 @@ run_suite_with_foreign_task_board() {
     "$BATS_BIN" "$REPO_ROOT_REAL/tests/$suite.bats" "$@"
 }
 
+# The per-loadout task-work suites these used to run were consolidated in #237;
+# the board tests live in tests/task_work_trackers.bats now. Each filter is
+# asserted to select at least one test, so a rename cannot turn this into a
+# zero-test run that passes by running nothing.
 @test "claude-local board test passes with a foreign task-board on \$PATH" {
-  run_suite_with_foreign_task_board claude_local_task_work --filter "_board"
+  run_suite_with_foreign_task_board task_work_trackers --filter "local: regenerates tasks/_board.md"
   assert_success
+  assert_output --partial "ok 1 "
 }
 
 @test "kiro-local board test passes with a foreign task-board on \$PATH" {
-  run_suite_with_foreign_task_board kiro_local_task_work --filter "_board"
+  run_suite_with_foreign_task_board task_work_trackers --filter "written under both local loadouts"
   assert_success
+  assert_output --partial "ok 1 "
 }

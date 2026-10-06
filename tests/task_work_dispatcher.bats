@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
-# Tests for the root task-work dispatcher (bin/task-work)
-# The dispatcher auto-detects which impl to run based on the project's
-# workflow doc, with --impl / AW_IMPL as overrides.
+# Impl detection for bin/task-work. It auto-detects which loadout to compose
+# from the project's workflow doc, with --impl / AW_IMPL as overrides. Since
+# #237 there is no per-loadout script to dispatch to — detection picks the
+# tracker and agent modules the one canonical body sources.
 
 bats_load_library bats-support
 bats_load_library bats-assert

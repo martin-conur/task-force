@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared worktree creation. Sourced by every <impl>/bin/task-work.
+# Shared worktree creation. Sourced by bin/task-work.
 #
 # Exports:
 #   aw_create_worktree <worktree_dir> <branch> [from_ref]

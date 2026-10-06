@@ -23,10 +23,11 @@
 # Property 3 is deliberately not the whole story: a hook that resolves may still
 # never be reached. That is the #206 lesson — a region can be byte-identical and
 # still inert when a precondition differs per host — and structural parity
-# cannot see it. The behavioural half lives in `tests/task_done.bats`, which
-# asserts an impl-distinguishing observable a failed module load could not
-# produce (the jira PR title, the local board + state.json). Both halves, or
-# neither means anything.
+# cannot see it. The behavioural halves live in `tests/task_done.bats` (the jira
+# PR title, the local board + state.json) and `tests/task_work_impls.bats` (one
+# row per impl: its .info key, its agent's launch line, its --help), each an
+# impl-distinguishing observable a failed module load could not produce. Both
+# halves, or neither means anything.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -35,14 +36,54 @@ load helpers/common
 
 DETECT="$REPO_ROOT_REAL/lib/detect-impl.sh"
 
-# The hooks a tracker module must provide for bin/task-done. #237 extends this
-# list for task-work; keep it a literal here rather than deriving it from the
-# modules, since a list derived from the thing under test asserts nothing.
+# The hooks a composed loadout must provide, per leaf script. Keep them literals
+# here rather than deriving them from the modules, since a list derived from the
+# thing under test asserts nothing.
 TRACKER_HOOKS_TASK_DONE=(
   aw_tracker_usage_steps
   aw_tracker_pr_section
   aw_tracker_post_cleanup
 )
+TRACKER_HOOKS_TASK_WORK=(
+  aw_tracker_usage_synopsis
+  aw_tracker_usage_notes
+  aw_tracker_usage_examples
+  aw_tracker_is_ref
+  aw_tracker_ref_slug
+  aw_tracker_parse_ref
+  aw_tracker_info_key
+  aw_tracker_worker_prompt
+  aw_tracker_post_worktree
+)
+# No _default.sh on the agent axis: every agent module defines every hook, so
+# this list is what a new agent module has to implement.
+AGENT_HOOKS_TASK_WORK=(
+  aw_agent_name
+  aw_agent_usage_options
+  aw_agent_usage_env
+  aw_agent_usage_examples
+  aw_agent_init_flags
+  aw_agent_parse_flag
+  aw_agent_validate_flags
+  aw_agent_preflight
+  aw_agent_launch_cmd
+  aw_agent_started_message
+)
+
+# Compose <impl> the way the leaf scripts do — _default.sh, then the tracker
+# module, then the agent module — and run <cmd> in that shell.
+_compose() {
+  local impl="$1" cmd="$2"
+  bash -c "
+    set -euo pipefail
+    AW_ROOT='$REPO_ROOT_REAL'
+    source '$DETECT'
+    source \"\$AW_ROOT/lib/trackers/_default.sh\"
+    source \"\$(aw_tracker_module \"\$AW_ROOT\" '${impl##*-}')\"
+    source \"\$(aw_agent_module   \"\$AW_ROOT\" '${impl%%-*}')\"
+    $cmd
+  "
+}
 
 # ---------------------------------------------------------------------------
 # 1. Every axis name has a module file
@@ -150,20 +191,39 @@ TRACKER_HOOKS_TASK_DONE=(
   done
 }
 
-@test "every impl composes an agent module that loads cleanly" {
-  # task-done has no agent hooks — see lib/agents/claude.sh for why — so the
-  # assertion is that the module sources without error under `set -euo
-  # pipefail`, not that it defines anything. #237 adds the hook list.
-  local impls impl
+@test "every impl composes a tracker module defining all task-work hooks" {
+  local impls impl hook
   impls=$(bash -c "source '$DETECT'; aw_all_impls")
+  assert [ -n "$impls" ]
   for impl in $impls; do
-    run bash -c "
-      set -euo pipefail
-      AW_ROOT='$REPO_ROOT_REAL'
-      source '$DETECT'
-      source \"\$(aw_agent_module \"\$AW_ROOT\" '${impl%%-*}')\"
-    "
-    assert_success
+    for hook in "${TRACKER_HOOKS_TASK_WORK[@]}"; do
+      run _compose "$impl" "declare -F $hook >/dev/null"
+      [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
+    done
+  done
+}
+
+@test "every impl composes an agent module defining all task-work hooks" {
+  local impls impl hook
+  impls=$(bash -c "source '$DETECT'; aw_all_impls")
+  assert [ -n "$impls" ]
+  for impl in $impls; do
+    for hook in "${AGENT_HOOKS_TASK_WORK[@]}"; do
+      run _compose "$impl" "declare -F $hook >/dev/null"
+      [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
+    done
+  done
+}
+
+# `declare -F` cannot tell a module's own definition from _default.sh's, and the
+# info key is the one tracker hook whose default refuses. Every tracker must
+# override it, or task-work stops before creating anything.
+@test "every tracker names its own .info key" {
+  local impl
+  for impl in $(bash -c "source '$DETECT'; aw_all_impls"); do
+    run _compose "$impl" "aw_tracker_info_key"
+    [[ "$status" -eq 0 && "$output" =~ ^[A-Z_]+$ ]] || {
+      echo "impl=$impl: aw_tracker_info_key -> status=$status output=$output" >&2; return 1; }
   done
 }
 
@@ -269,4 +329,70 @@ _fakeroot_without_tracker() {
     assert_output --partial "no tracker module for '$t'"
     refute_output --partial "No such file or directory"
   done
+}
+
+# ---------------------------------------------------------------------------
+# 6. task-work refuses rather than running half-composed (#237)
+# ---------------------------------------------------------------------------
+
+# A checkout of bin/task-work (and the libs it sources) with one module removed.
+# <kind> is trackers or agents.
+_tw_fakeroot_without() {
+  local kind="$1" name="$2" fake="$BATS_TEST_TMPDIR/tw-fakeroot-$1-$2"
+  rm -rf "$fake"
+  mkdir -p "$fake/bin" "$fake/lib"
+  cp "$REPO_ROOT_REAL/bin/task-work" "$fake/bin/task-work"
+  cp "$REPO_ROOT_REAL/lib/"*.sh "$fake/lib/"
+  cp -R "$REPO_ROOT_REAL/lib/trackers" "$REPO_ROOT_REAL/lib/agents" "$fake/lib/"
+  rm -f "$fake/lib/$kind/$name.sh"
+  printf '%s' "$fake"
+}
+
+_tw_repo() {
+  local repo="$BATS_TEST_TMPDIR/$1"
+  git init -q -b main "$repo"
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  printf '%s' "$repo"
+}
+
+# The floor that makes the dropped task-work test count honest: deleting a
+# module must fail a run of the real script, cleanly and before any worktree
+# exists. Swept over every axis value, so it covers at least one tracker and one
+# agent module as #237 asks, and every other one with them.
+@test "task-work fails cleanly, creating nothing, when any tracker module is absent" {
+  local t fake repo
+  for t in $(bash -c "source '$DETECT'; aw_all_trackers"); do
+    fake=$(_tw_fakeroot_without trackers "$t")
+    repo=$(_tw_repo "repo-t-$t")
+    run bash -c "cd '$repo' && AW_IMPL=claude-$t '$fake/bin/task-work' some-slug"
+    assert_failure
+    assert_output --partial "no tracker module for '$t'"
+    refute_output --partial "No such file or directory"
+    assert [ ! -e "$repo-worktrees" ]
+  done
+}
+
+@test "task-work fails cleanly, creating nothing, when any agent module is absent" {
+  local a fake repo
+  for a in $(bash -c "source '$DETECT'; aw_all_agents"); do
+    fake=$(_tw_fakeroot_without agents "$a")
+    repo=$(_tw_repo "repo-a-$a")
+    run bash -c "cd '$repo' && AW_IMPL=$a-gh '$fake/bin/task-work' some-slug"
+    assert_failure
+    assert_output --partial "no agent module for '$a'"
+    refute_output --partial "No such file or directory"
+    assert [ ! -e "$repo-worktrees" ]
+  done
+}
+
+@test "task-work refuses before creating anything when a tracker names no .info key" {
+  local fake repo
+  fake=$(_tw_fakeroot_without trackers none)
+  # Strip gh's key override so the refusing default in _default.sh shows through.
+  sed -i.bak '/^aw_tracker_info_key()/d' "$fake/lib/trackers/gh.sh"
+  repo=$(_tw_repo repo-nokey)
+  run bash -c "cd '$repo' && AW_IMPL=claude-gh '$fake/bin/task-work' some-slug"
+  assert_failure
+  assert_output --partial "defines no .info key"
+  assert [ ! -e "$repo-worktrees" ]
 }

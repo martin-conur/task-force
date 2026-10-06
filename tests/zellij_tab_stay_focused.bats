@@ -176,14 +176,14 @@ teardown() {
 
 @test "task-work --auto: snap-back fires (PM keeps focus)" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run "$CLAUDE_GH_TASK_WORK" my-feature --auto
+    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --auto
   assert_success
   assert_stub_called zellij "go-to-tab 1"
 }
 
 @test "task-work without --auto: no snap-back (legacy focus-shift)" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run "$CLAUDE_GH_TASK_WORK" my-feature
+    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature
   assert_success
   run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
@@ -191,7 +191,7 @@ teardown() {
 
 @test "task-work --plan: no snap-back (planner is interactive — land in tab)" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run "$CLAUDE_GH_TASK_WORK" my-feature --plan
+    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --plan
   assert_success
   run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
@@ -199,14 +199,14 @@ teardown() {
 
 @test "kiro task-work --auto: snap-back fires (PM keeps focus) (#206)" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run "$KIRO_GH_TASK_WORK" my-feature --auto
+    run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature --auto
   assert_success
   assert_stub_called zellij "go-to-tab 1"
 }
 
 @test "kiro task-work without --auto: no snap-back (#206)" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run "$KIRO_GH_TASK_WORK" my-feature
+    run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature
   assert_success
   run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
   assert_failure

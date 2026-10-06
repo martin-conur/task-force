@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Board regeneration, shared by the two local loadouts' task-work and task-done.
+# Board regeneration, shared by task-work and task-done on the two local loadouts
+# (both callers live in lib/trackers/local.sh since #236 / #237).
 #
 # There were four byte-similar copies of this before #223; the fix below had to
 # land in all four, which is the point at which this repo extracts (see the

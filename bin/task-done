@@ -13,9 +13,8 @@ set -euo pipefail
 #
 # There is no agent axis here at all: removing a worktree, sweeping radio state
 # and closing a tab does not depend on which agent was sitting in the tab. So
-# this composes one tracker module and nothing else. The agent modules exist
-# (and are parity-checked) but contribute nothing until task-work moves too
-# (#237).
+# this composes one tracker module and nothing else. The agent modules are
+# bin/task-work's other axis (#237); nothing here reads them.
 
 # Resolve own path through symlinks -> AW_ROOT.
 src="${BASH_SOURCE[0]}"

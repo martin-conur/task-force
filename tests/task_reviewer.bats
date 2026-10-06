@@ -4,7 +4,7 @@
 # task-reviewer was redesigned from a long-lived listener-tab (rename-tab
 # in-place, no args) into a per-PR dispatch worker — fresh worktree on the
 # PR's head ref, new zellij tab, claude (or kiro) launched with the PR (and
-# optional spec issue) as args. Tests mirror tests/claude_gh_task_work.bats's
+# optional spec issue) as args. Tests mirror tests/task_work.bats's
 # patterns: arg parsing, worktree creation, tab spawn, mode flags, errors.
 #
 # The claude flow lives in the canonical root bin/task-reviewer (#170); tests

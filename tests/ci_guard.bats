@@ -309,13 +309,27 @@ msg() { printf '%s\n' "$@" > "$TMP/msg"; }
 
 # ------------------------------------------------------- task-work wiring
 
-@test "task-work installs the commit-msg hook in all seven loadouts" {
-  # The guard only counts if it is wired into the path every worker takes.
-  for impl in claude-gh claude-jira claude-local claude-notion kiro-gh kiro-local kiro-notion; do
-    run grep -qF 'aw_install_ci_guard_hook "$REPO_ROOT"' "$REPO_ROOT_REAL/$impl/bin/task-work"
+@test "task-work installs the commit-msg hook in every loadout" {
+  # The guard only counts if it is wired into the path every worker takes. One
+  # canonical task-work since #237, so the grep that used to sweep seven copies
+  # is one file — and the behaviour is checked per impl, since a module that
+  # aborted before the install would pass any grep.
+  run grep -qF 'aw_install_ci_guard_hook "$REPO_ROOT"' "$REPO_ROOT_REAL/bin/task-work"
+  assert_success
+  run grep -qF 'source "$AW_ROOT/lib/ci-guard.sh"' "$REPO_ROOT_REAL/bin/task-work"
+  assert_success
+
+  setup_repo
+  setup_kiro_agents
+  setup_stubs
+  local impl hooks
+  hooks="$(git -C "$MAIN_REPO" rev-parse --git-common-dir)/hooks"
+  [[ "$hooks" == /* ]] || hooks="$MAIN_REPO/$hooks"
+  for impl in $(bash -c "source '$REPO_ROOT_REAL/lib/detect-impl.sh'; aw_all_impls"); do
+    rm -f "$hooks/commit-msg"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'guard-$impl'"
     assert_success
-    run grep -qF 'source "$AW_ROOT_REAL/lib/ci-guard.sh"' "$REPO_ROOT_REAL/$impl/bin/task-work"
-    assert_success
+    [[ -x "$hooks/commit-msg" ]] || { echo "$impl: no commit-msg hook installed" >&2; return 1; }
   done
 }
 

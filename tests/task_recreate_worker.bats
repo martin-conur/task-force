@@ -612,14 +612,23 @@ dead_worker_symlinked_base() {
   assert_output --partial "TASK_FORCE_AUTO_SUBMIT=0"
 }
 
-@test "--auto keeps focus on the calling tab" {
+@test "keeps focus on the calling tab by default (#254)" {
   dead_worker issue-42
   # An active tab that is NOT this slug: the caller is standing somewhere else,
   # which is the whole reason the snap-back exists.
   export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":1,"position":0,"active":true}]'
-  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --auto
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_success
   assert_stub_called zellij "action go-to-tab"
+}
+
+@test "--focus switches to the rebuilt tab: no snap-back (#254)" {
+  dead_worker issue-42
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":1,"position":0,"active":true}]'
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --focus
+  assert_success
+  run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
 }
 
 @test "--help works outside a configured repo" {

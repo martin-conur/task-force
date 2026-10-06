@@ -78,6 +78,18 @@ Options:
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start $(aw_agent_name). Use this when you want to
                       pick the command/model interactively.
+      --focus         Switch to the new tab. By default focus stays on the tab
+                      you ran this from, so a PM can dispatch without being
+                      pulled away (#254).
+      --auto-submit   Radio wakes submit themselves (CR): an incoming PM ping is
+                      processed without anyone pressing Enter in the worker's
+                      tab. This is the default (#254); the flag is accepted so
+                      an explicit launch line still reads as intended.
+      --no-auto-submit
+                      Keep the Enter gate on radio wakes: "radio check" is typed
+                      into the prompt box and waits for a keypress. Use this when
+                      you mean to step into the worker's tab and type in it — a
+                      wake would otherwise submit whatever is half-typed there.
 EOF
   aw_agent_usage_options
   echo "  -h, --help          Show this help."
@@ -96,6 +108,7 @@ BASE_BRANCH_OVERRIDE=""
 FROM_REF_OVERRIDE=""
 AUTO_MODE=""
 AUTO_SUBMIT_FLAG=""
+FOCUS=""
 AW_FLAG_SHIFT=0
 aw_agent_init_flags
 
@@ -116,7 +129,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
       FROM_REF_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
-    --auto) AUTO_MODE="1"; shift ;;
+    --focus) FOCUS="1"; shift ;;
+    --auto)
+      # shellcheck disable=SC2034  # read by lib/agents/claude.sh (--permission-mode auto)
+      AUTO_MODE="1"; shift ;;
     --auto-submit) AUTO_SUBMIT_FLAG="1"; shift ;;
     --no-auto-submit) AUTO_SUBMIT_FLAG="0"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
@@ -229,26 +245,24 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # (pm-<reponame>) and never a different repo's PM tab.
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
 # Radio's CR (auto-submit) wake-up, so PM pings process without a manual Enter
-# (#128). It is its own setting, not a side effect of permission mode (#246):
-# --auto implies it, and --auto-submit / --no-auto-submit set it either way,
-# whichever order they come in. Without it radio keeps using LF — the human
-# gate that protects a partially-typed prompt from an incoming `radio check`.
-# Injected explicitly even when off: radio reads an *unset* value as "a repair —
-# restore whatever this role had", which a fresh launch must never inherit.
+# (#128). On by default (#254): the user drives the PM and does not type in
+# worker tabs, so an LF wake there is a `radio check` nobody will ever submit.
+# --no-auto-submit restores the Enter gate for a worker someone means to steer
+# by hand; --auto-submit is the explicit default. --auto is a permission mode
+# and no longer has anything to add here (#246). Injected explicitly even when
+# off: radio reads an *unset* value as "a repair — restore whatever this role
+# had", which a fresh launch must never inherit.
 #
-# This is the body's, on every agent. An agent module reads AUTO_MODE only to
-# decide its own launch flags (claude's --permission-mode auto); none may change
-# what --auto does here (#237).
-case "${AUTO_SUBMIT_FLAG:-}" in
-  1) AUTO_SUBMIT="1" ;;
-  0) AUTO_SUBMIT="" ;;
-  *) AUTO_SUBMIT="${AUTO_MODE:-}" ;;
-esac
-if [[ -n "$AUTO_SUBMIT" ]]; then
-  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
-else
+# This is the body's, on every agent. No agent module may change it (#237).
+if [[ "${AUTO_SUBMIT_FLAG:-}" == "0" ]]; then
   RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 "
+else
+  RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
 fi
+
+# Focus stays on the caller's tab unless --focus (#254, was --auto-only #130).
+STAY_ON_CALLER="1"
+[[ -n "$FOCUS" ]] && STAY_ON_CALLER=""
 
 # ---------------- launch ----------------
 # printf %q the user-supplied ref so `$var`, `$(...)`, backticks, and other
@@ -276,11 +290,11 @@ echo "Opening zellij tab '$SLUG'..."
 # `;` (radio routing / model / AUTO_SUBMIT all dead). Mirrors the task-reviewer
 # fix. (#144 round-4 review.)
 if [[ -n "$NO_LAUNCH" ]]; then
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "$STAY_ON_CALLER"
 else
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" \
     "set +H; ${RADIO_ENV_PREFIX}$(aw_agent_launch_cmd "$Q_TASK_REF" "$WORKER_PROMPT")" \
-    "${AUTO_MODE:-}"
+    "$STAY_ON_CALLER"
 fi
 
 if [[ -n "$NO_LAUNCH" ]]; then

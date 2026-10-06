@@ -218,17 +218,13 @@ runbook_block() {
   done
 }
 
-@test "the kiro runbook advises task-work --auto, and the flag exists (#206)" {
-  # Inverted from #191's version of this test. Back then kiro's task-work
-  # parsed no --auto flag, so AUTO_MODE was never set, the shared
-  # radio-env-injection region's TASK_FORCE_AUTO_SUBMIT line was dead, and the
-  # runbook was right to withhold the advice. #206 added the flag, so the
-  # advice is now correct — and this pins both halves together so a doc that
-  # recommends the flag can never outlive the flag itself.
-  #
-  # One canonical task-work since #237, so the flag is exercised on every kiro
-  # loadout rather than grepped out of three copies: a launch with it must
-  # succeed and inject the auto-submit opt-in it exists for.
+@test "the kiro runbook advises plain task-work, which auto-submits (#206, #254)" {
+  # #206 added --auto to kiro's task-work so the runbook could advise it; #254
+  # made auto-submit every launch's default, so the advice is now the plain
+  # command. This pins both halves together so a doc recommending a plain
+  # launch can never outlive the default that makes it work: a plain launch on
+  # every kiro loadout must inject the auto-submit opt-in, and --no-auto-submit
+  # must turn it off.
   setup_repo
   setup_kiro_agents
   setup_stubs
@@ -236,23 +232,27 @@ runbook_block() {
   local impl
   for impl in $(bash -c "source '$REPO_ROOT_REAL/lib/detect-impl.sh'; aw_all_impls" | grep '^kiro-'); do
     : > "$STUB_CALLS_DIR/zellij.calls"
-    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'auto-$impl' --auto"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'plain-$impl'"
     assert_success
     assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1 kiro-cli"
+    : > "$STUB_CALLS_DIR/zellij.calls"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'off-$impl' --no-auto-submit"
+    assert_success
+    assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0 kiro-cli"
   done
   for f in "${KIRO_TEMPLATES[@]}"; do
-    run grep -cF 'task-work --auto' "$f"
+    run grep -cF 'Relaunch it with plain `task-work`' "$f"
     refute_output "0"
   done
 }
 
-@test "the kiro runbook keeps --auto scoped to auto-submit, not permissions (#206)" {
+@test "the kiro runbook keeps auto-submit apart from permissions (#206)" {
   # kiro's permission model is -a/--trust-all and is deliberately separate;
-  # a reader must not take --auto for a trust-all synonym.
+  # a reader must not take auto-submit for a trust-all synonym.
   for f in "${KIRO_TEMPLATES[@]}"; do
     local block
     block=$(runbook_block "$f")
-    run grep -cF 'governs auto-submit only' <<<"$block"
+    run grep -cF 'independent of the permission model' <<<"$block"
     refute_output "0"
     run grep -cF '`-a/--trust-all`' <<<"$block"
     refute_output "0"

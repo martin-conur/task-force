@@ -5,7 +5,9 @@
 #   - stay_on_caller_tab="1" + $ZELLIJ set + jq available  →  recorded sequence
 #     is `list-tabs --json` then `new-tab …` then `go-to-tab <pos+1>`.
 #   - stay_on_caller_tab="" / omitted                       →  no `list-tabs`
-#     pre-lookup, no `go-to-tab` snap-back (legacy focus-shift behavior).
+#     pre-lookup, no `go-to-tab` snap-back (focus moves to the new tab).
+#   - task-work / task-recreate-worker pass "1" by default and "" under
+#     --focus (#254).
 #   - $ZELLIJ unset, or empty position from list-tabs       →  defensive gates
 #     fall through to legacy behavior — never abort the spawn.
 
@@ -171,42 +173,55 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Integration: task-work --auto threads AUTO_MODE into stay_on_caller_tab
+# Integration: launchers keep the caller's focus by default; --focus jumps (#254)
 # ---------------------------------------------------------------------------
 
-@test "task-work --auto: snap-back fires (PM keeps focus)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
+CALLER_TABS='[{"name":"pm","position":0,"active":true}]'
+
+@test "task-work, no flag: snap-back fires (PM keeps focus) on every agent (#254)" {
+  local impl
+  for impl in claude-gh kiro-gh; do
+    : > "$STUB_CALLS_DIR/zellij.calls"
+    ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+      run env AW_IMPL="$impl" "$TASK_WORK" "plain-${impl%%-*}"
+    assert_success
+    assert_stub_called zellij "go-to-tab 1"
+  done
+}
+
+@test "task-work --plan: snap-back fires too (#254)" {
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --plan
+  assert_success
+  assert_stub_called zellij "go-to-tab 1"
+}
+
+@test "task-work --auto: snap-back fires (unchanged by permission mode)" {
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
     run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --auto
   assert_success
   assert_stub_called zellij "go-to-tab 1"
 }
 
-@test "task-work without --auto: no snap-back (legacy focus-shift)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature
-  assert_success
-  run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
-  assert_failure
+@test "task-work --focus: no pre-lookup, no snap-back, on every agent (#254)" {
+  local impl
+  for impl in claude-gh kiro-gh; do
+    : > "$STUB_CALLS_DIR/zellij.calls"
+    ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+      run env AW_IMPL="$impl" "$TASK_WORK" "focus-${impl%%-*}" --focus
+    assert_success
+    run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
+    assert_failure
+    # aw_record_tab_id lists tabs after the launch; nothing may precede new-tab.
+    local first
+    first=$(grep -m1 -E 'list-tabs|new-tab' "$STUB_CALLS_DIR/zellij.calls")
+    [[ "$first" == *new-tab* ]] || { echo "$impl: $first" >&2; return 1; }
+  done
 }
 
-@test "task-work --plan: no snap-back (planner is interactive — land in tab)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --plan
-  assert_success
-  run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
-  assert_failure
-}
-
-@test "kiro task-work --auto: snap-back fires (PM keeps focus) (#206)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature --auto
-  assert_success
-  assert_stub_called zellij "go-to-tab 1"
-}
-
-@test "kiro task-work without --auto: no snap-back (#206)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
-    run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature
+@test "task-work --focus --auto: --focus wins, no snap-back" {
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --auto --focus
   assert_success
   run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
   assert_failure

@@ -346,8 +346,9 @@ fi
 # ---------------- launch ----------------
 # 4th arg to aw_launch_tab is `stay_on_caller_tab=1` — keep focus on the
 # caller's tab (PM or wherever this was dispatched from) instead of snapping
-# into the new reviewer tab. Same convention task-work --auto adopted in
-# #133; reviewer always opts in since it's always a dispatched worker.
+# into the new reviewer tab. task-work adopted it under --auto in #133 and
+# made it every launch's default in #254; reviewer always opts in since it's
+# always a dispatched worker.
 #
 # `set +H; ` prefix disables bash history expansion in the spawned `bash -ic`
 # subshell — defends against SPEC_IDENTIFIER values containing `!` (Jira /

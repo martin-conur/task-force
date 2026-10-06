@@ -8,17 +8,20 @@
 # future one fail loudly instead of silently rebinding a shared flag.
 #
 # Radio auto-submit is its own setting, not a side effect of permission mode
-# (#246). On claude --auto also means --permission-mode auto; on kiro it means
-# auto-submit only, because kiro's permission model is --trust-all-tools. The
-# contract on the claude loadouts, pinned against the captured launch line
-# (never against the parsed flag):
-#   --auto-submit           TASK_FORCE_AUTO_SUBMIT=1, no --permission-mode auto
-#   --auto                  both (every existing doc and habit uses this)
-#   (nothing)               neither — and the off is an explicit `=0`, because
-#                           radio reads an unset value as "restore this role's
-#                           recorded setting", which a fresh launch must not do
+# (#246), and it is ON by default (#254): the user drives the PM and never types
+# in a worker's tab. On claude --auto means --permission-mode auto and nothing
+# else; on kiro it is a no-op, because kiro's permission model is
+# --trust-all-tools. The contract, pinned against the captured launch line
+# (never against the parsed flag) and, end to end, against the AUTO_SUBMIT a
+# `radio register` under that env writes into the session file:
+#   (nothing)               TASK_FORCE_AUTO_SUBMIT=1, no --permission-mode
+#   --auto-submit           the same, stated explicitly
+#   --auto                  auto-submit (the default) + --permission-mode auto
+#   --no-auto-submit        an explicit `=0` — never unset, because radio reads
+#                           unset as "restore this role's recorded setting",
+#                           which a fresh launch must not do
 #   --auto --no-auto-submit permission mode only, in either order
-#   --plan --auto-submit    auto-submit composes with plan mode
+#   --plan                  auto-submit on: a planner tab is not typed in either
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -59,7 +62,7 @@ _launch_line() {
 
 # Structural half: no agent module claims a shared flag's token. Every token
 # the body's own `case` owns is listed; adding a shared flag means adding it.
-SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
+SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --focus --auto
                     --auto-submit --no-auto-submit --)
 
 @test "no agent module claims a shared flag (first refusal never shadows)" {
@@ -101,10 +104,10 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
       echo "$impl: -f did not fork from feature-x" >&2; return 1; }
     [[ "$output" == *"NOT launched (--no-launch)"* ]] || {
       echo "$impl: --no-launch not honoured: $output" >&2; return 1; }
-    # --auto still snaps focus back to the calling tab with --no-launch.
+    # Focus snaps back to the calling tab by default, --no-launch included (#254).
     run grep -F -- "go-to-tab 1" "$STUB_CALLS_DIR/zellij.calls"
     [[ "$status" -eq 0 ]] || {
-      echo "$impl: --auto did not keep focus" >&2; cat "$STUB_CALLS_DIR/zellij.calls" >&2; return 1; }
+      echo "$impl: did not keep focus" >&2; cat "$STUB_CALLS_DIR/zellij.calls" >&2; return 1; }
   done
 }
 
@@ -142,10 +145,85 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
 }
 
 # ---------------------------------------------------------------------------
-# claude: radio auto-submit vs permission mode (#246)
+# radio auto-submit: on by default, every agent (#246, #254)
 # ---------------------------------------------------------------------------
 
-@test "claude --auto-submit: auto-submit on, permission mode untouched (all claude impls)" {
+# The AUTO_SUBMIT a role launched with <impl> <flags...> ends up with in its
+# radio session file: take the TASK_FORCE_AUTO_SUBMIT the launch line injects,
+# register under exactly that env, and read the field back. Prints `1` or
+# nothing. The env is passed even when absent from the line (`-u`), so a
+# launcher that stopped injecting it shows up as whatever the sidecar held,
+# not as a silent pass.
+_session_auto_submit() {
+  local impl="$1"; shift
+  local line kv role="worker-as-$RANDOM"
+  line=$(_launch_line "$impl" "$@") || return 1
+  kv=$(grep -oE 'TASK_FORCE_AUTO_SUBMIT=[^ ]*' <<<"$line" || true)
+  [[ -n "$kv" ]] || { echo "no TASK_FORCE_AUTO_SUBMIT on: $line" >&2; return 1; }
+  env -u TASK_FORCE_AUTO_SUBMIT "$kv" "$RADIO" register --role "$role" --tab "$role" --agent "${impl%%-*}"
+  sed -n 's/^AUTO_SUBMIT=//p' "$TASK_FORCE_HOME/radio/sessions/$role.info"
+}
+
+@test "plain launch: the session file gets AUTO_SUBMIT=1 on every impl (#254)" {
+  setup_task_force_home
+  local impl got
+  for impl in $(bash -c "source '$DETECT'; aw_all_impls"); do
+    got=$(_session_auto_submit "$impl")
+    [[ "$got" == 1 ]] || { echo "$impl plain: AUTO_SUBMIT='$got'" >&2; return 1; }
+  done
+}
+
+@test "--no-auto-submit: the session file gets no AUTO_SUBMIT on every impl (#254)" {
+  setup_task_force_home
+  local impl got line
+  for impl in $(bash -c "source '$DETECT'; aw_all_impls"); do
+    line=$(_launch_line "$impl" --no-auto-submit)
+    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$impl: $line" >&2; return 1; }
+    got=$(_session_auto_submit "$impl" --no-auto-submit)
+    [[ -z "$got" ]] || { echo "$impl --no-auto-submit: AUTO_SUBMIT='$got'" >&2; return 1; }
+  done
+}
+
+@test "--auto-submit and --auto keep the default on, on every impl" {
+  setup_task_force_home
+  local impl got flag
+  for impl in $(bash -c "source '$DETECT'; aw_all_impls"); do
+    for flag in --auto-submit --auto; do
+      got=$(_session_auto_submit "$impl" "$flag")
+      [[ "$got" == 1 ]] || { echo "$impl $flag: AUTO_SUBMIT='$got'" >&2; return 1; }
+    done
+  done
+}
+
+@test "--no-auto-submit wins over --auto in either order, on every impl" {
+  local impl line order
+  for impl in $(bash -c "source '$DETECT'; aw_all_impls"); do
+    for order in "--auto --no-auto-submit" "--no-auto-submit --auto"; do
+      # shellcheck disable=SC2086  # deliberate word split into two flags
+      line=$(_launch_line "$impl" $order)
+      [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$impl $order: $line" >&2; return 1; }
+    done
+  done
+}
+
+# A --no-auto-submit launch must override a sidecar that recorded `1` from an
+# earlier life of the same role: the explicit `0` is what a fresh launch says.
+@test "--no-auto-submit overrides a recorded on for a relaunched role (#246, #254)" {
+  setup_task_force_home
+  local line kv
+  TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role worker-again --tab worker-again --agent claude
+  line=$(_launch_line claude-gh --no-auto-submit)
+  kv=$(grep -oE 'TASK_FORCE_AUTO_SUBMIT=[^ ]*' <<<"$line")
+  env "$kv" "$RADIO" register --role worker-again --tab worker-again --agent claude
+  run grep -F "AUTO_SUBMIT=" "$TASK_FORCE_HOME/radio/sessions/worker-again.info"
+  assert_failure
+}
+
+# ---------------------------------------------------------------------------
+# claude: permission mode, apart from auto-submit (#246, #254)
+# ---------------------------------------------------------------------------
+
+@test "claude --auto-submit: permission mode untouched (all claude impls)" {
   local impl line
   for impl in $(_impls_on claude); do
     line=$(_launch_line "$impl" --auto-submit)
@@ -154,7 +232,7 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   done
 }
 
-@test "claude --auto: auto-submit AND --permission-mode auto (all claude impls)" {
+@test "claude --auto: --permission-mode auto (all claude impls)" {
   local impl line
   for impl in $(_impls_on claude); do
     line=$(_launch_line "$impl" --auto)
@@ -163,17 +241,16 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   done
 }
 
-@test "claude, no flag: neither, with auto-submit explicitly off (all claude impls)" {
+@test "claude, no flag: auto-submit on, no permission mode (all claude impls)" {
   local impl line
   for impl in $(_impls_on claude); do
     line=$(_launch_line "$impl")
-    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$impl: $line" >&2; return 1; }
-    [[ "$line" != *"TASK_FORCE_AUTO_SUBMIT=1"* ]]  || { echo "$impl: $line" >&2; return 1; }
+    [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=1 "* ]] || { echo "$impl: $line" >&2; return 1; }
     [[ "$line" != *"--permission-mode"* ]]          || { echo "$impl: $line" >&2; return 1; }
   done
 }
 
-@test "claude --no-auto-submit wins over --auto in either order (all claude impls)" {
+@test "claude --auto --no-auto-submit keeps the permission mode (all claude impls)" {
   local impl line order
   for impl in $(_impls_on claude); do
     for order in "--auto --no-auto-submit" "--no-auto-submit --auto"; do
@@ -185,10 +262,10 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   done
 }
 
-@test "claude --plan --auto-submit: plan mode with auto-submit (all claude impls)" {
+@test "claude --plan: plan mode with auto-submit on by default (all claude impls)" {
   local impl line
   for impl in $(_impls_on claude); do
-    line=$(_launch_line "$impl" --plan --auto-submit)
+    line=$(_launch_line "$impl" --plan)
     [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=1 "* ]]      || { echo "$impl: $line" >&2; return 1; }
     [[ "$line" == *"claude --permission-mode plan "* ]] || { echo "$impl: $line" >&2; return 1; }
   done
@@ -203,27 +280,32 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   done
 }
 
-@test "claude --help documents the auto-submit split on every claude impl" {
+@test "--help documents the auto-submit and focus defaults on every impl" {
   local impl
-  for impl in $(_impls_on claude); do
+  for impl in $(bash -c "source '$DETECT'; aw_all_impls"); do
     run env AW_IMPL="$impl" "$TASK_WORK" --help
     assert_success
     assert_output --partial "--auto-submit"
     assert_output --partial "--no-auto-submit"
+    assert_output --partial "--focus"
+    assert_output --partial "This is the default"
+  done
+  for impl in $(_impls_on claude); do
+    run env AW_IMPL="$impl" "$TASK_WORK" --help
     assert_output --partial "--permission-mode auto"
   done
 }
 
-# The behaviour the whole of #246 is about, end to end: what --auto-submit puts
-# on the launch line is what makes radio's wake end in CR instead of LF.
-@test "a --auto-submit launch yields a CR wake; a plain launch yields LF" {
+# End to end through the wake itself: what a plain launch puts on the launch
+# line is what makes radio's wake end in CR, and --no-auto-submit in LF.
+@test "a plain launch yields a CR wake; a --no-auto-submit launch yields LF (#254)" {
   setup_task_force_home
   export ZELLIJ=fake-session
   seed_zellij_tabs worker-on worker-off
 
   local on off
-  on=$(_launch_line claude-gh --auto-submit | grep -oE 'TASK_FORCE_AUTO_SUBMIT=[0-9]+')
-  off=$(_launch_line claude-gh | grep -oE 'TASK_FORCE_AUTO_SUBMIT=[0-9]+')
+  on=$(_launch_line claude-gh | grep -oE 'TASK_FORCE_AUTO_SUBMIT=[0-9]+')
+  off=$(_launch_line claude-gh --no-auto-submit | grep -oE 'TASK_FORCE_AUTO_SUBMIT=[0-9]+')
   env "$on"  "$RADIO" register --role worker-on  --tab worker-on  --agent claude
   env "$off" "$RADIO" register --role worker-off --tab worker-off --agent claude
 
@@ -320,7 +402,7 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   assert_output --partial "Started worker [model=X] [trust-all] in "
 }
 
-@test "kiro --auto does not imply --trust-all-tools (permission model unchanged)" {
+@test "kiro --auto does not imply --trust-all-tools (a no-op since #254)" {
   local impl line
   for impl in $(_impls_on kiro); do
     line=$(_launch_line "$impl" --auto)
@@ -330,9 +412,9 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   done
 }
 
-@test "kiro --trust-all does not imply auto-submit" {
+@test "kiro --trust-all --no-auto-submit: trust-all with the Enter gate" {
   local line
-  line=$(_launch_line kiro-gh --trust-all)
+  line=$(_launch_line kiro-gh --trust-all --no-auto-submit)
   [[ "$line" == *"--trust-all-tools"* ]]         || { echo "$line" >&2; return 1; }
   [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$line" >&2; return 1; }
 }
@@ -361,13 +443,13 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --auto
   assert_failure
 }
 
-@test "kiro --help documents --auto as auto-submit only, on every kiro impl" {
+@test "kiro --help documents --auto as a no-op, on every kiro impl" {
   local impl
   for impl in $(_impls_on kiro); do
     run env AW_IMPL="$impl" "$TASK_WORK" --help
     assert_success
     assert_output --partial "--auto"
-    assert_output --partial "auto-submit"
+    assert_output --partial "a no-op on kiro"
     # Names the separate permission flag so nobody reads --auto as trust-all.
     assert_output --partial "-a/--trust-all"
     assert_output --partial "TASK_WORK_TRUST_ALL"

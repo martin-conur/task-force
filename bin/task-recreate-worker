@@ -72,15 +72,17 @@ Options:
                       queued while the role was offline (#168), so the agent
                       opens with the backlog in front of it.
       --auto          Opt the rebuilt role into radio auto-submit, so a PM ping
-                      processes without a keypress, and keep focus on the tab you
-                      ran this from. On claude it also launches in auto
-                      permission mode; on kiro it governs auto-submit only, as
-                      `task-work --auto` does there (#206).
+                      processes without a keypress. On claude it also launches
+                      in auto permission mode. Unlike task-work, whose default
+                      is already on, this command's default is the setting
+                      radio recorded for the role, so --auto still matters here.
       --auto-submit   Opt the rebuilt role into radio auto-submit only.
       --no-auto-submit
                       Rebuild it with the Enter gate on radio wakes.
                       With none of these three, the role keeps the auto-submit
                       setting it had before it died: radio recorded it (#246).
+      --focus         Switch to the new tab. By default focus stays on the tab
+                      you ran this from, as task-work's does (#254).
       --no-launch     Open the tab at the worktree but do NOT start the agent.
                       The role stays unregistered until something does.
       --force         Proceed even though a session still looks live for this
@@ -138,6 +140,7 @@ POSITIONAL=()
 RESUME=""
 AUTO_MODE=""
 AUTO_SUBMIT_FLAG=""
+FOCUS=""
 NO_LAUNCH=""
 FORCE=""
 
@@ -148,6 +151,7 @@ while [[ $# -gt 0 ]]; do
     --auto) AUTO_MODE="1"; shift ;;
     --auto-submit) AUTO_SUBMIT_FLAG="1"; shift ;;
     --no-auto-submit) AUTO_SUBMIT_FLAG="0"; shift ;;
+    --focus) FOCUS="1"; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --force) FORCE="1"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
@@ -494,15 +498,19 @@ case "$AUTO_SUBMIT_FLAG" in
   *) [[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 " ;;
 esac
 
+# Focus stays on the caller's tab unless --focus, as task-work's (#254).
+STAY_ON_CALLER="1"
+[[ -n "$FOCUS" ]] && STAY_ON_CALLER=""
+
 echo "Opening zellij tab '$SLUG'..."
 # `set +H; ` must come BEFORE $RADIO_ENV_PREFIX, never between it and the agent:
 # `VAR=val cmd1; cmd2` scopes the assignments to cmd1 only, so the env would
 # attach to the `set` builtin and never reach the agent — radio routing and
 # auto-submit silently dead. Same ordering as task-work / task-reviewer.
 if [[ -n "$NO_LAUNCH" ]]; then
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "${AUTO_MODE:-}"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "$STAY_ON_CALLER"
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}${AGENT_CMD}" "${AUTO_MODE:-}"
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}${AGENT_CMD}" "$STAY_ON_CALLER"
 fi
 
 # ---------------- rebind TAB_ID ----------------

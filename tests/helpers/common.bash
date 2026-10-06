@@ -35,6 +35,13 @@ JIRA_TASK_WORK="$REPO_ROOT_REAL/claude-jira/bin/task-work"
 JIRA_TASK_INIT="$REPO_ROOT_REAL/claude-jira/bin/task-init"
 TASK_INIT_DISPATCHER="$REPO_ROOT_REAL/task-init"
 TASK_WORK_DISPATCHER="$REPO_ROOT_REAL/bin/task-work"
+# task-board is a canonical single copy since #238: the render body moved into
+# the root file that used to dispatch to two byte-identical per-loadout copies,
+# so CLAUDE_LOCAL_TASK_BOARD / KIRO_LOCAL_TASK_BOARD are retired with them. Two
+# names for one path, as with TASK_DONE below: TASK_BOARD is what a render test
+# runs, TASK_BOARD_DISPATCHER what tests/task_board_dispatcher.bats runs when the
+# question is loadout detection and the #215 refusal.
+TASK_BOARD="$REPO_ROOT_REAL/bin/task-board"
 TASK_BOARD_DISPATCHER="$REPO_ROOT_REAL/bin/task-board"
 # task-done is a canonical single copy since #236 — one body composing one
 # tracker module out of lib/trackers/, in place of seven near-identical files.
@@ -62,11 +69,9 @@ KIRO_GH_TASK_INIT="$REPO_ROOT_REAL/kiro-gh/bin/task-init"
 KIRO_GH_TEMPLATE="$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
 CLAUDE_LOCAL_TASK_WORK="$REPO_ROOT_REAL/claude-local/bin/task-work"
 CLAUDE_LOCAL_TASK_INIT="$REPO_ROOT_REAL/claude-local/bin/task-init"
-CLAUDE_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/claude-local/bin/task-board"
 CLAUDE_LOCAL_TEMPLATE="$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
 KIRO_LOCAL_TASK_WORK="$REPO_ROOT_REAL/kiro-local/bin/task-work"
 KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
-KIRO_LOCAL_TASK_BOARD="$REPO_ROOT_REAL/kiro-local/bin/task-board"
 KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
 # radio / task-pm / task-reviewer are canonical root binaries (#170). Tests
 # pin a loadout by prefixing `AW_IMPL=<impl>` on the `run` invocation; the

@@ -6,17 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Installing claude-local scripts..."
 
 # region:install-shared-symlinks
-# Shared root scripts. task-init / task-work / task-board are impl-dispatching
+# Shared root scripts. task-init / task-work are impl-dispatching
 # scripts at the repo root (they route per-project based on which workflow doc
 # is present); task-done resolves the same way but then composes a tracker
 # module out of lib/trackers/ instead of exec'ing a per-loadout copy (#236);
-# task-pm, radio, task-config, task-remove and
-# task-recreate-worker are canonical single copies (#170, #219, #220, #230 —
+# task-board, task-pm, radio, task-config, task-remove and
+# task-recreate-worker are canonical single copies (#170, #219, #220, #230, #238 —
 # task-config and task-remove act *across* loadouts, so a per-loadout copy would
 # make no sense; task-pm and task-recreate-worker differ by agent only in their
 # final launch line).
 # Every loadout links task-board even though only the two *-local
-# loadouts implement it: the dispatcher's job on the others is to refuse with a
+# loadouts can render a board: its job on the others is to refuse with a
 # message naming the detected loadout, rather than the command being absent
 # (#215). This stanza is byte-identical across all seven loadout installers and
 # is drift-guarded by tools/check-drift.sh.
@@ -34,7 +34,7 @@ echo "  ✓ Script: radio (PM↔worker mailbox CLI)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/ci-guard" ~/.local/bin/ci-guard
 echo "  ✓ Script: ci-guard (commit-msg CI-skip-marker guard)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-board" ~/.local/bin/task-board
-echo "  ✓ Script: task-board (shared dispatcher)"; sleep 0.05
+echo "  ✓ Script: task-board (canonical)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-config" ~/.local/bin/task-config
 echo "  ✓ Script: task-config (canonical)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-remove" ~/.local/bin/task-remove

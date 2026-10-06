@@ -30,7 +30,9 @@ aw_tracker_usage_steps() {
 # whose worktree and tab are already gone (#223). The `|| true` at the call site
 # is belt-and-braces over that, not a substitute for it.
 aw_tracker_post_cleanup() {
-  local main_worktree="$1" slug="$2" impl="$3" state_file
+  # $3 (the impl) is part of the hook interface (lib/trackers/_default.sh) but
+  # unused here since #238: there is one task-board, whichever local loadout ran.
+  local main_worktree="$1" slug="$2" state_file
   state_file="$main_worktree/.git/task-force/state.json"
   if [[ -f "$state_file" ]]; then
     awk -v slug="$slug" '
@@ -38,12 +40,9 @@ aw_tracker_post_cleanup() {
     ' "$state_file" > "$state_file.tmp" && mv "$state_file.tmp" "$state_file"
   fi
   # Pass the caller explicitly rather than letting aw_regenerate_board default
-  # `self` to ${BASH_SOURCE[1]} (lib/board-regen.sh:30). That default used to
-  # resolve to <impl>/bin/task-done, whose sibling is <impl>/bin/task-board;
-  # from here it would resolve to THIS file, which has no task-board beside it,
-  # and the sibling fallback would silently find nothing. Naming the impl's own
-  # task-done keeps the resolution byte-identical to pre-#236 — $PATH first,
-  # then that loadout's sibling copy — so this inversion changes no behaviour
-  # here. #238 consolidates the two task-board copies; this line moves with it.
-  aw_regenerate_board "$main_worktree" "$AW_ROOT/$impl/bin/task-done"
+  # `self` to ${BASH_SOURCE[1]} (lib/board-regen.sh:30): from here that would be
+  # THIS file, which has no task-board beside it, and the sibling fallback would
+  # silently find nothing. The root task-done does — since #238 the one
+  # task-board copy is bin/task-board — so $PATH first, then that.
+  aw_regenerate_board "$main_worktree" "$AW_ROOT/bin/task-done"
 }

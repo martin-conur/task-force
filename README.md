@@ -177,7 +177,7 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
-`task-work`, `task-init`, and `task-board` are **project-aware dispatchers** that live at the repo root: they detect the loadout and `exec` that loadout's own copy. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-pm`, `radio`, `ci-guard`, `task-config`, `task-remove` and `task-recreate-worker` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why `task-config` and `task-remove` in particular cannot be dispatchers.)
+`task-work` and `task-init` are **project-aware dispatchers** that live at the repo root: they detect the loadout and `exec` that loadout's own copy. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-board`, `task-pm`, `radio`, `ci-guard`, `task-config`, `task-remove` and `task-recreate-worker` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why `task-config` and `task-remove` in particular cannot be dispatchers.)
 
 **`task-done` is a third thing, as of #236: it detects like a dispatcher and then composes instead of dispatching.** There is one `bin/task-done`, and the loadout decides which *tracker module* it sources out of `lib/trackers/` — because the seven per-loadout copies it replaced were a three-variant file wearing seven hats. `claude-gh`, `claude-notion`, `kiro-gh` and `kiro-notion` were byte-identical; `claude-local` and `kiro-local` were byte-identical to each other; `claude-jira` differed by seven lines. Removing a worktree, sweeping radio state and closing a tab never depended on which *agent* was in the tab, so there is no agent axis here at all — `lib/agents/` exists and is parity-checked, but contributes nothing until `task-work` moves too (#237).
 
@@ -205,7 +205,7 @@ So you can have different combos in different projects and never have to think a
 
 `task-done` is worktree-aware: when run from a task worktree (which has no workflow doc), it falls back to inspecting the main worktree so detection still works. `task-board` detects from `--repo PATH` when that flag is given, since `task-work` and `task-done` call it that way from a worktree.
 
-**`task-board` is the one dispatcher that can refuse.** It renders `tasks/_board.md` out of local task-file frontmatter, which only the two local-tracking loadouts have — so on a `gh` / `jira` / `notion` repo it exits non-zero naming the detected loadout and where that repo's board actually lives:
+**`task-board` detects like a dispatcher, then either renders or refuses.** Since #238 there is one copy, `bin/task-board`: the two per-loadout bodies it used to `exec` were byte-identical, so the render now lives in the root file below the loadout check. It renders `tasks/_board.md` out of local task-file frontmatter, which only the two local-tracking loadouts have — so on a `gh` / `jira` / `notion` repo it exits non-zero naming the detected loadout and where that repo's board actually lives:
 
 ```
 $ task-board                       # in a claude-gh repo
@@ -221,7 +221,7 @@ Every loadout links it anyway, on purpose: a command that explains itself beats 
 
 ## `task-config` — which loadout is this repo on, and switching it
 
-`task-config` is the one task-force command that is deliberately **not** a dispatcher. `task-work` / `task-board` dispatch, and `task-done` composes (#236), because all three act *within* one loadout and only need to resolve which; `task-config` acts *across* them, has to know about a loadout the repo is not on, and has to keep working when detection is ambiguous — which is exactly when you reach for it. So it is a canonical single copy, like `task-pm` and `radio`.
+`task-config` is the one task-force command that is deliberately **not** a dispatcher. `task-work` dispatches, `task-done` composes (#236) and `task-board` refuses off the local loadouts (#215), because all three act *within* one loadout and only need to resolve which; `task-config` acts *across* them, has to know about a loadout the repo is not on, and has to keep working when detection is ambiguous — which is exactly when you reach for it. So it is a canonical single copy, like `task-pm` and `radio`.
 
 ### `task-config show`
 
@@ -473,7 +473,7 @@ cd ~/my-project
 task-init claude-local         # creates tasks/, .claude/local-workflow.md, and slash commands
 ```
 
-`task-init` writes `.claude/local-workflow.md` and references it from `CLAUDE.md`, plus drops a `tasks/` directory. `task-board` is one of the shared root dispatchers installed by every loadout — on this one it resolves to `claude-local/bin/task-board`.
+`task-init` writes `.claude/local-workflow.md` and references it from `CLAUDE.md`, plus drops a `tasks/` directory. `task-board` is a single root copy installed by every loadout — on this one it renders the board, where on the tracker-backed loadouts it refuses (#215, #238).
 
 **What "local tracking" means** — there is no Jira, Notion, or GitHub board. The markdown files in `tasks/` *are* the database, and `tasks/_board.md` is an auto-generated kanban view. Everything renders cleanly in Obsidian, so you can plan and read tasks from your editor of choice.
 
@@ -1139,11 +1139,11 @@ If `$TASK_FORCE_HOME` is missing or aimed back at the real home, loading
 writing to the live mailbox.
 
 **PATH isolation.** The same shape, a different variable (#223). `task-work` and
-`task-done` resolve `task-board` from `$PATH` in preference to their own sibling
-copy, and `install.sh` plants `~/.local/bin/task-board` as a symlink into
+`task-done` resolve `task-board` from `$PATH` in preference to this checkout's own
+root copy, and `install.sh` plants `~/.local/bin/task-board` as a symlink into
 whichever checkout ran the installer last — so on any machine that has ever
 installed task-force, the suite was rendering its fixtures' boards with **another
-clone's** code. That copy is the root dispatcher, which refuses on a fixture repo
+clone's** code. That copy is the root `bin/task-board`, which refuses on a fixture repo
 carrying no workflow doc, and a `|| true` swallowed the refusal whole: the only
 symptom was a missing `tasks/_board.md` two assertions later. CI installs
 nothing, so CI stayed green — the suite was red for exactly the people most
@@ -1180,8 +1180,8 @@ bug survived.
 | `kiro_gh_task_init.bats`          | `kiro-gh/bin/task-init` — owner/repo/project substitution |
 | `kiro_local_task_work.bats`       | `kiro-local/bin/task-work` — same as `claude-local` but launching `kiro-cli` |
 | `kiro_local_task_init.bats`       | `kiro-local/bin/task-init` — `tasks/` scaffolding, `.kiro/steering/local-workflow.md`, agents |
-| `task_board.bats`                 | Shared `task-board` script — frontmatter parsing, sidecar overlay, `_board.md` regen |
-| `task_board_dispatcher.bats`      | Root `bin/task-board` — local-loadout dispatch, `--repo`-driven detection, refusal on gh/jira/notion |
+| `task_board.bats`                 | `bin/task-board` rendering — frontmatter parsing, sidecar overlay, `_board.md` regen |
+| `task_board_dispatcher.bats`      | `bin/task-board` detection — local-loadout render, `--repo`-driven detection, refusal on gh/jira/notion |
 | `task_config.bats`                | `bin/task-config` — `show` on all seven loadouts + the zero/ambiguous states, `set` round trips, user-content survival, `--dry-run` inertness |
 | `task_remove.bats`                | `bin/task-remove` — zero artifacts left on all seven loadouts (asserted against `la_owned_paths`), user-content survival, `--purge`, the ci-guard hook and its `commit-msg.local` restore, the global install left alone, `--dry-run` inertness |
 | `task_done.bats`                  | Canonical `bin/task-done` — cleanup, PR section, guards; pinned per loadout with `AW_IMPL` so each tracker module is proven to have actually *run* |

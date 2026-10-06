@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # PATH isolation guard (#223).
 #
-# task-work / task-done resolve `task-board` from $PATH *in preference to* their
-# own sibling copy, and the commit-msg hook resolves `ci-guard` the same way.
+# task-work / task-done resolve `task-board` from $PATH *in preference to* this
+# checkout's own root copy, and the commit-msg hook resolves `ci-guard` the same way.
 # install.sh plants ~/.local/bin/<cmd> as a symlink into whichever checkout ran
 # the installer last, so on any machine that has ever installed task-force the
 # suite silently exercised **another checkout's** binary instead of the one under
 # test. The two `regenerates tasks/_board.md` tests were the visible casualty:
-# the foreign copy is the root dispatcher, which refuses on a fixture repo that
+# the foreign copy is the root bin/task-board, which refuses on a fixture repo that
 # has no workflow doc, and a `|| true` on the call swallowed that so the only
 # symptom was a missing artifact two assertions later, with nothing naming the
 # cause. CI has nothing installed, so it took the sibling-copy fallback and

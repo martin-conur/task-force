@@ -1,13 +1,16 @@
 #!/usr/bin/env bats
-# Tests for the root task-board dispatcher (bin/task-board) — #215.
+# Tests for bin/task-board's loadout detection — #215, #238. Rendering itself is
+# tests/task_board.bats.
 #
-# task-board was the only task-force command with no root dispatcher: the two
-# *-local installers symlinked ~/.local/bin/task-board straight at their own
-# copy, so the command was absent on every other loadout and last-install-wins
-# decided which copy a machine with both got. The dispatcher resolves the
-# loadout per-repo like its five siblings — and, because only the local
-# loadouts have a board to render, refuses on the others with a message naming
-# what was detected instead of "command not found".
+# Before #215 task-board had no root entry point at all: the two *-local
+# installers symlinked ~/.local/bin/task-board straight at their own copy, so
+# the command was absent on every other loadout and last-install-wins decided
+# which copy a machine with both got. #215 added a root dispatcher that resolved
+# the loadout per-repo and, because only the local loadouts have a board to
+# render, refused on the others with a message naming what was detected instead
+# of "command not found". #238 folded the render body into that same file, so
+# bin/task-board is now the canonical implementation: it detects exactly as
+# before, then renders in-process rather than exec'ing a per-loadout copy.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -39,7 +42,7 @@ _use_impl() {
 }
 
 # ---------------------------------------------------------------------------
-# Error cases shared with the other dispatchers
+# Detection error cases, shared with the dispatchers (lib/detect-impl.sh)
 # ---------------------------------------------------------------------------
 
 @test "fails when not in a git repo" {
@@ -79,10 +82,10 @@ _use_impl() {
 }
 
 # ---------------------------------------------------------------------------
-# Dispatch to the two local loadouts
+# Rendering on the two local loadouts
 # ---------------------------------------------------------------------------
 
-@test "auto-routes to claude-local when .claude/local-workflow.md exists" {
+@test "renders on claude-local when .claude/local-workflow.md exists" {
   _use_impl claude-local
   run "$TASK_BOARD_DISPATCHER"
   assert_success
@@ -91,14 +94,14 @@ _use_impl() {
   assert_success
 }
 
-@test "auto-routes to kiro-local when .kiro/steering/local-workflow.md exists" {
+@test "renders on kiro-local when .kiro/steering/local-workflow.md exists" {
   _use_impl kiro-local
   run "$TASK_BOARD_DISPATCHER"
   assert_success
   assert [ -f "$MAIN_REPO/tasks/_board.md" ]
 }
 
-@test "dispatched board renders task frontmatter into the right column" {
+@test "rendered board puts task frontmatter into the right column" {
   _use_impl claude-local
   cat > "$MAIN_REPO/tasks/001-add-auth.md" <<'EOF'
 ---

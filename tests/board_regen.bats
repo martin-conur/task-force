@@ -44,7 +44,7 @@ make_task_board() {
   cat > "$path" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "\$STUB_CALLS_DIR/task-board.calls"
-# A copy that refuses renders nothing, like the root dispatcher turning down a
+# A copy that refuses renders nothing, like the root bin/task-board turning down a
 # repo whose loadout it cannot detect.
 if [[ $rc -ne 0 ]]; then
   echo "$label: refusing (no workflow doc found)" >&2

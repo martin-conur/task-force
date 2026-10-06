@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
 # PATH isolation for the test suite itself (#223).
 #
-# task-work / task-done resolve `task-board` from $PATH in preference to their own
-# sibling copy, and install.sh plants ~/.local/bin/task-board as a symlink into
+# task-work / task-done resolve `task-board` from $PATH in preference to this
+# checkout's own root copy, and install.sh plants ~/.local/bin/task-board as a symlink into
 # whichever checkout ran the installer last. So on any machine that has ever
 # installed task-force, the two `regenerates tasks/_board.md` tests invoked
-# *another clone's* task-board — which, being the root dispatcher, refuses on a
+# *another clone's* task-board — which, being the root canonical copy, refuses on a
 # fixture repo that has no workflow doc. Under the old `|| true` that failure was
 # swallowed whole, and the visible symptom was a missing artifact two assertions
 # later. CI installs nothing, so CI was green: the suite failed for precisely the
@@ -24,7 +24,7 @@ BATS_BIN="$REPO_ROOT_REAL/tests/libs/bats-core/bin/bats"
 
 # A directory shaped like the ~/.local/bin of a machine that installed
 # task-force from a different checkout: a task-board that refuses (as the root
-# dispatcher does on a repo with no workflow doc), next to an unrelated binary
+# bin/task-board does on a repo with no workflow doc), next to an unrelated binary
 # that isolation must not take away with it.
 make_foreign_bin() {
   local d="${1:-$BATS_TEST_TMPDIR/foreign-bin}"

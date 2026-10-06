@@ -75,7 +75,7 @@ resolve_link() {
     [ "$(resolve_link task-pm)" = "$REPO_ROOT_REAL/bin/task-pm" ] \
       || { echo "$impl: task-pm resolves to $(resolve_link task-pm)"; return 1; }
     # task-board is linked by every loadout even though only the two *-local
-    # ones implement it (#215): the root dispatcher refuses on the others with
+    # ones can render a board (#215): the root copy refuses on the others with
     # a message naming the loadout, which beats "command not found". Before
     # this, only claude-local / kiro-local linked it — straight at their own
     # copy, so installing both made the last one win.

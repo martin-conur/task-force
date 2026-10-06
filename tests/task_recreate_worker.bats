@@ -664,6 +664,44 @@ dead_worker_symlinked_base() {
   refute_output --partial "new-tab"
 }
 
+# The launch line is resolved before the report and the sidecar rewrite (#239),
+# so a refusal changes nothing on disk. Before, the kiro --resume gate sat after
+# the rewrite and had already stripped TAB_ID by the time it refused.
+@test "kiro: a --resume refusal leaves the sidecar exactly as it was (#239)" {
+  dead_worker issue-42
+  local before
+  before=$(cat "$WORKTREE_BASE/.issue-42.info")
+  AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42 --resume
+  assert_failure
+  refute_output --partial "Recovering worker"
+  run cat "$WORKTREE_BASE/.issue-42.info"
+  assert_output "$before"
+}
+
+# task-recreate-worker composes lib/agents/kiro.sh, whose flag init reads
+# task-work's TASK_WORK_MODEL / TASK_WORK_TRUST_ALL. A recovery must not pick
+# those up: it would relaunch the worker with tool permissions the task-work run
+# that created it may never have had (#239).
+@test "kiro: task-work's model / trust-all env does not reach the recovered worker (#239)" {
+  dead_worker issue-42
+  TASK_WORK_MODEL=claude-opus-4.6 TASK_WORK_TRUST_ALL=1 \
+    AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "kiro-cli chat --agent worker \"Implement task: https://github.com/owner/repo/issues/42\""
+  refute_output --partial "--trust-all-tools"
+  refute_output --partial "--model"
+}
+
+@test "claude: --auto --resume keeps the auto permission mode on the resume line (#239)" {
+  dead_worker issue-42
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --auto --resume
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "claude --permission-mode auto --resume"
+  refute_output --partial "/worker"
+}
+
 # ---------------------------------------------------------------------------
 # Doc parity
 # ---------------------------------------------------------------------------

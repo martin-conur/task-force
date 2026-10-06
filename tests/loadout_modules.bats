@@ -69,6 +69,10 @@ AGENT_HOOKS_TASK_WORK=(
   aw_agent_launch_cmd
   aw_agent_started_message
 )
+# What bin/task-recreate-worker asks of an agent beyond task-work's list (#239).
+AGENT_HOOKS_TASK_RECREATE_WORKER=(
+  aw_agent_resume_cmd
+)
 
 # Compose <impl> the way the leaf scripts do — _default.sh, then the tracker
 # module, then the agent module — and run <cmd> in that shell.
@@ -215,6 +219,18 @@ _compose() {
   done
 }
 
+@test "every impl composes an agent module defining all task-recreate-worker hooks" {
+  local impls impl hook
+  impls=$(bash -c "source '$DETECT'; aw_all_impls")
+  assert [ -n "$impls" ]
+  for impl in $impls; do
+    for hook in "${AGENT_HOOKS_TASK_RECREATE_WORKER[@]}"; do
+      run _compose "$impl" "declare -F $hook >/dev/null"
+      [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
+    done
+  done
+}
+
 # `declare -F` cannot tell a module's own definition from _default.sh's, and the
 # info key is the one tracker hook whose default refuses. Every tracker must
 # override it, or task-work stops before creating anything.
@@ -336,12 +352,13 @@ _fakeroot_without_tracker() {
 # ---------------------------------------------------------------------------
 
 # A checkout of bin/task-work (and the libs it sources) with one module removed.
-# <kind> is trackers or agents.
+# <kind> is trackers or agents. [<script>] picks another composing leaf script.
 _tw_fakeroot_without() {
-  local kind="$1" name="$2" fake="$BATS_TEST_TMPDIR/tw-fakeroot-$1-$2"
+  local kind="$1" name="$2" script="${3:-task-work}"
+  local fake="$BATS_TEST_TMPDIR/fakeroot-$script-$1-$2"
   rm -rf "$fake"
   mkdir -p "$fake/bin" "$fake/lib"
-  cp "$REPO_ROOT_REAL/bin/task-work" "$fake/bin/task-work"
+  cp "$REPO_ROOT_REAL/bin/$script" "$fake/bin/$script"
   cp "$REPO_ROOT_REAL/lib/"*.sh "$fake/lib/"
   cp -R "$REPO_ROOT_REAL/lib/trackers" "$REPO_ROOT_REAL/lib/agents" "$fake/lib/"
   rm -f "$fake/lib/$kind/$name.sh"
@@ -395,4 +412,32 @@ _tw_repo() {
   assert_failure
   assert_output --partial "defines no .info key"
   assert [ ! -e "$repo-worktrees" ]
+}
+
+# ---------------------------------------------------------------------------
+# 7. task-recreate-worker composes the same modules (#239)
+# ---------------------------------------------------------------------------
+
+# Its module resolution runs before the worktree lookup, so the slug here need
+# not exist: the absent module must be named, not "no worktree for slug".
+@test "task-recreate-worker fails on the module, not on shell noise, when any module is absent" {
+  local kind name names fake repo
+  for kind in trackers agents; do
+    if [[ "$kind" == trackers ]]; then
+      names=$(bash -c "source '$DETECT'; aw_all_trackers")
+    else
+      names=$(bash -c "source '$DETECT'; aw_all_agents")
+    fi
+    for name in $names; do
+      fake=$(_tw_fakeroot_without "$kind" "$name" task-recreate-worker)
+      repo=$(_tw_repo "repo-rw-$kind-$name")
+      local impl="claude-$name"
+      [[ "$kind" == agents ]] && impl="$name-gh"
+      run bash -c "cd '$repo' && AW_IMPL=$impl '$fake/bin/task-recreate-worker' some-slug"
+      assert_failure
+      assert_output --partial "no ${kind%s} module for '$name'"
+      refute_output --partial "No such file or directory"
+      refute_output --partial "no worktree for slug"
+    done
+  done
 }

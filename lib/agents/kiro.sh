@@ -123,3 +123,16 @@ aw_agent_started_message() {
   [[ -n "$TRUST_ALL" ]] && desc+=" [trust-all]"
   echo "$desc"
 }
+
+# ---------------- task-recreate-worker hooks ----------------
+
+# aw_agent_resume_cmd <session-id>
+#
+# Refuses: kiro-cli has no session picker and no resume-by-id, so there is no
+# launch line to give. A hook that refuses rather than an absent one, so the
+# caller gates on the hook's status instead of on the agent's name (#239).
+aw_agent_resume_cmd() {
+  echo "Error: --resume is claude-only; kiro-cli has no session picker to hand you." >&2
+  echo "       Re-run without --resume for a fresh session on the same worktree." >&2
+  return 1
+}

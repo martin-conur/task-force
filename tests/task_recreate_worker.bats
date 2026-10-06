@@ -195,6 +195,80 @@ queue_mail() {
 }
 
 # ---------------------------------------------------------------------------
+# The task ref is read under the tracker's own sidecar key (#240)
+# ---------------------------------------------------------------------------
+
+# A dead worker whose sidecar carries the ref under <key>, the way that
+# tracker's task-work writes it — and no GH_URL line at all.
+dead_worker_keyed() {
+  local slug="$1" key="$2" ref="$3"
+  mkdir -p "$WORKTREE_BASE"
+  git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  printf 'BASE_BRANCH=main\nSLUG=%s\n%s=%s\nTAB_ID=999\n' "$slug" "$key" "$ref" \
+    > "$WORKTREE_BASE/.$slug.info"
+}
+
+@test "notion: the sidecar's NOTION_URL reaches the relaunched worker (#240)" {
+  dead_worker_keyed add-store NOTION_URL "https://www.notion.so/abc123def456abc123def456abc123de"
+  AW_IMPL=claude-notion run "$TASK_RECREATE_WORKER" add-store
+  assert_success
+  assert_output --partial "task:      https://www.notion.so/abc123def456abc123def456abc123de"
+  run launch_cmd_for add-store
+  assert_output --partial "/worker Implement task: https://www.notion.so/abc123def456abc123def456abc123de"
+}
+
+@test "jira: the sidecar's JIRA_REF reaches the relaunch with jira's own prompt (#240)" {
+  dead_worker_keyed proj-123 JIRA_REF PROJ-123
+  AW_IMPL=claude-jira run "$TASK_RECREATE_WORKER" proj-123
+  assert_success
+  run launch_cmd_for proj-123
+  assert_output --partial "/worker Implement Jira issue: PROJ-123"
+}
+
+@test "local: the sidecar's TASK_FILE reaches the relaunched worker (#240)" {
+  dead_worker_keyed add-auth TASK_FILE tasks/007-add-auth.md
+  AW_IMPL=claude-local run "$TASK_RECREATE_WORKER" add-auth
+  assert_success
+  run launch_cmd_for add-auth
+  assert_output --partial "/worker Implement task: tasks/007-add-auth.md"
+}
+
+@test "kiro-notion: the NOTION_URL reaches kiro-cli's worker prompt too (#240)" {
+  dead_worker_keyed add-store NOTION_URL "https://www.notion.so/abc123def456abc123def456abc123de"
+  AW_IMPL=kiro-notion run "$TASK_RECREATE_WORKER" add-store
+  assert_success
+  run launch_cmd_for add-store
+  assert_output --partial "kiro-cli chat --agent worker \"Implement task: https://www.notion.so/abc123def456abc123def456abc123de\""
+}
+
+@test "a sidecar with no ref under the tracker's key says so and passes no task (#240)" {
+  # A GH_URL left on a notion sidecar is NOT this tracker's key and must not be
+  # picked up as if it were.
+  dead_worker issue-42
+  AW_IMPL=claude-notion run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_output --partial "task:      none recorded (NOTION_URL is empty or absent in .issue-42.info)"
+  run launch_cmd_for issue-42
+  assert_output --partial "claude \"/worker\""
+  refute_output --partial "Implement task"
+}
+
+@test "rewrite keeps the ref under the tracker's key and preserves foreign keys (#240)" {
+  dead_worker_keyed proj-123 JIRA_REF PROJ-123
+  printf 'CUSTOM_KEY=keep-me\n' >> "$WORKTREE_BASE/.proj-123.info"
+  AW_IMPL=claude-jira run "$TASK_RECREATE_WORKER" proj-123
+  assert_success
+  run cat "$WORKTREE_BASE/.proj-123.info"
+  assert_output --partial "JIRA_REF=PROJ-123"
+  assert_output --partial "CUSTOM_KEY=keep-me"
+  refute_output --partial "GH_URL="
+  refute_output --partial "TAB_ID=999"
+  # Exactly one JIRA_REF line: the rewrite must not duplicate the key it owns.
+  run grep -c '^JIRA_REF=' "$WORKTREE_BASE/.proj-123.info"
+  assert_output "1"
+}
+
+# ---------------------------------------------------------------------------
 # Refusals
 # ---------------------------------------------------------------------------
 

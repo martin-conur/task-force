@@ -108,6 +108,18 @@ if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
 fi
 AGENT="${IMPL%%-*}"
 
+# The tracker module, for the one thing this command needs from it: which key
+# task-work wrote the task ref under in the sidecar, and the prompt that ref is
+# relaunched with (#240). Resolved first and sourced second, as task-work does.
+# The agent / tracker `case` switches further down stay inline until #239.
+TRACKER="${IMPL##*-}"
+# shellcheck source=lib/trackers/_default.sh
+source "$AW_ROOT/lib/trackers/_default.sh"
+TRACKER_MODULE=$(aw_tracker_module "$AW_ROOT" "$TRACKER") || exit 1
+# shellcheck source=/dev/null
+source "$TRACKER_MODULE"
+INFO_KEY=$(aw_tracker_info_key) || exit 1
+
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 
 # ---------------- arg parsing ----------------
@@ -245,11 +257,14 @@ _info_field() {
   awk -v k="$key" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$file"
 }
 
+# The ref lives under the tracker's own key — GH_URL, NOTION_URL, JIRA_REF or
+# TASK_FILE. Reading GH_URL on every loadout relaunched a non-gh worker with no
+# task at all, while the ref sat untouched a few lines down the same file (#240).
 BASE_BRANCH=""
-GH_URL=""
+TASK_REF=""
 if [[ -f "$INFO_FILE" ]]; then
   BASE_BRANCH=$(_info_field BASE_BRANCH "$INFO_FILE")
-  GH_URL=$(_info_field GH_URL "$INFO_FILE")
+  TASK_REF=$(_info_field "$INFO_KEY" "$INFO_FILE")
 fi
 [[ -n "$BASE_BRANCH" ]] || BASE_BRANCH="main"
 
@@ -340,7 +355,7 @@ echo "Recovering worker '$SLUG'"
 echo "  role:      $ROLE"
 echo "  worktree:  $WORKTREE_DIR"
 echo "  branch:    $BRANCH (base: $BASE_BRANCH)"
-echo "  task:      ${GH_URL:-none recorded in $(basename "$INFO_FILE")}"
+echo "  task:      ${TASK_REF:-none recorded ($INFO_KEY is empty or absent in $(basename "$INFO_FILE"))}"
 echo "  commits:   $AHEAD_OF_BASE ahead of $BASE_BRANCH; $PUSH_LINE"
 echo "  dirty:     ${DIRTY_COUNT} uncommitted change(s) in the worktree"
 echo "  PR:        ${PR_URL:-none found}"
@@ -358,16 +373,17 @@ echo ""
 # from this file when its zellij name lookup misses (#218), and the new session's
 # SessionStart can fire before we get to write the new id — so the stale one must
 # already be gone by then, leaving the name lookup (which now resolves) as the
-# only source. Every other line is preserved; the three task-work fields are
+# only source. Every other line is preserved; the three task-work fields (the
+# ref under this tracker's key) are
 # ensured, because radio's roleless role-recovery keys off `SLUG=` (#229) and a
 # sidecar missing it leaves the rebuilt worker unrecoverable a second time.
 _tmp_info=$(mktemp "${INFO_FILE}.XXXXXX")
 {
   printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"
   printf 'SLUG=%s\n' "$SLUG"
-  printf 'GH_URL=%s\n' "$GH_URL"
+  printf '%s=%s\n' "$INFO_KEY" "$TASK_REF"
   if [[ -f "$INFO_FILE" ]]; then
-    grep -v -E '^(BASE_BRANCH|SLUG|GH_URL|TAB_ID)=' "$INFO_FILE" || true
+    grep -v -E "^(BASE_BRANCH|SLUG|${INFO_KEY}|TAB_ID)=" "$INFO_FILE" || true
   fi
 } > "$_tmp_info"
 mv "$_tmp_info" "$INFO_FILE"
@@ -437,8 +453,10 @@ RESUME_SESSION_ID=""
 [[ -n "$RESUME" && "$AGENT" == claude ]] && RESUME_SESSION_ID=$(_resume_session_id)
 
 build_agent_cmd() {
-  local mode_prefix="" q_gh_url=""   # mode_prefix is claude-only; see the kiro arm
-  [[ -n "$GH_URL" ]] && q_gh_url=$(printf %q "$GH_URL")
+  local mode_prefix="" prompt=""   # mode_prefix is claude-only; see the kiro arm
+  # %q the ref alone, never the sentence: the payload is re-parsed inside the
+  # double quotes below, exactly as task-work hands it to aw_tracker_worker_prompt.
+  [[ -n "$TASK_REF" ]] && prompt=$(aw_tracker_worker_prompt "$(printf %q "$TASK_REF")")
   case "$AGENT" in
     claude)
       [[ -n "$AUTO_MODE" ]] && mode_prefix="--permission-mode auto "
@@ -450,8 +468,8 @@ build_agent_cmd() {
           # over to Claude's picker rather than guess. The caller is told.
           echo "claude ${mode_prefix}--resume"
         fi
-      elif [[ -n "$GH_URL" ]]; then
-        echo "claude ${mode_prefix}\"/worker Implement task: $q_gh_url\""
+      elif [[ -n "$prompt" ]]; then
+        echo "claude ${mode_prefix}\"/worker $prompt\""
       else
         echo "claude ${mode_prefix}\"/worker\""
       fi ;;
@@ -460,8 +478,8 @@ build_agent_cmd() {
       # model there is `-a/--trust-all`, which task-work keeps as a separate
       # flag. Folding it in here would hand a recovered kiro worker broader
       # tool permissions than the task-work invocation that first created it.
-      if [[ -n "$GH_URL" ]]; then
-        echo "kiro-cli chat --agent worker \"Implement task: $q_gh_url\""
+      if [[ -n "$prompt" ]]; then
+        echo "kiro-cli chat --agent worker \"$prompt\""
       else
         echo "kiro-cli chat --agent worker"
       fi ;;

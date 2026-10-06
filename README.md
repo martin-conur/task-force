@@ -386,7 +386,7 @@ task-recreate-worker add-auth --resume   # resume the old session (id recovered,
 task-recreate-worker issue-223 --force   # a session still looks live; do it anyway
 ```
 
-It opens a fresh tab on the **existing** worktree and launches the agent with the same role env `task-work` injects. That last part is the whole point: `SessionStart` registers the role, so the worker is wakeable again and its report goes out as itself instead of `from: unknown`. Before it launches, it reports what it found — the issue URL, the base branch, unpushed commits, whether a PR already exists, and how much mail queued while the role was offline (plus, separately, anything gc already moved to `dead-letter/`, which a register will **not** redeliver).
+It opens a fresh tab on the **existing** worktree and launches the agent with the same role env `task-work` injects. That last part is the whole point: `SessionStart` registers the role, so the worker is wakeable again and its report goes out as itself instead of `from: unknown`. Before it launches, it reports what it found — the task reference (read under the tracker's own sidecar key, `GH_URL` / `NOTION_URL` / `JIRA_REF` / `TASK_FILE`, and relaunched with it), the base branch, unpushed commits, whether a PR already exists, and how much mail queued while the role was offline (plus, separately, anything gc already moved to `dead-letter/`, which a register will **not** redeliver).
 
 **It never creates, reuses or removes a worktree.** If the worktree is gone, that is new work and it says so, naming `task-work`. The two commands must not overlap: silently recreating the tree would hand the rebuilt worker an empty checkout and lose whatever the branch was carrying.
 

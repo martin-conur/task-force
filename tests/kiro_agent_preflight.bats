@@ -7,10 +7,11 @@
 # task-force's hooks. The role never registers, and radio is silently dead for
 # that whole session — presenting as a radio bug rather than a launch bug.
 #
-# In practice this arrives as a stale install, not a missing one: the global
-# ~/.kiro/agents/*.json are symlinks into the checkout that installed them, so
-# renaming or moving that checkout leaves dangling links behind. That is the
-# state the machine this was diagnosed on was in.
+# In practice this arrives as a stale install, not a missing one: before
+# 3e45ce3 install.sh symlinked ~/.kiro/agents/*.json into its checkout, and
+# moving that checkout left them dangling. Nothing has written there since —
+# agents are per-repo, from task-init — so re-running install.sh cannot fix a
+# dangling global link (#250): removing it and running task-init does.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -57,6 +58,8 @@ teardown() {
   assert_output --partial "$MAIN_REPO/.kiro/agents/worker.json"
   assert_output --partial "$HOME/.kiro/agents/worker.json"
   assert_output --partial "task-init kiro-gh"
+  # No installer writes ~/.kiro/agents/ since 3e45ce3 (#250).
+  refute_output --partial "install.sh"
 }
 
 @test "a DANGLING global symlink is reported as such, not merely as missing" {
@@ -69,6 +72,11 @@ teardown() {
   assert_failure
   assert_output --partial "DANGLING SYMLINK"
   assert_output --partial "/nonexistent/checkout/worker.json"
+  # The fix that works: remove the leftover, then task-init in the repo. The
+  # old advice — re-run install.sh — leaves the link exactly as it was (#250).
+  assert_output --partial "rm '$HOME/.kiro/agents/worker.json'"
+  assert_output --partial "task-init kiro-gh"
+  refute_output --partial "install.sh"
 }
 
 # ----- wired into the launchers ---------------------------------------------

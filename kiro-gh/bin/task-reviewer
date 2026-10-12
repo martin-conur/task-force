@@ -25,6 +25,8 @@ source "$AW_ROOT_REAL/lib/zellij-tab.sh"
 source "$AW_ROOT_REAL/lib/worktree-create.sh"
 # shellcheck source=lib/kiro-agent.sh
 source "$AW_ROOT_REAL/lib/kiro-agent.sh"
+# shellcheck source=lib/kiro-launch.sh
+source "$AW_ROOT_REAL/lib/kiro-launch.sh"
 
 usage() {
   cat <<'EOF'
@@ -136,6 +138,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in 
 # a hookless built-in never registers, so its verdict radio never reaches PM and
 # its self-destruct (#162) leaves the tab behind to say so.
 aw_require_kiro_agent reviewer "$REPO_ROOT" "task-init kiro-gh" || exit 1
+# A reviewer is trust-all by default, so kiro-cli's trust-all confirmation would
+# hold its first turn for an answer nobody gives (#157). Warn, never refuse.
+[[ -n "$TRUST_ALL" ]] && aw_kiro_warn_trust_gate "$REPO_ROOT" "the reviewer"
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 
@@ -239,6 +244,9 @@ build_kiro_cmd() {
   local cmd="kiro-cli chat --agent reviewer"
   [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
+  # Pin the terminal UI: the classic one opens on a dialog that holds the
+  # positional first turn until someone answers it (#157, lib/kiro-launch.sh).
+  cmd+="$(aw_kiro_ui_flag)"
   local prompt="Review PR $PR_URL"
   [[ -n "$ISSUE_URL" ]] && prompt+=" against spec issue $ISSUE_URL"
   cmd+=" \"$prompt\""

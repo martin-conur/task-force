@@ -2,4 +2,24 @@
 # Stub for kiro-cli — records all invocations, silently succeeds.
 echo "kiro-cli $*" >> "${STUB_CALLS_DIR}/kiro-cli.calls"
 echo "TASK_FORCE_ROLE=${TASK_FORCE_ROLE:-} ZELLIJ_TAB=${ZELLIJ_TAB:-} TASK_FORCE_PM_ROLE=${TASK_FORCE_PM_ROLE:-} TASK_FORCE_AUTO_SUBMIT=${TASK_FORCE_AUTO_SUBMIT:-}" >> "${STUB_CALLS_DIR}/kiro-cli.env"
+
+# The two probes the launchers make before a launch (#157). Modelled on
+# kiro-cli 2.29.1; each knob reproduces the other state.
+#   STUB_KIRO_NO_TUI=1                 a kiro-cli whose `chat` has no --tui flag
+#   STUB_KIRO_TRUST_CONFIRM_DISABLED   the value of chat.disableTrustAllConfirmation;
+#                                      unset means the setting is unset (exit 1)
+if [[ "${1:-}" == chat && "${2:-}" == --help ]]; then
+  echo "Usage: kiro-cli-chat chat [OPTIONS] [INPUT]"
+  echo "      --agent <AGENT>"
+  [[ -n "${STUB_KIRO_NO_TUI:-}" ]] || echo "      --tui"
+  echo "      --legacy-ui"
+  exit 0
+fi
+if [[ "${1:-}" == settings && "${*: -1}" == chat.disableTrustAllConfirmation ]]; then
+  echo "cwd=$PWD" >> "${STUB_CALLS_DIR}/kiro-cli.settings-cwd"
+  [[ -n "${STUB_KIRO_TRUST_CONFIRM_DISABLED+x}" ]] || {
+    echo "error: No value associated with chat.disableTrustAllConfirmation" >&2; exit 1; }
+  echo "$STUB_KIRO_TRUST_CONFIRM_DISABLED"
+  exit 0
+fi
 exit 0

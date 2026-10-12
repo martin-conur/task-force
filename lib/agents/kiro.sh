@@ -23,6 +23,9 @@
 # kiro task-work copies, since the claude ones have no kiro agent to check.
 # shellcheck source=lib/kiro-agent.sh
 source "$AW_ROOT/lib/kiro-agent.sh"
+# --tui and the trust-all warning (#157).
+# shellcheck source=lib/kiro-launch.sh
+source "$AW_ROOT/lib/kiro-launch.sh"
 
 aw_agent_name() { echo kiro; }
 
@@ -91,19 +94,26 @@ aw_agent_validate_flags() { :; }
 # agent config tracked in the repo is present in the worktree too, and a false
 # pass only degrades to the previous behaviour. Takes the impl, not just the
 # agent, because the remedy it prints names the exact `task-init <impl>`.
+#
+# Also where the trust-all gate is flagged (#157): a warning, never a refusal.
 aw_agent_preflight() {
-  aw_require_kiro_agent worker "$1" "task-init $2"
+  aw_require_kiro_agent worker "$1" "task-init $2" || return 1
+  [[ -n "$TRUST_ALL" ]] && aw_kiro_warn_trust_gate "$1" "the worker"
+  return 0
 }
 
 # aw_agent_launch_cmd <quoted-ref> <quoted-prompt>
 #
 # The prompt arrives already `printf %q`-quoted by the body (#144 round-5).
-# kiro takes it as a bare positional, with no /worker wrapper: the agent is
-# selected by --agent instead. MODEL is not quoted, as it never was.
+# kiro takes it as a bare positional — kiro-cli's documented first turn — with
+# no /worker wrapper: the agent is selected by --agent instead. MODEL is %q'd
+# here for the same `bash -ic` re-parse (#157). --tui keeps the classic UI's
+# startup dialog from holding the first turn hostage (#157, see kiro-launch.sh).
 aw_agent_launch_cmd() {
   local prompt="$2" cmd="kiro-cli chat --agent worker"
-  [[ -n "$MODEL" ]] && cmd+=" --model $MODEL"
+  [[ -n "$MODEL" ]] && cmd+=" --model $(printf %q "$MODEL")"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
+  cmd+="$(aw_kiro_ui_flag)"
   [[ -n "$prompt" ]] && cmd+=" \"$prompt\""
   echo "$cmd"
 }

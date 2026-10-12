@@ -730,6 +730,33 @@ teardown() {
   assert_failure
 }
 
+# A reviewer is trust-all by default, so it is the launch kiro-cli's startup
+# gates hit first: the trust-all confirmation and the classic UI's dialog both
+# hold the positional "Review PR …" turn in a tab nobody types in (#157).
+@test "kiro task-reviewer: pins --tui ahead of the prompt when kiro-cli accepts it (#157)" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_stub_called zellij "--trust-all-tools --tui \"Review PR https://github.com/owner/repo/pull/42"
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  STUB_KIRO_NO_TUI=1 run "$TASK_REVIEWER_KIRO" 43
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  run grep -F -- "--tui" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "kiro task-reviewer: warns about kiro's trust-all confirmation unless disabled (#157)" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_output --partial "the reviewer will stop at that confirmation"
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=true run "$TASK_REVIEWER_KIRO" 43
+  assert_success
+  refute_output --partial "trust-all confirmation"
+  run "$TASK_REVIEWER_KIRO" 44 --no-trust-all
+  assert_success
+  refute_output --partial "trust-all confirmation"
+}
+
 @test "kiro task-reviewer: --no-launch opens tab without kiro-cli" {
   run "$TASK_REVIEWER_KIRO" 42 --no-launch
   assert_success

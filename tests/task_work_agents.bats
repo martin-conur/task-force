@@ -391,6 +391,13 @@ _session_auto_submit() {
   [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
 }
 
+@test "kiro --no-launch -a neither warns nor reads the setting (#157)" {
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-launch -a no-launch-trust
+  assert_success
+  refute_output --partial "trust-all confirmation"
+  [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
+}
+
 @test "kiro -a / --trust-all passes --trust-all-tools to kiro-cli" {
   local flag
   for flag in -a --trust-all; do

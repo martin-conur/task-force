@@ -95,10 +95,12 @@ aw_agent_validate_flags() { :; }
 # pass only degrades to the previous behaviour. Takes the impl, not just the
 # agent, because the remedy it prints names the exact `task-init <impl>`.
 #
-# Also where the trust-all gate is flagged (#157): a warning, never a refusal.
+# Also where the trust-all gate is flagged (#157): a warning, never a refusal,
+# and only when kiro-cli is actually dispatched — under --no-launch you start
+# it in the tab yourself. NO_LAUNCH is the body's, like MODEL and TRUST_ALL.
 aw_agent_preflight() {
   aw_require_kiro_agent worker "$1" "task-init $2" || return 1
-  [[ -n "$TRUST_ALL" ]] && aw_kiro_warn_trust_gate "$1" "the worker"
+  [[ -n "$TRUST_ALL" && -z "${NO_LAUNCH:-}" ]] && aw_kiro_warn_trust_gate "$1" "the worker"
   return 0
 }
 

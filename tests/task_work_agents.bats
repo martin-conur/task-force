@@ -334,6 +334,70 @@ _session_auto_submit() {
   assert_stub_called zellij "kiro-cli chat --agent worker --model claude-sonnet-4.5"
 }
 
+# The model is a user value spliced into the `bash -ic` payload, so it is %q'd
+# like the ref (#157). Pinned by re-parsing the captured payload the way the
+# spawned shell does and reading back the argv kiro-cli would receive: a space
+# must not split the value and a `$` must not expand.
+@test "kiro --model survives the bash -ic re-parse as one literal argument (#157)" {
+  local model='claude opus $HOME' line payload argv_bin
+  line=$(_launch_line kiro-gh -m "$model")
+  payload="${line#*-- bash -ic }"
+  argv_bin=$(mktemp -d)
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/argv"\n' "$argv_bin" > "$argv_bin/kiro-cli"
+  chmod +x "$argv_bin/kiro-cli"
+  PATH="$argv_bin:$PATH" bash -c "$payload"
+  run grep -A1 -x -- "--model" "$argv_bin/argv"
+  rm -rf "$argv_bin"
+  assert_line --index 1 "$model"
+}
+
+# --tui is pinned so the classic UI's startup dialog cannot hold the positional
+# first turn (#157) — but only when this kiro-cli knows the flag, since an
+# unknown one would make kiro-cli refuse to start at all.
+@test "kiro pins --tui when kiro-cli accepts it, and omits it when not (#157)" {
+  local line
+  line=$(_launch_line kiro-gh)
+  [[ "$line" == *"kiro-cli chat --agent worker --tui"* ]] || { echo "$line" >&2; return 1; }
+  line=$(STUB_KIRO_NO_TUI=1 _launch_line kiro-gh)
+  [[ "$line" == *"kiro-cli chat --agent worker"* ]] || { echo "$line" >&2; return 1; }
+  [[ "$line" != *"--tui"* ]]                       || { echo "$line" >&2; return 1; }
+}
+
+# kiro-cli's trust-all confirmation holds the first turn of a dispatched tab
+# nobody types in (#157). Disabling it is the user's call, so task-work warns
+# and launches anyway — and only when --trust-all is actually on.
+@test "kiro --trust-all warns about kiro's trust-all confirmation unless it is disabled (#157)" {
+  run env AW_IMPL=kiro-gh "$TASK_WORK" -a gate-on
+  assert_success
+  assert_output --partial "kiro-cli's trust-all confirmation is not"
+  assert_output --partial "kiro-cli settings chat.disableTrustAllConfirmation true"
+  assert_stub_called zellij "--trust-all-tools"
+  # Read from the repo root, so a workspace-scoped setting counts.
+  run cat "$STUB_CALLS_DIR/kiro-cli.settings-cwd"
+  assert_output "cwd=$(cd "$MAIN_REPO" && pwd -P)"
+
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=true run env AW_IMPL=kiro-gh "$TASK_WORK" -a gate-off
+  assert_success
+  refute_output --partial "trust-all confirmation"
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=false run env AW_IMPL=kiro-gh "$TASK_WORK" -a gate-false
+  assert_success
+  assert_output --partial "kiro-cli's trust-all confirmation is not"
+}
+
+@test "kiro without --trust-all neither warns nor reads the setting (#157)" {
+  run env AW_IMPL=kiro-gh "$TASK_WORK" no-trust
+  assert_success
+  refute_output --partial "trust-all confirmation"
+  [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
+}
+
+@test "kiro --no-launch -a neither warns nor reads the setting (#157)" {
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-launch -a no-launch-trust
+  assert_success
+  refute_output --partial "trust-all confirmation"
+  [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
+}
+
 @test "kiro -a / --trust-all passes --trust-all-tools to kiro-cli" {
   local flag
   for flag in -a --trust-all; do
@@ -391,7 +455,7 @@ _session_auto_submit() {
   local url="https://github.com/owner/repo/issues/42"
   run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature "$url"
   assert_success
-  assert_stub_called zellij "kiro-cli chat --agent worker \"Implement task: $url\""
+  assert_stub_called zellij "kiro-cli chat --agent worker --tui \"Implement task: $url\""
   run grep -F "/worker" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }

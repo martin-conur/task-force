@@ -76,7 +76,7 @@ Use the task title as prefix: `<Task title>: <short description>`
 `task-work tasks/NNN-slug.md [options]` — create worktree + zellij tab + worker session
 
 - `-m, --model MODEL` — model to pass to `kiro-cli`
-- `-a, --trust-all` — pass `--trust-all-tools` to `kiro-cli`
+- `-a, --trust-all` — pass `--trust-all-tools` to `kiro-cli`. kiro-cli documents a trust-all confirmation at startup, and a prompt like that would hold the worker's first turn in a tab nobody types in. `task-work` warns when `chat.disableTrustAllConfirmation` is not set; if you dispatch with `-a`, set it once with `kiro-cli settings chat.disableTrustAllConfirmation true` (#157)
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
 - `--no-launch` — open the worktree tab but do NOT start `kiro-cli`

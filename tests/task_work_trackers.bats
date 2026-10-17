@@ -440,7 +440,7 @@ BOARD
   : > "$STUB_CALLS_DIR/zellij.calls"
   run env AW_IMPL=kiro-local "$TASK_WORK" "$file"
   assert_success
-  assert_stub_called zellij "kiro-cli chat --agent worker \"Implement task: $file\""
+  assert_stub_called zellij "kiro-cli chat --agent worker --tui \"Implement task: $file\""
 }
 
 @test "local: --plan passes the bare file path to /planner" {

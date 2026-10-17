@@ -50,7 +50,7 @@ Use the task name as prefix: `<Task name>: <description>`
 `task-work <slug> [notion-url] [options]` — create worktree + zellij tab + worker agent
 
 - `-m, --model MODEL` — pick a specific kiro model (e.g. `claude-opus-4.6`, `claude-sonnet-4.6`). Falls back to `$TASK_WORK_MODEL`, else kiro's default (`auto`).
-- `-a, --trust-all` — pass `--trust-all-tools` so the worker runs commands without per-tool confirmation. Defaults to `$TASK_WORK_TRUST_ALL=1` if set.
+- `-a, --trust-all` — pass `--trust-all-tools` so the worker runs commands without per-tool confirmation. Defaults to `$TASK_WORK_TRUST_ALL=1` if set. kiro-cli documents a trust-all confirmation at startup, and a prompt like that would hold the worker's first turn in a tab nobody types in. `task-work` warns when `chat.disableTrustAllConfirmation` is not set; if you dispatch with `-a`, set it once with `kiro-cli settings chat.disableTrustAllConfirmation true` (#157)
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
 - `--no-launch` — open the worktree's tab but do NOT start kiro (lets you type the command yourself).

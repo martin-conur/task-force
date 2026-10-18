@@ -60,7 +60,7 @@ Use the issue title as prefix: `<Issue title>: <short description>`
 
 `task-work <slug> [gh-url] [options]` — create worktree + zellij tab + worker agent
 
-- `-m, --model MODEL` — pick a specific kiro model; falls back to `$TASK_WORK_MODEL`, else `claude-opus-5.5`. Always passed as `--model`, which outranks your kiro `chat.defaultModel` setting (#259). `task-pm` launches the PM on the same default and honors `$TASK_WORK_MODEL` too
+- `-m, --model MODEL` — pick a specific kiro model; falls back to `$TASK_WORK_MODEL`, else `claude-opus-5.5`. Always passed as `--model`, which outranks your kiro `chat.defaultModel` setting (#259). `task-pm` launches the PM on the same default and honors `$TASK_WORK_MODEL` too. The kiro reviewer reads `$TASK_WORK_MODEL` too, ahead of its own `claude-sonnet-5.5` default, so a worker override exported in your shell also dispatches reviewers on that model (`claude-opus-5.5` costs 2.00x credits to Sonnet's 1.30x). Unset it, or pass `task-reviewer -m`, to keep reviewers on Sonnet
 - `-a, --trust-all` — pass `--trust-all-tools` so the worker runs without per-tool confirmation. kiro-cli documents a trust-all confirmation at startup, and a prompt like that would hold the worker's first turn in a tab nobody types in. `task-work` warns when `chat.disableTrustAllConfirmation` is not set; if you dispatch with `-a`, set it once with `kiro-cli settings chat.disableTrustAllConfirmation true` (#157)
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
@@ -352,7 +352,9 @@ hand — launch that one with `--no-auto-submit`.
 To dispatch a one-shot reviewer worker for a PR, run
 `task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab.
 It spawns a fresh zellij tab + worktree on the PR's head ref, runs the kiro
-`reviewer` agent on `claude-sonnet-5.5` (`-m` to override), cross-checks the PR against the spec issue (passed as the
+`reviewer` agent on `claude-sonnet-5.5` (`-m` to override; an exported
+`$TASK_WORK_MODEL` overrides it too, so a worker override also changes the
+reviewer's model and cost), cross-checks the PR against the spec issue (passed as the
 second arg, or auto-detected from the PR body's first `Closes #N` /
 `Fixes #N` / `Resolves #N` line, case-insensitive), reviews the diff, posts a single thorough PR comment via
 `gh pr comment --body-file -`, and radios PM back with `review-complete-clean` or

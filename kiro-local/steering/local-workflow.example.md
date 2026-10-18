@@ -75,7 +75,7 @@ Use the task title as prefix: `<Task title>: <short description>`
 
 `task-work tasks/NNN-slug.md [options]` — create worktree + zellij tab + worker session
 
-- `-m, --model MODEL` — model to pass to `kiro-cli`; falls back to `$TASK_WORK_MODEL`, else `claude-opus-5.5`. Always passed as `--model`, which outranks your kiro `chat.defaultModel` setting (#259). `task-pm` launches the PM on the same default and honors `$TASK_WORK_MODEL` too
+- `-m, --model MODEL` — model to pass to `kiro-cli`; falls back to `$TASK_WORK_MODEL`, else `claude-opus-5.5`. Always passed as `--model`, which outranks your kiro `chat.defaultModel` setting (#259). `task-pm` launches the PM on the same default and honors `$TASK_WORK_MODEL` too. The kiro reviewer reads `$TASK_WORK_MODEL` too, ahead of its own `claude-sonnet-5.5` default, so a worker override exported in your shell also dispatches reviewers on that model (`claude-opus-5.5` costs 2.00x credits to Sonnet's 1.30x). Unset it, or pass `task-reviewer -m`, to keep reviewers on Sonnet
 - `-a, --trust-all` — pass `--trust-all-tools` to `kiro-cli`. kiro-cli documents a trust-all confirmation at startup, and a prompt like that would hold the worker's first turn in a tab nobody types in. `task-work` warns when `chat.disableTrustAllConfirmation` is not set; if you dispatch with `-a`, set it once with `kiro-cli settings chat.disableTrustAllConfirmation true` (#157)
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)

@@ -25,8 +25,8 @@
 # The model every task-force kiro launch except the reviewer's passes as
 # --model (#259): task-work's worker, task-pm's PM, task-recreate-worker's
 # rebuilt worker. kiro-cli spells models with dots (claude-opus-5.5), Claude Code
-# with hyphens (claude-opus-5-5); this is the kiro spelling. The reviewer keeps
-# its own cheaper default in kiro-gh/bin/task-reviewer.
+# with hyphens (claude-opus-5-5); this is the kiro spelling. The reviewer runs on
+# the cheaper AW_KIRO_REVIEWER_MODEL below.
 #
 # On the launch line, not in the agent JSONs, and that placement decides who
 # wins. Measured on kiro-cli 2.32.0 from the model_id each session records: a
@@ -36,6 +36,12 @@
 # TASK_WORK_MODEL, or task-work's -m.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 AW_KIRO_DEFAULT_MODEL=claude-opus-5.5
+
+# kiro-gh/bin/task-reviewer's default --model (#259). Also overridden by
+# TASK_WORK_MODEL, which the reviewer has always read: a worker override set in
+# the shell turns reviewers into that model too.
+# shellcheck disable=SC2034  # read by kiro-gh/bin/task-reviewer
+AW_KIRO_REVIEWER_MODEL=claude-sonnet-5.5
 
 # aw_kiro_ui_flag
 #

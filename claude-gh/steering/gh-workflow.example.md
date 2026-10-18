@@ -422,7 +422,8 @@ To dispatch a one-shot reviewer worker for a PR, run
 (add `Bash(task-reviewer *)` to your project's `.claude/settings.json`
 `permissions.allow` so the PM dispatches hands-off without a permission
 prompt). It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
-`/reviewer` agent on Sonnet (cheaper than the PM's Opus default), cross-checks
+`/reviewer` agent on Sonnet 5.5 (`claude-sonnet-5-5`; pre-set `ANTHROPIC_MODEL`
+to override), cross-checks
 the PR against the spec issue (passed as the second arg, or auto-detected from
 the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line,
 case-insensitive), runs the `code-review` skill on the diff, posts **one**

@@ -49,7 +49,7 @@ Use the task name as prefix: `<Task name>: <description>`
 
 `task-work <slug> [notion-url] [options]` — create worktree + zellij tab + worker agent
 
-- `-m, --model MODEL` — pick a specific kiro model (e.g. `claude-opus-4.6`, `claude-sonnet-4.6`). Falls back to `$TASK_WORK_MODEL`, else kiro's default (`auto`).
+- `-m, --model MODEL` — pick a specific kiro model (e.g. `claude-sonnet-5.5`); falls back to `$TASK_WORK_MODEL`, else `claude-opus-5.5`. Always passed as `--model`, which outranks your kiro `chat.defaultModel` setting (#259). `task-pm` launches the PM on the same default and honors `$TASK_WORK_MODEL` too.
 - `-a, --trust-all` — pass `--trust-all-tools` so the worker runs commands without per-tool confirmation. Defaults to `$TASK_WORK_TRUST_ALL=1` if set. kiro-cli documents a trust-all confirmation at startup, and a prompt like that would hold the worker's first turn in a tab nobody types in. `task-work` warns when `chat.disableTrustAllConfirmation` is not set; if you dispatch with `-a`, set it once with `kiro-cli settings chat.disableTrustAllConfirmation true` (#157)
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
@@ -63,7 +63,7 @@ If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes
 Examples:
 ```bash
 task-work add-store-filtering https://www.notion.so/My-Task-abc123def456
-task-work refactor-auth -m claude-opus-4.6 --trust-all
+task-work refactor-auth -m claude-sonnet-5.5 --trust-all
 task-work feature-x --from task/in-flight --base main       # stack on an in-flight branch
 task-work spike-idea --no-launch
 ```

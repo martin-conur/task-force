@@ -26,6 +26,9 @@ source "$AW_ROOT/lib/detect-impl.sh"
 source "$AW_ROOT/lib/repo-name.sh"
 # shellcheck source=lib/kiro-agent.sh
 source "$AW_ROOT/lib/kiro-agent.sh"
+# AW_KIRO_DEFAULT_MODEL (#259).
+# shellcheck source=lib/kiro-launch.sh
+source "$AW_ROOT/lib/kiro-launch.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 
@@ -75,6 +78,11 @@ loadouts). Run from inside a task-force-initialized git repo.
 --no-auto-submit    The default: a wake types "radio check" into the prompt box
                     and waits for you to press Enter.
                     Also accepted as --no-auto.
+
+Environment:
+  TASK_WORK_MODEL   kiro only: the model the PM launches on. Unset means
+                    claude-opus-5.5, passed as --model so it wins over your
+                    kiro chat.defaultModel setting.
 EOF
       exit 0 ;;
     --also)
@@ -185,7 +193,9 @@ else
 fi
 case "$AGENT" in
   claude) exec claude "/pm" ;;
-  kiro)   exec kiro-cli chat --agent pm ;;
+  # The model rides the launch line because a --model flag is the only thing
+  # that outranks the user's chat.defaultModel (#259, lib/kiro-launch.sh).
+  kiro)   exec kiro-cli chat --agent pm --model "${TASK_WORK_MODEL:-$AW_KIRO_DEFAULT_MODEL}" ;;
   *)
     # Unreachable today (aw_detect_impl validates the impl list), but a new
     # agent family added there without a launch line here must fail loudly,

@@ -130,7 +130,8 @@ INFO_KEY=$(aw_tracker_info_key) || exit 1
 # it must never relaunch a worker with broader tool permissions than the
 # task-work run that created it. kiro's init reads TASK_WORK_MODEL and
 # TASK_WORK_TRUST_ALL from the environment, so they are scrubbed for this one
-# call — the recovered worker gets kiro-cli's defaults, as it always did.
+# call — the recovered worker gets task-force's defaults: no trust-all, and
+# AW_KIRO_DEFAULT_MODEL (#259) rather than whatever the shell happens to export.
 TASK_WORK_MODEL="" TASK_WORK_TRUST_ALL="" aw_agent_init_flags
 
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}

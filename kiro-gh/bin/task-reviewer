@@ -49,7 +49,7 @@ Positional arguments:
                           a diff-only review.
 
 Options:
-  -m, --model MODEL       Model to pass to kiro-cli (default: claude-sonnet-4.6).
+  -m, --model MODEL       Model to pass to kiro-cli (default: claude-sonnet-5.5).
       --no-trust-all      Opt out of --trust-all-tools. Default trusts tools
                           because the reviewer prompt's authority boundaries
                           rule out anything destructive (no merge, no push, no
@@ -74,7 +74,7 @@ EOF
 # opt-out for callers who want the interactive path.
 POSITIONAL=()
 NO_LAUNCH=""
-MODEL="${TASK_WORK_MODEL:-claude-sonnet-4.6}"
+MODEL="${TASK_WORK_MODEL:-claude-sonnet-5.5}"
 TRUST_ALL="1"
 
 # Honor TASK_WORK_TRUST_ALL=0 / false / no as an env-level opt-out.

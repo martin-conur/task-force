@@ -313,16 +313,16 @@ teardown() {
 # Env / model
 # ---------------------------------------------------------------------------
 
-@test "claude task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+@test "claude task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-5-5 (#259)" {
   AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
-  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-5-5 "
 }
 
 @test "claude task-reviewer: honors pre-set ANTHROPIC_MODEL" {
-  ANTHROPIC_MODEL=claude-opus-4-7 AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  ANTHROPIC_MODEL=claude-opus-5-5 AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
-  assert_stub_called zellij "ANTHROPIC_MODEL=claude-opus-4-7"
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-opus-5-5"
 }
 
 @test "claude task-reviewer: sets per-PR radio role reviewer-<repo>-pr<N>" {
@@ -441,10 +441,10 @@ teardown() {
   assert_output --partial "Usage:"
 }
 
-@test "claude-jira task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+@test "claude-jira task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-5-5 (#259)" {
   AW_IMPL=claude-jira run "$TASK_REVIEWER" 42
   assert_success
-  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-5-5 "
 }
 
 # #144: jira loadout must accept a Jira issue key as opaque 2nd-arg and pass
@@ -576,10 +576,10 @@ teardown() {
   assert_output --partial "Usage:"
 }
 
-@test "claude-notion task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+@test "claude-notion task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-5-5 (#259)" {
   AW_IMPL=claude-notion run "$TASK_REVIEWER" 42
   assert_success
-  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-5-5 "
 }
 
 # #144: notion loadout must accept a Notion page URL as opaque 2nd-arg.
@@ -622,10 +622,10 @@ teardown() {
   assert_output --partial "Usage:"
 }
 
-@test "claude-local task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-4-6" {
+@test "claude-local task-reviewer: defaults ANTHROPIC_MODEL to claude-sonnet-5-5 (#259)" {
   AW_IMPL=claude-local run "$TASK_REVIEWER" 42
   assert_success
-  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-4-6"
+  assert_stub_called zellij "ANTHROPIC_MODEL=claude-sonnet-5-5 "
 }
 
 # #144: local loadout must accept a local task slug as opaque 2nd-arg.
@@ -679,16 +679,18 @@ teardown() {
   assert_stub_called zellij "Review PR https://github.com/owner/repo/pull/42"
 }
 
-@test "kiro task-reviewer: defaults to sonnet model" {
+@test "kiro task-reviewer: defaults to Sonnet 5.5, in kiro's dotted spelling (#259)" {
   run "$TASK_REVIEWER_KIRO" 42
   assert_success
-  assert_stub_called zellij "--model claude-sonnet-4.6"
+  assert_stub_called zellij "kiro-cli chat --agent reviewer --model claude-sonnet-5.5 "
 }
 
 @test "kiro task-reviewer: --model overrides default" {
   run "$TASK_REVIEWER_KIRO" 42 --model claude-opus-4.6
   assert_success
   assert_stub_called zellij "--model claude-opus-4.6"
+  run grep -F -- "claude-sonnet-5.5" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
 }
 
 @test "kiro task-reviewer: --trust-all-tools is the default (idempotent with explicit --trust-all)" {

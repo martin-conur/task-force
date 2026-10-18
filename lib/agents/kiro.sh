@@ -31,9 +31,10 @@ aw_agent_name() { echo kiro; }
 
 aw_agent_usage_options() {
   cat <<'OPTS'
-  -m, --model MODEL   Model to pass to kiro-cli (e.g. claude-opus-4.6,
-                      claude-sonnet-4.5). Defaults to $TASK_WORK_MODEL if set,
-                      else kiro-cli's own default (auto).
+  -m, --model MODEL   Model to pass to kiro-cli (e.g. claude-sonnet-5.5).
+                      Defaults to $TASK_WORK_MODEL if set, else
+                      claude-opus-5.5. Always passed, so it wins over your
+                      chat.defaultModel setting.
   -a, --trust-all     Pass --trust-all-tools to kiro-cli so the worker can run
                       commands without per-tool confirmation. Defaults to
                       $TASK_WORK_TRUST_ALL=1 if set.
@@ -47,19 +48,20 @@ aw_agent_usage_env() {
   cat <<'ENV'
 
 Environment:
-  TASK_WORK_MODEL         Default model (overridable with --model)
+  TASK_WORK_MODEL         Default model (overridable with --model;
+                          unset means claude-opus-5.5)
   TASK_WORK_TRUST_ALL     If set to 1/true, defaults --trust-all on
 ENV
 }
 
 aw_agent_usage_examples() {
-  echo "  task-work refactor-auth -m claude-opus-4.6 --trust-all"
+  echo "  task-work refactor-auth -m claude-sonnet-5.5 --trust-all"
   echo "  task-work refactor-auth --trust-all --no-auto-submit   # you will type in its tab"
-  echo "  TASK_WORK_MODEL=claude-sonnet-4.6 task-work new-thing"
+  echo "  TASK_WORK_MODEL=claude-sonnet-5.5 task-work new-thing"
 }
 
 aw_agent_init_flags() {
-  MODEL="${TASK_WORK_MODEL:-}"
+  MODEL="${TASK_WORK_MODEL:-$AW_KIRO_DEFAULT_MODEL}"
   TRUST_ALL=""
   # Treat TASK_WORK_TRUST_ALL=1 / true / yes as enabled
   case "${TASK_WORK_TRUST_ALL:-}" in

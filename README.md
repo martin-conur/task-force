@@ -1121,6 +1121,8 @@ Radio auto-submit and focus, on every combo (#246, #254):
 
 `kiro-*` combos also accept `-m/--model MODEL`, `-a/--trust-all`, and `--auto`. On kiro, `--auto` is accepted and does nothing since #254 — the permission model is `-a/--trust-all` (#206), and the auto-submit and focus it once governed are now the defaults. Before #206 kiro had no `--auto` case at all, so the flag aborted the launch and a kiro worker could never be woken without a keypress.
 
+A kiro worker's first turn is the task reference, passed as `kiro-cli chat`'s positional `[INPUT]`. kiro-cli runs it as soon as it starts, unless a startup prompt gets there first, and in a dispatched tab nobody answers one, so the worker shows its welcome message and sits idle as if it had never been given a ref (#157). Two such prompts are within reach. The classic UI's deprecation dialog is avoided by pinning `--tui` on the launch line when the installed kiro-cli accepts it, which also overrides a `chat.ui = legacy` setting. kiro-cli also documents a trust-all confirmation at startup for `-a/--trust-all`. That one was not observed here, and it is not ours to skip, so `task-work` and the kiro `task-reviewer`, which is trust-all by default, warn on stderr unless `chat.disableTrustAllConfirmation` is true. Set it with `kiro-cli settings chat.disableTrustAllConfirmation true`, or answer the prompt in the worker's tab.
+
 ---
 
 ## Testing

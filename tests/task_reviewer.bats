@@ -730,6 +730,65 @@ teardown() {
   assert_failure
 }
 
+# A reviewer is trust-all by default, so it is the launch kiro-cli's startup
+# gates hit first: the trust-all confirmation and the classic UI's dialog both
+# hold the positional "Review PR …" turn in a tab nobody types in (#157).
+@test "kiro task-reviewer: pins --tui ahead of the prompt when kiro-cli accepts it (#157)" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_stub_called zellij "--trust-all-tools --tui \"Review PR https://github.com/owner/repo/pull/42"
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  STUB_KIRO_NO_TUI=1 run "$TASK_REVIEWER_KIRO" 43
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  run grep -F -- "--tui" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "kiro task-reviewer: warns about kiro's trust-all confirmation unless disabled (#157)" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  assert_output --partial "the reviewer will stop at that confirmation"
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=true run "$TASK_REVIEWER_KIRO" 43
+  assert_success
+  refute_output --partial "trust-all confirmation"
+  run "$TASK_REVIEWER_KIRO" 44 --no-trust-all
+  assert_success
+  refute_output --partial "trust-all confirmation"
+}
+
+# The model and the PR URL are spliced into the `bash -ic` payload, so both are
+# %q'd as task-work does (#157). Pinned by re-parsing the captured payload the
+# way the spawned shell does and reading back the argv kiro-cli would receive:
+# a space must not split the model and a `$` must not expand in either value.
+@test "kiro task-reviewer: --model and the PR URL survive the bash -ic re-parse (#157)" {
+  local model='claude opus $HOME' url='https://github.com/owner/repo/pull/42?x=$HOME&y=`id`"z\\'
+  local line payload argv_bin
+  GH_STUB_PR_URL="$url" run "$TASK_REVIEWER_KIRO" 42 -m "$model"
+  assert_success
+  line=$(grep -m1 -F "new-tab --name" "$STUB_CALLS_DIR/zellij.calls")
+  payload="${line#*-- bash -ic }"
+  argv_bin=$(mktemp -d)
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/argv"\n' "$argv_bin" > "$argv_bin/kiro-cli"
+  chmod +x "$argv_bin/kiro-cli"
+  PATH="$argv_bin:$PATH" bash -c "$payload"
+  run cat "$argv_bin/argv"
+  rm -rf "$argv_bin"
+  assert_line --index 3 -- "--model"
+  assert_line --index 4 "$model"
+  assert_line "Review PR $url"
+}
+
+# --no-launch starts no kiro-cli, so there is no first turn for the gate to
+# hold, and you are the one typing in that tab.
+@test "kiro task-reviewer: --no-launch does not warn about the trust-all gate (#157)" {
+  run "$TASK_REVIEWER_KIRO" 42 --no-launch
+  assert_success
+  assert_output --partial "kiro NOT launched"
+  refute_output --partial "trust-all confirmation"
+  [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
+}
+
 @test "kiro task-reviewer: --no-launch opens tab without kiro-cli" {
   run "$TASK_REVIEWER_KIRO" 42 --no-launch
   assert_success

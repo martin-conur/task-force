@@ -301,8 +301,10 @@ runbook_block() {
 
 @test "the missed-tab-id row greps a string lib/zellij-tab.sh actually logs (#242)" {
   # `tab-id:` is written by aw_record_tab_id, not bin/radio, so it sits outside
-  # DOCUMENTED_GREPS — pinned here against the file that emits it.
-  run grep -cF -- ' tab-id: ' "$REPO_ROOT_REAL/lib/zellij-tab.sh"
+  # DOCUMENTED_GREPS — pinned here against the file that emits it. Since #260 it
+  # goes through aw_radio_log, which supplies the timestamp and the space, so
+  # the literal is the opening of the message string.
+  run grep -cF -- "\"\$(printf 'tab-id: " "$REPO_ROOT_REAL/lib/zellij-tab.sh"
   assert_success
   refute_output "0"
   for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \

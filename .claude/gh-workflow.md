@@ -367,6 +367,18 @@ the role came back wakeable, warning explicitly when `TAB_ID` ended up empty.
 It also keeps the role's radio auto-submit setting: the shell you repair from
 has no `TASK_FORCE_AUTO_SUBMIT`, and an unset value means "as recorded" (#246).
 
+That is the repair for a **resumed** session, whose tab ids are still the live
+server's. After a zellij **restart** use `task-recreate-worker` instead: the
+restart renumbered every tab, and `task-work`'s `<worktree-base>/.<slug>.info`
+sidecar — the record `task-done` closes the tab by — still names the old id,
+which by then may belong to another worker's tab. `task-recreate-worker` is the
+command that strips and rewrites it (#218). Since #260 a hand `register` that
+resolves the tab live from zellij also rewrites a stale sidecar `TAB_ID`, and
+`task-done` closes a tab only when the tab at that id still bears its slug
+(`⏸️ <slug>` / `▶️ <slug>` included) — on a mismatch it leaves the tab open and
+logs `tab-close: id N is now <name>, not <slug>`, rather than closing an
+unrelated worker's tab as it did before.
+
 Full command form:
 
 ```bash
@@ -521,6 +533,7 @@ mailbox.
 | A role idles on a message sitting in its own inbox | Fixed in #197. `BLOCKED_IDS=` in the session file records which ids the last stop-hook block was about, so a message arriving mid-drain earns its own continuation. In the log, `arrived during the drain turn` is a correct re-block; `no new message since the block` is the loop-breaker firing because the same ids were ignored twice. |
 | `radio check` says nothing while mail is in the inbox, or a report lands `from: unknown` | The session has no `$TASK_FORCE_ROLE`: it never registered, which is what every resumed session looks like (the env was a command prefix on the original process, not an export). Fixed in #229 — `check` / `read` / `ack` / `send` now recover the role from disk or refuse loudly, and `radio register --role … --tab …` works without the env var. `grep 'recover-role:' ~/.task-force/radio/log` shows what was recovered or refused, and `grep 'register: no-op' ~/.task-force/radio/log` a hook that fired with an empty environment. |
 | `task-done` says `no tab id captured` and leaves the tab open | The tab's id was never recorded at launch. Before #242 that capture failed silently; now `task-work` (and `task-reviewer` / `task-recreate-worker`) says so on stderr the moment it happens and logs why — `no-zellij-bin`, `not-in-zellij`, `no-jq`, `list-tabs-empty`, `race`, or `no-match` together with the tab names zellij reported. `task-done`'s skip line now also says which source was empty. `grep 'tab-id:' ~/.task-force/radio/log` — one line per missed capture, with the slug and the reason. A sidecar written before the capture existed (#117) has no `TAB_ID=` at all. Close the tab by hand; an unscoped `close-tab` closes whichever tab is focused (#107). |
+| `task-done` says `Not closing zellij tab id=N: it is now '<name>'` and leaves the tab open | The sidecar's `TAB_ID` is stale: zellij restarted since it was captured, and the id now belongs to another tab. Before #260 `task-done` closed it anyway, killing whichever worker held it. A resume in place keeps the old id; `task-recreate-worker` rewrites it. `grep 'tab-close:' ~/.task-force/radio/log` names the tab that holds the id now. Close your own tab by hand; after a restart, recover workers with `task-recreate-worker` (or re-run `radio register --tab …` from the tab, which since #260 also rewrites a stale sidecar id). |
 
 The log is the only place several of these states are distinguishable at all.
 It is shared by every repo and role on the machine, so read timestamps rather

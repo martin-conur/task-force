@@ -28,6 +28,8 @@ AW_ROOT=$(dirname "$BIN_DIR")
 
 # shellcheck source=lib/detect-impl.sh
 source "$AW_ROOT/lib/detect-impl.sh"
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT/lib/zellij-tab.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 # task-done runs from a worktree where the workflow doc lives in the MAIN
@@ -169,9 +171,10 @@ fi
 # (e.g., PM's) gets closed and an active session can be destroyed (#107).
 #
 # Preferred source: $INFO_FILE, which task-work writes at tab creation and
-# nobody else touches. Independent of the radio session file's mid-life
-# state, so an in-session SessionStart re-register that clobbered the
-# session file's TAB_ID= (#117) can't break cleanup. Fall back to the
+# which radio touches only to replace a stale TAB_ID with a live zellij hit
+# when a register resolves one (#260). Independent of the radio session
+# file's mid-life state, so an in-session SessionStart re-register that
+# clobbered the session file's TAB_ID= (#117) can't break cleanup. Fall back to the
 # radio session file for workers whose task-work pre-dates the $INFO_FILE
 # TAB_ID write.
 _WORKER_TAB_ID=""
@@ -279,9 +282,34 @@ fi
 # (zellij not running, no role, no session file, or empty TAB_ID=), skip —
 # falling back to the unscoped `close-tab` would re-open the bug fixed
 # above (#107). The user can close the tab manually in that case.
+#
+# And confirm the id is still ours before acting on it (#260). A tab id is
+# only valid within one zellij server's lifetime: after a restart every TAB_ID
+# in every sidecar is stale, and `close-tab-by-id` on a stale id closes
+# whichever tab holds that id now — on 2026-10-18 that was a freshly launched
+# worker's. task-recreate-worker strips the stale id (#218), but a worker
+# resumed in place keeps it. So close only when the tab at that id still bears
+# this slug, and refuse otherwise: a tab left open costs a keystroke, closing
+# the wrong one kills a session.
 if [[ -n "$_WORKER_TAB_ID" ]]; then
-  echo "Closing zellij tab (id=$_WORKER_TAB_ID)..."
-  zellij action close-tab-by-id "$_WORKER_TAB_ID" >/dev/null 2>&1 || true
+  _TAB_NAME_RC=0
+  _TAB_NAME_AT_ID=$(aw_zellij_tab_name_by_id "$_WORKER_TAB_ID") || _TAB_NAME_RC=$?
+  if [[ "$_TAB_NAME_RC" -ne 0 ]]; then
+    echo "Skipping zellij close-tab: could not list zellij tabs to confirm tab id=$_WORKER_TAB_ID is '$SLUG'."
+    echo "  Close this tab manually."
+    aw_radio_log "tab-close: id $_WORKER_TAB_ID unverified (list-tabs unreadable), not closed slug=$SLUG"
+  elif [[ -z "$_TAB_NAME_AT_ID" ]]; then
+    echo "Skipping zellij close-tab: no tab has id=$_WORKER_TAB_ID any more (zellij restarted?)."
+    echo "  Close this tab manually."
+    aw_radio_log "tab-close: id $_WORKER_TAB_ID is gone, not $SLUG — not closed"
+  elif aw_tab_name_is_slug "$_TAB_NAME_AT_ID" "$SLUG"; then
+    echo "Closing zellij tab (id=$_WORKER_TAB_ID)..."
+    zellij action close-tab-by-id "$_WORKER_TAB_ID" >/dev/null 2>&1 || true
+  else
+    echo "⚠ Not closing zellij tab id=$_WORKER_TAB_ID: it is now '$_TAB_NAME_AT_ID', not '$SLUG'."
+    echo "  The recorded id is stale — zellij restarted since it was captured. Close this tab manually."
+    aw_radio_log "tab-close: id $_WORKER_TAB_ID is now $_TAB_NAME_AT_ID, not $SLUG"
+  fi
 else
   echo "Skipping zellij close-tab (no tab id captured; close this tab manually if needed)."
   echo "  ($_TAB_ID_MISS)"

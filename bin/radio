@@ -257,8 +257,8 @@ _accept_recovered_role() {
 # $_RECOVERED_ROLE_SRC and returns 0 on success.
 #
 # Worker / reviewer arm: task-work and task-reviewer write
-# `<worktree-base>/.<slug>.info` at tab creation and radio never touches it
-# (#188), so its SLUG plus the main repo name reconstruct the role name the same
+# `<worktree-base>/.<slug>.info` at tab creation and radio never touches its
+# SLUG (#188; register rewrites only a stale TAB_ID, #260), so its SLUG plus the main repo name reconstruct the role name the same
 # way those two binaries built it — `worker-<reponame>-<slug>`, or
 # `reviewer-<reponame>-pr<N>` for a reviewer, whose tab slug is `review-pr<N>`
 # while its role says `pr<N>`. $ZELLIJ_TAB is the primary slug key (it IS the
@@ -796,8 +796,9 @@ _aliases_sidecar() {
 # TAB_ID as recorded by task-work / task-reviewer in *their* info file (#188).
 # Both binaries write `TAB_ID=<n>` into `<worktree-base>/.<slug>.info` right
 # after spawning the tab (`region:info-tab-id`) precisely because radio's own
-# copy gets clobbered mid-life (#117) — and radio never writes that file, so it
-# stays authoritative across any number of session-file wipes. The worktree
+# copy gets clobbered mid-life (#117) — and radio writes that file only to
+# replace its TAB_ID with a live zellij hit (#260), so it stays authoritative
+# across any number of session-file wipes. The worktree
 # lives at `<worktree-base>/<slug>`, so from inside it the file is
 # `dirname(<toplevel>)/.<slug>.info`, with `<slug>` == $ZELLIJ_TAB: both
 # binaries derive the tab name and the info filename from the same SLUG. (Not
@@ -815,6 +816,35 @@ _info_file_tab_id() {
   id=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$f" 2>/dev/null || true)
   case "$id" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$id"
+}
+
+# Keep task-work's sidecar TAB_ID in step with a tab id register just resolved
+# live from zellij (#260). The sidecar is what task-done closes by, and radio
+# otherwise never writes it (#188) — so after a zellij restart the documented
+# hand repair, `radio register --tab …`, fixed radio's copy and left the sidecar
+# naming whatever tab inherited the old id. On 2026-10-18 task-done then closed
+# a freshly launched worker's tab with it.
+#
+# Narrow on purpose. Only a fresh zellij hit is written (never a preserved or
+# info-file id — those are the stale values this exists to replace); only a
+# sidecar whose SLUG= is this tab's bare name; and only an EXISTING TAB_ID= line
+# is replaced, never added. A sidecar with no TAB_ID belongs to a launcher that
+# is about to write one — task-work's capture, or task-recreate-worker between
+# its strip and its rebind (#218) — and an append here would race theirs.
+_sync_info_file_tab_id() {
+  local repo="$1" tab="$2" id="$3" role="$4" bare f recorded old
+  [[ -n "$repo" && -n "$id" ]] || return 0
+  bare=$(_strip_tab_prefix "$tab")
+  [[ -n "$bare" ]] || return 0
+  f="$(dirname "$repo")/.${bare}.info"
+  [[ -f "$f" ]] || return 0
+  recorded=$(awk -F= '/^SLUG=/ { print $2; exit }' "$f" 2>/dev/null || true)
+  [[ "$recorded" == "$bare" ]] || return 0
+  grep -q '^TAB_ID=' "$f" 2>/dev/null || return 0
+  old=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$f" 2>/dev/null || true)
+  [[ "$old" == "$id" ]] && return 0
+  _session_set_fields "$f" "TAB_ID=$id"
+  _log "register: rewrote \$INFO_FILE TAB_ID=$old -> $id for $role ($f) — the sidecar task-done closes by now matches zellij"
 }
 
 _inbox_dir()    { printf '%s/%s/inbox'     "$MAILBOX_DIR" "$1"; }
@@ -858,7 +888,8 @@ _ensure_session_file() {
   # zellij-registered?)" and queues with NO wake attempt for the rest of that
   # role's life, until a genuine `register` happens. 24 of 92 re-seeds in the
   # production log took that shape. $INFO_FILE is the authoritative fallback:
-  # task-work recorded the id there at tab creation and radio never writes it.
+  # task-work recorded the id there at tab creation, and radio writes it only
+  # with a live zellij hit (#260).
   # Invariant: a re-seed must never produce an empty TAB_ID while a valid
   # binding exists on disk.
   local tab_id="" tab_id_src=none
@@ -1280,6 +1311,11 @@ cmd_register() {
   if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
     tab_id=$(_zellij_tab_id_by_name "$tab" || true)
     [[ -z "$tab_id" ]] || tab_id_src=zellij
+  fi
+  # A live hit is the current server's truth: bring task-work's sidecar with it,
+  # so a hand repair after a zellij restart repairs both records (#260).
+  if [[ "$tab_id_src" == zellij ]]; then
+    _sync_info_file_tab_id "$repo" "$tab" "$tab_id" "$role"
   fi
 
   # Worktree-proof repo name (#165 RC-2): derive the MAIN repo name from --repo

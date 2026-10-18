@@ -357,7 +357,7 @@ _session_auto_submit() {
 @test "kiro pins --tui when kiro-cli accepts it, and omits it when not (#157)" {
   local line
   line=$(_launch_line kiro-gh)
-  [[ "$line" == *"kiro-cli chat --agent worker --tui"* ]] || { echo "$line" >&2; return 1; }
+  [[ "$line" == *"kiro-cli chat --agent worker --model claude-opus-5.5 --tui"* ]] || { echo "$line" >&2; return 1; }
   line=$(STUB_KIRO_NO_TUI=1 _launch_line kiro-gh)
   [[ "$line" == *"kiro-cli chat --agent worker"* ]] || { echo "$line" >&2; return 1; }
   [[ "$line" != *"--tui"* ]]                       || { echo "$line" >&2; return 1; }
@@ -404,14 +404,26 @@ _session_auto_submit() {
     : > "$STUB_CALLS_DIR/zellij.calls"
     run env AW_IMPL=kiro-gh "$TASK_WORK" "$flag" "trust$flag"
     assert_success
-    assert_stub_called zellij "kiro-cli chat --agent worker --trust-all-tools"
+    assert_stub_called zellij "kiro-cli chat --agent worker --model claude-opus-5.5 --trust-all-tools"
   done
+}
+
+# Without a model on the launch line kiro-cli runs on the user's
+# chat.defaultModel, which outranks nothing task-force ships but the agent JSON
+# (#259, lib/kiro-launch.sh). So the default is a launch-line --model.
+@test "kiro defaults the worker to claude-opus-5.5 on the launch line (#259)" {
+  run env -u TASK_WORK_MODEL AW_IMPL=kiro-gh "$TASK_WORK" my-feature
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent worker --model claude-opus-5.5 "
+  assert_output --partial "Started worker [model=claude-opus-5.5] in "
 }
 
 @test "kiro TASK_WORK_MODEL sets the default model" {
   TASK_WORK_MODEL=claude-sonnet-4.6 run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature
   assert_success
   assert_stub_called zellij "--model claude-sonnet-4.6"
+  run grep -F -- "claude-opus-5.5" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
 }
 
 @test "kiro TASK_WORK_TRUST_ALL=1/true/yes enables --trust-all-tools; other values do not" {
@@ -455,7 +467,7 @@ _session_auto_submit() {
   local url="https://github.com/owner/repo/issues/42"
   run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature "$url"
   assert_success
-  assert_stub_called zellij "kiro-cli chat --agent worker --tui \"Implement task: $url\""
+  assert_stub_called zellij "kiro-cli chat --agent worker --model claude-opus-5.5 --tui \"Implement task: $url\""
   run grep -F "/worker" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }

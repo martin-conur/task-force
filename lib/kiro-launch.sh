@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # kiro-cli startup gates that hold a dispatched agent's first turn (#157).
-# Sourced by lib/agents/kiro.sh and kiro-gh/bin/task-reviewer.
+# Sourced by lib/agents/kiro.sh, bin/task-pm and kiro-gh/bin/task-reviewer.
 #
 # A dispatched kiro agent gets its first turn as the positional [INPUT] of
 # `kiro-cli chat` — "The first question to ask" in kiro-cli's own help, and
@@ -21,6 +21,27 @@
 # aw_require_kiro_agent): the flag set and the settings scope rules are
 # kiro-cli's to define. Neither can abort a launch — a slow or broken CLI
 # degrades to the old launch line, or to no warning.
+
+# The model every task-force kiro launch except the reviewer's passes as
+# --model (#259): task-work's worker, task-pm's PM, task-recreate-worker's
+# rebuilt worker. kiro-cli spells models with dots (claude-opus-5.5), Claude Code
+# with hyphens (claude-opus-5-5); this is the kiro spelling. The reviewer runs on
+# the cheaper AW_KIRO_REVIEWER_MODEL below.
+#
+# On the launch line, not in the agent JSONs, and that placement decides who
+# wins. Measured on kiro-cli 2.32.0 from the model_id each session records: a
+# `--model` flag beats the agent config's `model` field, which beats the user's
+# `chat.defaultModel` setting. So with no --model here, a launch ran on whatever
+# chat.defaultModel said; with it, the flag wins over both. The override is
+# TASK_WORK_MODEL, or task-work's -m.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+AW_KIRO_DEFAULT_MODEL=claude-opus-5.5
+
+# kiro-gh/bin/task-reviewer's default --model (#259). Also overridden by
+# TASK_WORK_MODEL, which the reviewer has always read: a worker override set in
+# the shell turns reviewers into that model too.
+# shellcheck disable=SC2034  # read by kiro-gh/bin/task-reviewer
+AW_KIRO_REVIEWER_MODEL=claude-sonnet-5.5
 
 # aw_kiro_ui_flag
 #

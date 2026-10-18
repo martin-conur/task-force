@@ -83,6 +83,33 @@ teardown() {
   assert_output --partial "chat --agent pm"
 }
 
+# A --model flag is the only thing that outranks the user's chat.defaultModel
+# (#259, lib/kiro-launch.sh), so the PM's default rides the exec line. Every kiro
+# loadout shares that line today; each is pinned so a fork of it cannot regress
+# one silently.
+@test "kiro task-pm launches the PM on claude-opus-5.5, TASK_WORK_MODEL overriding (#259)" {
+  local impl
+  for impl in kiro-gh kiro-local kiro-notion; do
+    : > "$STUB_CALLS_DIR/kiro-cli.calls"
+    env -u TASK_WORK_MODEL AW_IMPL="$impl" "$TASK_PM"
+    run grep -F "kiro-cli chat --agent pm" "$STUB_CALLS_DIR/kiro-cli.calls"
+    assert_output "kiro-cli chat --agent pm --model claude-opus-5.5 --tui"
+    : > "$STUB_CALLS_DIR/kiro-cli.calls"
+    TASK_WORK_MODEL=claude-sonnet-5.5 AW_IMPL="$impl" "$TASK_PM"
+    run grep -F "kiro-cli chat --agent pm" "$STUB_CALLS_DIR/kiro-cli.calls"
+    assert_output "kiro-cli chat --agent pm --model claude-sonnet-5.5 --tui"
+  done
+}
+
+# --tui is pinned on the PM as on every other kiro launch (#157), and dropped
+# when the installed kiro-cli does not know it, since an unknown flag would
+# stop kiro-cli from starting at all.
+@test "kiro task-pm pins --tui only when kiro-cli accepts it (#157, #259)" {
+  STUB_KIRO_NO_TUI=1 AW_IMPL=kiro-gh "$TASK_PM"
+  run grep -F "kiro-cli chat --agent pm" "$STUB_CALLS_DIR/kiro-cli.calls"
+  assert_output "kiro-cli chat --agent pm --model claude-opus-5.5"
+}
+
 @test "kiro task-pm errors out cleanly outside a git repo" {
   local outside
   outside=$(mktemp -d)

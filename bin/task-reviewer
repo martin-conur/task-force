@@ -85,9 +85,9 @@ Options:
   -h, --help              Show this help.
 
 Environment:
-  ANTHROPIC_MODEL         Defaults to claude-sonnet-4-6 (cheap orchestrator).
-                          Pre-set to override (e.g. claude-opus-4-7 for a
-                          one-off premium pass).
+  ANTHROPIC_MODEL         Defaults to claude-sonnet-5-5 (cheaper than the
+                          PM's Opus). Pre-set to override (e.g. claude-opus-5-5
+                          for a one-off premium pass).
 
 Examples:
   task-reviewer 42
@@ -326,7 +326,7 @@ build_claude_cmd() {
 # Sonnet by default for the orchestrator (preserves #134 cost win); a
 # pre-set ANTHROPIC_MODEL wins so the caller can pin Opus for a one-off.
 TASK_FORCE_ROLE_VALUE="reviewer-${REPO_RADIO_NAME}-pr${PR_NUMBER}"
-RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
+RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5-5}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
 RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "

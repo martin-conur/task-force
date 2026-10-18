@@ -238,7 +238,7 @@ dead_worker_keyed() {
   AW_IMPL=kiro-notion run "$TASK_RECREATE_WORKER" add-store
   assert_success
   run launch_cmd_for add-store
-  assert_output --partial "kiro-cli chat --agent worker --tui \"Implement task: https://www.notion.so/abc123def456abc123def456abc123de\""
+  assert_output --partial "kiro-cli chat --agent worker --model claude-opus-5.5 --tui \"Implement task: https://www.notion.so/abc123def456abc123def456abc123de\""
 }
 
 @test "kiro-local: the TASK_FILE reaches kiro-cli's worker prompt too (#240)" {
@@ -246,7 +246,7 @@ dead_worker_keyed() {
   AW_IMPL=kiro-local run "$TASK_RECREATE_WORKER" add-auth
   assert_success
   run launch_cmd_for add-auth
-  assert_output --partial "kiro-cli chat --agent worker --tui \"Implement task: tasks/007-add-auth.md\""
+  assert_output --partial "kiro-cli chat --agent worker --model claude-opus-5.5 --tui \"Implement task: tasks/007-add-auth.md\""
 }
 
 @test "a sidecar with no ref under the tracker's key says so and passes no task (#240)" {
@@ -690,16 +690,17 @@ dead_worker_symlinked_base() {
 # task-recreate-worker composes lib/agents/kiro.sh, whose flag init reads
 # task-work's TASK_WORK_MODEL / TASK_WORK_TRUST_ALL. A recovery must not pick
 # those up: it would relaunch the worker with tool permissions the task-work run
-# that created it may never have had (#239).
-@test "kiro: task-work's model / trust-all env does not reach the recovered worker (#239)" {
+# that created it may never have had (#239). The model it gets instead is
+# task-force's own kiro default (#259), not kiro-cli's.
+@test "kiro: task-work's model / trust-all env does not reach the recovered worker (#239, #259)" {
   dead_worker issue-42
   TASK_WORK_MODEL=claude-opus-4.6 TASK_WORK_TRUST_ALL=1 \
     AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_success
   run launch_cmd_for issue-42
-  assert_output --partial "kiro-cli chat --agent worker --tui \"Implement task: https://github.com/owner/repo/issues/42\""
+  assert_output --partial "kiro-cli chat --agent worker --model claude-opus-5.5 --tui \"Implement task: https://github.com/owner/repo/issues/42\""
   refute_output --partial "--trust-all-tools"
-  refute_output --partial "--model"
+  refute_output --partial "claude-opus-4.6"
 }
 
 @test "claude: --auto --resume keeps the auto permission mode on the resume line (#239)" {

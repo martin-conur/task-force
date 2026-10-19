@@ -443,18 +443,21 @@ hand — launch that one with `--no-auto-submit`.
 ### Reviewer role (single-shot, self-cleaning)
 
 To dispatch a one-shot reviewer worker for a PR, run
-`task-reviewer <pr-url-or-number> [<issue-url-or-number>]` from any spare tab
-(add `Bash(task-reviewer *)` to your project's `.claude/settings.json`
+`task-reviewer <pr-url-or-number> [<spec-identifier>]` from any spare tab (add
+`Bash(task-reviewer *)` to your project's `.claude/settings.json`
 `permissions.allow` so the PM dispatches hands-off without a permission
 prompt). It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
 `/reviewer` agent on Sonnet 5.5 (`claude-sonnet-5-5`; pre-set `ANTHROPIC_MODEL`
-to override), cross-checks
-the PR against the spec issue (passed as the second arg, or auto-detected from
-the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line,
-case-insensitive), runs the `code-review` skill on the diff, posts **one**
-thorough PR comment via `gh pr comment --body-file -` carrying its full
-analysis + verdict, and radios PM back with `review-complete-clean` or
-`review-complete-with-findings`. Then it **auto-destructs**:
+to override), cross-checks the PR against the spec issue, runs the
+`code-review` skill on the diff, posts **one** thorough PR comment via
+`gh pr comment --body-file -` carrying its full analysis + verdict, and radios
+PM back with `review-complete-clean` or `review-complete-with-findings`. On
+this loadout the spec is an issue number or URL, passed as the second arg or
+auto-detected from the PR body's first `Closes #N` / `Fixes #N` /
+`Resolves #N` line, case-insensitive. That auto-detect is **GitHub-only**: the
+non-gh loadouts take their tracker's own identifier as the second arg — a Jira
+key, a Notion page URL, a local task slug — and without one the review is
+diff-only. Then it **auto-destructs**:
 `task-done --remove-worktree` removes its worktree and closes its tab. It does
 NOT idle waiting to be closed, and there is no manual cleanup left for anyone.
 The analysis lives in the PR comment, not the tab — re-read a review any time

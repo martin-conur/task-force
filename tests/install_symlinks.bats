@@ -107,7 +107,7 @@ resolve_link() {
           || { echo "$impl: task-reviewer resolves to $(resolve_link task-reviewer)"; return 1; }
         ;;
       *)
-        # kiro-local / kiro-notion ship no reviewer until #146.
+        # kiro-local / kiro-notion ship no reviewer agent yet.
         [ ! -e "$HOME/.local/bin/task-reviewer" ] || { echo "$impl: unexpected task-reviewer"; return 1; }
         ;;
     esac

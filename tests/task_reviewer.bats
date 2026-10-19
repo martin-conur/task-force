@@ -7,8 +7,8 @@
 # optional spec issue) as args. Tests mirror tests/task_work.bats's
 # patterns: arg parsing, worktree creation, tab spawn, mode flags, errors.
 #
-# The claude flow lives in the canonical root bin/task-reviewer (#170); tests
-# pin the loadout via AW_IMPL. kiro-gh keeps its own file until #146.
+# Every loadout's flow lives in the canonical root bin/task-reviewer — claude
+# since #170, kiro-gh since #146; tests pin the loadout via AW_IMPL.
 #
 # `gh pr view` is stubbed via $GH_STUB_PR_URL (+ optional PR_BODY/HEAD/BASE
 # overrides). With $GH_STUB_PR_URL unset, the stub exits 1 — modeling
@@ -672,7 +672,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "kiro task-reviewer: PR by number opens review tab + kiro chat" {
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "new-tab --name review-pr42"
   assert_stub_called zellij "kiro-cli chat --agent reviewer"
@@ -680,13 +680,13 @@ teardown() {
 }
 
 @test "kiro task-reviewer: defaults to Sonnet 5.5, in kiro's dotted spelling (#259)" {
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent reviewer --model claude-sonnet-5.5 "
 }
 
 @test "kiro task-reviewer: --model overrides default" {
-  run "$TASK_REVIEWER_KIRO" 42 --model claude-opus-4.6
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --model claude-opus-4.6
   assert_success
   assert_stub_called zellij "--model claude-opus-4.6"
   run grep -F -- "claude-sonnet-5.5" "$STUB_CALLS_DIR/zellij.calls"
@@ -696,37 +696,51 @@ teardown() {
 @test "kiro task-reviewer: --trust-all-tools is the default (idempotent with explicit --trust-all)" {
   # Like claude's --auto-by-default (#139), kiro defaults to trust-all-tools.
   # Reviewer's authority boundaries rule out anything destructive.
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "--trust-all-tools"
 }
 
 @test "kiro task-reviewer: explicit --trust-all stays trust-all" {
-  run "$TASK_REVIEWER_KIRO" 42 --trust-all
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --trust-all
   assert_success
   assert_stub_called zellij "--trust-all-tools"
 }
 
-@test "kiro task-reviewer: --trust-all default propagates TASK_FORCE_AUTO_SUBMIT=1 to radio env (#139 round-4)" {
-  # Parity with the claude variants: when the dispatcher runs with
-  # trust-all (the default), the radio session inherits AUTO_SUBMIT=1 so
-  # that PM pings into the reviewer's pane auto-submit instead of sitting
-  # in the input buffer waiting for a manual Enter.
-  run "$TASK_REVIEWER_KIRO" 42
+@test "kiro task-reviewer: auto-submit is on by default (TASK_FORCE_AUTO_SUBMIT=1)" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
 }
 
-@test "kiro task-reviewer: --no-trust-all injects TASK_FORCE_AUTO_SUBMIT=0 (#139 round-4, #246)" {
-  run "$TASK_REVIEWER_KIRO" 42 --no-trust-all
+# kiro-gh's own copy coupled auto-submit to trust-all, so the supervised review
+# was the one whose PM pings stalled on an Enter (#146, the #246 shape).
+@test "kiro task-reviewer: --no-trust-all keeps auto-submit on (#146)" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-trust-all
+  assert_success
+  assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1"
+  run grep -F "TASK_FORCE_AUTO_SUBMIT=0" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "kiro task-reviewer: --no-auto-submit injects TASK_FORCE_AUTO_SUBMIT=0 and keeps trust-all (#146)" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-auto-submit
   assert_success
   assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0"
+  assert_stub_called zellij "--trust-all-tools"
   run grep -F "TASK_FORCE_AUTO_SUBMIT=1" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
+@test "kiro task-reviewer: TASK_WORK_TRUST_ALL=0 opts out of trust-all" {
+  TASK_WORK_TRUST_ALL=0 AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  run grep -F "trust-all-tools" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
 @test "kiro task-reviewer: --no-trust-all drops back to interactive trust" {
-  run "$TASK_REVIEWER_KIRO" 42 --no-trust-all
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-trust-all
   assert_success
   run grep -F "trust-all-tools" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
@@ -736,11 +750,11 @@ teardown() {
 # gates hit first: the trust-all confirmation and the classic UI's dialog both
 # hold the positional "Review PR …" turn in a tab nobody types in (#157).
 @test "kiro task-reviewer: pins --tui ahead of the prompt when kiro-cli accepts it (#157)" {
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_stub_called zellij "--trust-all-tools --tui \"Review PR https://github.com/owner/repo/pull/42"
   : > "$STUB_CALLS_DIR/zellij.calls"
-  STUB_KIRO_NO_TUI=1 run "$TASK_REVIEWER_KIRO" 43
+  STUB_KIRO_NO_TUI=1 AW_IMPL=kiro-gh run "$TASK_REVIEWER" 43
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent reviewer"
   run grep -F -- "--tui" "$STUB_CALLS_DIR/zellij.calls"
@@ -748,26 +762,26 @@ teardown() {
 }
 
 @test "kiro task-reviewer: warns about kiro's trust-all confirmation unless disabled (#157)" {
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "the reviewer will stop at that confirmation"
-  STUB_KIRO_TRUST_CONFIRM_DISABLED=true run "$TASK_REVIEWER_KIRO" 43
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=true AW_IMPL=kiro-gh run "$TASK_REVIEWER" 43
   assert_success
   refute_output --partial "trust-all confirmation"
-  run "$TASK_REVIEWER_KIRO" 44 --no-trust-all
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 44 --no-trust-all
   assert_success
   refute_output --partial "trust-all confirmation"
 }
 
 # The V3 upgrade dialog holds the "Review PR …" turn too (#257), trust-all or not.
 @test "kiro task-reviewer: warns about the V3 upgrade dialog on V3 with the setting unset (#257)" {
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   refute_output --partial "chat.enableAutoAgentUpgrade"
-  STUB_KIRO_ENGINE=v3 run "$TASK_REVIEWER_KIRO" 43 --no-trust-all
+  STUB_KIRO_ENGINE=v3 AW_IMPL=kiro-gh run "$TASK_REVIEWER" 43 --no-trust-all
   assert_success
   assert_output --partial "the reviewer on its V3 engine and chat.enableAutoAgentUpgrade is"
-  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=false run "$TASK_REVIEWER_KIRO" 44
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=false AW_IMPL=kiro-gh run "$TASK_REVIEWER" 44
   assert_success
   refute_output --partial "chat.enableAutoAgentUpgrade"
 }
@@ -779,7 +793,7 @@ teardown() {
 @test "kiro task-reviewer: --model and the PR URL survive the bash -ic re-parse (#157)" {
   local model='claude opus $HOME' url='https://github.com/owner/repo/pull/42?x=$HOME&y=`id`"z\\'
   local line payload argv_bin
-  GH_STUB_PR_URL="$url" run "$TASK_REVIEWER_KIRO" 42 -m "$model"
+  GH_STUB_PR_URL="$url" AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 -m "$model"
   assert_success
   line=$(grep -m1 -F "new-tab --name" "$STUB_CALLS_DIR/zellij.calls")
   payload="${line#*-- bash -ic }"
@@ -797,7 +811,7 @@ teardown() {
 # --no-launch starts no kiro-cli, so there is no first turn for the gate to
 # hold, and you are the one typing in that tab.
 @test "kiro task-reviewer: --no-launch does not warn about the trust-all gate (#157)" {
-  run "$TASK_REVIEWER_KIRO" 42 --no-launch
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-launch
   assert_success
   assert_output --partial "kiro NOT launched"
   refute_output --partial "trust-all confirmation"
@@ -805,7 +819,7 @@ teardown() {
 }
 
 @test "kiro task-reviewer: --no-launch opens tab without kiro-cli" {
-  run "$TASK_REVIEWER_KIRO" 42 --no-launch
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-launch
   assert_success
   assert_output --partial "kiro NOT launched"
   run grep -F "kiro-cli " "$STUB_CALLS_DIR/zellij.calls"
@@ -814,21 +828,86 @@ teardown() {
 
 @test "kiro task-reviewer: PR not found errors" {
   unset GH_STUB_PR_URL
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_failure
   assert_output --partial "PR #42 not found"
 }
 
 @test "kiro task-reviewer: --help" {
-  run "$TASK_REVIEWER_KIRO" --help
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" --help
   assert_success
   assert_output --partial "Usage:"
 }
 
 @test "kiro task-reviewer: explicit issue passes through to kiro prompt" {
-  run "$TASK_REVIEWER_KIRO" 42 38
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 38
   assert_success
   assert_stub_called zellij "against spec issue https://github.com/owner/repo/issues/38"
+}
+
+@test "kiro task-reviewer: an explicit issue URL reaches the prompt verbatim" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 "https://github.com/owner/repo/issues/77"
+  assert_success
+  assert_stub_called zellij "against spec issue https://github.com/owner/repo/issues/77"
+}
+
+@test "kiro task-reviewer: spec auto-detected from the PR body's Closes #N" {
+  export GH_STUB_PR_BODY="Closes #55"
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_stub_called zellij "against spec issue https://github.com/owner/repo/issues/55"
+  assert_output --partial "issue: 55"
+}
+
+@test "kiro task-reviewer: no spec anywhere is a diff-only review" {
+  export GH_STUB_PR_BODY="Just some prose."
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_output --partial "No spec issue associated"
+  run grep -F "against spec" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+# gh's spec resolution is gh.sh's, shared with claude-gh (#239): a non-GitHub
+# identifier is refused on kiro-gh exactly as on claude-gh.
+@test "kiro task-reviewer: a non-GitHub spec id is refused, as on claude-gh" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 PROJ-123
+  assert_failure
+  assert_output --partial "could not parse issue number from 'PROJ-123'"
+  assert [ ! -d "$WORKTREE_BASE/review-pr42" ]
+}
+
+@test "kiro task-reviewer: claude-only --no-auto is an unknown flag" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-auto
+  assert_failure
+  assert_output --partial "unknown flag '--no-auto'"
+}
+
+@test "claude task-reviewer: kiro-only --no-trust-all is an unknown flag" {
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-trust-all
+  assert_failure
+  assert_output --partial "unknown flag '--no-trust-all'"
+}
+
+# Folded onto the canonical body (#146), kiro now gets what claude had: the
+# worktree-proof role name (#165 RC-2), the repo-scoped PM address, and no
+# ANTHROPIC_MODEL, which kiro-cli would ignore.
+@test "kiro task-reviewer: radio env carries the PM address and no ANTHROPIC_MODEL" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_stub_called zellij "TASK_FORCE_ROLE=reviewer-"
+  assert_stub_called zellij "TASK_FORCE_PM_ROLE=pm-"
+  run grep -F "ANTHROPIC_MODEL" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "kiro task-reviewer: --help names the kiro flags, not claude's" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" --help
+  assert_success
+  assert_output --partial "--no-trust-all"
+  assert_output --partial "--no-auto-submit"
+  refute_output --partial "(claude)"
+  refute_output --partial "ANTHROPIC_MODEL"
 }
 
 # ===========================================================================

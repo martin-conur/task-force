@@ -72,9 +72,8 @@ CLAUDE_LOCAL_TASK_INIT="$REPO_ROOT_REAL/claude-local/bin/task-init"
 CLAUDE_LOCAL_TEMPLATE="$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
 KIRO_LOCAL_TASK_INIT="$REPO_ROOT_REAL/kiro-local/bin/task-init"
 KIRO_LOCAL_TEMPLATE="$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
-# radio / task-pm / task-reviewer are canonical root binaries (#170). Tests
-# pin a loadout by prefixing `AW_IMPL=<impl>` on the `run` invocation; the
-# kiro-gh task-reviewer is still a per-loadout file (kiro parity is #146).
+# radio / task-pm / task-reviewer are canonical root binaries (#170, #146).
+# Tests pin a loadout by prefixing `AW_IMPL=<impl>` on the `run` invocation.
 RADIO="$REPO_ROOT_REAL/bin/radio"
 TASK_CONFIG="$REPO_ROOT_REAL/bin/task-config"
 TASK_REMOVE="$REPO_ROOT_REAL/bin/task-remove"
@@ -201,7 +200,6 @@ require_pty() {
 TASK_PM="$REPO_ROOT_REAL/bin/task-pm"
 TASK_RECREATE_WORKER="$REPO_ROOT_REAL/bin/task-recreate-worker"
 TASK_REVIEWER="$REPO_ROOT_REAL/bin/task-reviewer"
-TASK_REVIEWER_KIRO="$REPO_ROOT_REAL/kiro-gh/bin/task-reviewer"
 
 # Creates a temp directory with a git repo, sets up $MAIN_REPO,
 # $REPO_NAME, and $WORKTREE_BASE.

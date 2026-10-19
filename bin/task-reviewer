@@ -8,11 +8,12 @@ set -eEuo pipefail
 
 # task-reviewer — canonical entry point for all loadouts (#170).
 #
-# The claude body (shared by claude-gh / claude-jira / claude-notion /
-# claude-local, formerly 4 byte-identical per-loadout copies) lives inline
-# below; kiro-* impls are still routed to <impl>/bin/task-reviewer until the
-# kiro variants converge (#146). Impl resolution comes from
-# lib/detect-impl.sh — override with --impl <name> or AW_IMPL=<name>.
+# One body for every loadout that ships a reviewer: the four claude ones
+# (formerly 4 byte-identical per-loadout copies) and kiro-gh, whose own copy
+# was folded in here (#146). The two agents differ only in their flags, their
+# preflight and the launch line, which branch on AGENT below; spec resolution
+# is the tracker module's. Impl resolution comes from lib/detect-impl.sh —
+# override with --impl <name> or AW_IMPL=<name>.
 
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -26,11 +27,12 @@ AW_ROOT=$(dirname "$BIN_DIR")
 # shellcheck source=lib/detect-impl.sh
 source "$AW_ROOT/lib/detect-impl.sh"
 
-# The claude flow spawns a fresh zellij tab + git worktree on the PR's head
-# ref, then runs `claude /reviewer <pr-url> [<issue-url>]` inside it. The
-# reviewer reads the spec issue (if any), the PR diff, runs the code-review
-# skill, posts a single thorough PR comment, and radios PM back with a
-# verdict.
+# Spawns a fresh zellij tab + git worktree on the PR's head ref, then runs
+# `claude /reviewer <pr-url> [<spec>]` — or the kiro `reviewer` agent with
+# "Review PR <pr-url> [against spec …]" as its first turn — inside it. The
+# reviewer reads the spec (if any), the PR diff, reviews it (claude through the
+# code-review skill, kiro prompt-driven), posts a single thorough PR comment,
+# and radios PM back with a verdict.
 #
 # Replaces the previous in-place-tab-takeover model (#138). PM stays on its
 # tab — the reviewer worker is ephemeral, one per review.
@@ -48,9 +50,10 @@ Usage:
   task-reviewer <pr-url-or-number> [<spec-identifier>] [options]
 
 Spawns a fresh zellij tab + git worktree on the PR's head ref, then runs the
-/reviewer slash command. The reviewer reads the spec issue (for compliance
-cross-check), the PR diff, runs the code-review skill, posts a single thorough
-PR comment, and radios PM back with a verdict — clean or with findings.
+reviewer: claude's /reviewer slash command, or kiro's `reviewer` agent. The
+reviewer reads the spec (for compliance cross-check), the PR diff, reviews it,
+posts a single thorough PR comment, and radios PM back with a verdict — clean
+or with findings.
 
 Positional arguments:
   <pr-url-or-number>      The PR to review. Accepts a GitHub PR URL or a bare
@@ -69,36 +72,56 @@ EOF
                           --help inside a configured repo for its exact form.
 EOF
   fi
+  echo
+  echo "Options:"
+  # The permission flags are the agent's. Outside a configured repo there is
+  # no agent to ask, so both blocks print.
+  [[ "${AGENT:-}" != kiro ]] && cat <<'EOF'
+      --no-auto           (claude) Opt out of --permission-mode auto. Default is
+                          auto because the /reviewer prompt's authority
+                          boundaries rule out anything destructive (no merge,
+                          no push, no Status edits) — running the review
+                          hands-off matches the "dispatch and walk away" goal
+                          of this command.
+EOF
+  [[ "${AGENT:-}" != claude ]] && cat <<'EOF'
+  -m, --model MODEL       (kiro) Model to pass to kiro-cli (default:
+                          $TASK_WORK_MODEL if set, else claude-sonnet-5.5). An
+                          exported TASK_WORK_MODEL meant for workers applies
+                          here too.
+      --no-trust-all      (kiro) Opt out of --trust-all-tools, on by default for
+                          the same reason claude's reviewer runs in auto mode.
+                          TASK_WORK_TRUST_ALL=0 / false / no does the same.
+EOF
   cat <<'EOF'
-
-Options:
-      --no-auto           Opt out of --permission-mode auto. Default is auto
-                          because the /reviewer prompt's authority boundaries
-                          rule out anything destructive (no merge, no push, no
-                          Status edits) — running the review hands-off matches
-                          the "dispatch and walk away" goal of this command.
       --no-auto-submit    Keep the Enter gate on radio wakes into the reviewer.
                           Auto-submit is on by default and independent of the
-                          permission mode (#246): --no-auto alone keeps it.
+                          permission flags (#246, #146): --no-auto or
+                          --no-trust-all alone keeps it.
       --auto-submit       Explicitly opt into auto-submit (the default).
-      --no-launch         Open the worktree tab but do NOT start claude.
+      --no-launch         Open the worktree tab but do NOT start the agent.
   -h, --help              Show this help.
+EOF
+  [[ "${AGENT:-}" != kiro ]] && cat <<'EOF'
 
 Environment:
-  ANTHROPIC_MODEL         Defaults to claude-sonnet-5-5 (cheaper than the
-                          PM's Opus). Pre-set to override (e.g. claude-opus-5-5
-                          for a one-off premium pass).
+  ANTHROPIC_MODEL         (claude) Defaults to claude-sonnet-5-5 (cheaper than
+                          the PM's Opus). Pre-set to override (e.g.
+                          claude-opus-5-5 for a one-off premium pass).
+EOF
+  cat <<'EOF'
 
 Examples:
   task-reviewer 42
   task-reviewer https://github.com/owner/repo/pull/42
   task-reviewer 42 38
-  task-reviewer https://github.com/owner/repo/pull/42 38 --no-auto
 EOF
+  [[ "${AGENT:-}" != kiro ]] && echo "  task-reviewer https://github.com/owner/repo/pull/42 38 --no-auto"
+  [[ "${AGENT:-}" != claude ]] && echo "  task-reviewer 42 --no-trust-all --no-auto-submit"
   exit "${1:-1}"
 }
 
-# ---------------- impl resolution + kiro routing ----------------
+# ---------------- impl resolution ----------------
 aw_parse_impl_flag "$@" || exit 1
 
 if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
@@ -111,27 +134,33 @@ if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
   exit 1
 fi
 
-if [[ "$IMPL" == kiro-* ]]; then
-  TARGET="$AW_ROOT/$IMPL/bin/task-reviewer"
-  if [[ ! -x "$TARGET" ]]; then
-    # The reviewer role ships for all claude loadouts and kiro-gh. Surface
-    # that explicitly rather than a generic "not found" message — the impl is
-    # configured, the *reviewer* just isn't part of it (#146 tracks parity).
-    echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
-    echo "       Reviewer support currently ships for claude-gh, claude-jira," >&2
-    echo "       claude-notion, claude-local, and kiro-gh." >&2
-    echo "       See https://github.com/martin-conur/task-force/issues/146 for tracking." >&2
-    exit 1
-  fi
-  exec "$TARGET" ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+AGENT="${IMPL%%-*}"
+
+# A kiro loadout has a reviewer exactly when it ships the agent config:
+# kiro-gh does, kiro-local / kiro-notion do not yet. Keyed on the file rather
+# than an impl list so the loadout that adds one needs no edit here. Surfaced
+# explicitly rather than as aw_require_kiro_agent's "run task-init" remedy —
+# the impl is configured, re-running task-init would install no reviewer.
+if [[ "$AGENT" == kiro && ! -f "$AW_ROOT/$IMPL/agents/reviewer.json" ]]; then
+  echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
+  echo "       Reviewer support currently ships for claude-gh, claude-jira," >&2
+  echo "       claude-notion, claude-local, and kiro-gh." >&2
+  exit 1
+fi
+
+if [[ "$AGENT" == kiro ]]; then
+  # shellcheck source=lib/kiro-agent.sh
+  source "$AW_ROOT/lib/kiro-agent.sh"
+  # shellcheck source=lib/kiro-launch.sh
+  source "$AW_ROOT/lib/kiro-launch.sh"
 fi
 
 # Spec resolution is the tracker module's (#239): only gh resolves a spec via
 # the GitHub `Closes #N` convention; the others pass any opaque 2nd positional
 # (Jira key, Notion URL, local slug) through to /reviewer untouched (#144).
 # Resolved first and sourced second, as task-work does. Keyed on the axis, not
-# the impl, so a future kiro-* body reuse (#146) or new loadout (#92) gets the
-# right tracker behaviour by composing the module it already has.
+# the impl, so kiro-gh (#146) or a new loadout (#92) gets the right tracker
+# behaviour by composing the module it already has.
 TRACKER="${IMPL##*-}"
 # shellcheck source=lib/trackers/_default.sh
 source "$AW_ROOT/lib/trackers/_default.sh"
@@ -147,21 +176,47 @@ set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
 # /reviewer prompt's authority list explicitly rules out merge/push/approve/
 # close/Status. Defeats the hands-off-dispatch goal of #138 to make every
 # review require manual permission-clicks. `--no-auto` is the explicit opt-out
-# for callers who want the interactive path.
+# for callers who want the interactive path. kiro's equivalent is
+# --trust-all-tools, default-on for the same reason, opted out of with
+# --no-trust-all.
 POSITIONAL=()
 NO_LAUNCH=""
 AUTO_MODE="1"
+MODEL=""
+TRUST_ALL=""
+if [[ "$AGENT" == kiro ]]; then
+  MODEL="${TASK_WORK_MODEL:-$AW_KIRO_REVIEWER_MODEL}"
+  TRUST_ALL="1"
+  # Honor TASK_WORK_TRUST_ALL=0 / false / no as an env-level opt-out.
+  case "${TASK_WORK_TRUST_ALL:-}" in
+    0|false|FALSE|no|NO) TRUST_ALL="" ;;
+  esac
+fi
 # Radio auto-submit is a separate setting (#246): on by default for the same
-# dispatch-and-walk-away reason, and NOT switched off by --no-auto — wanting to
-# click through a reviewer's tool calls says nothing about whether its PM pings
-# should need an Enter.
+# dispatch-and-walk-away reason, and NOT switched off by --no-auto or
+# --no-trust-all — wanting to click through a reviewer's tool calls says
+# nothing about whether its PM pings should need an Enter. kiro-gh's own copy
+# coupled it to trust-all until it was folded in here (#146).
 AUTO_SUBMIT="1"
 
 while [[ $# -gt 0 ]]; do
+  # Each agent's permission flags are refused on the other, as unknown flags.
+  if [[ "$AGENT" == kiro ]]; then
+    case "$1" in
+      -m|--model)
+        [[ $# -ge 2 ]] || { echo "Error: --model requires a value" >&2; exit 1; }
+        MODEL="$2"; shift 2; continue ;;
+      -a|--trust-all) TRUST_ALL="1"; shift; continue ;;
+      --no-trust-all) TRUST_ALL=""; shift; continue ;;
+    esac
+  else
+    case "$1" in
+      --auto) AUTO_MODE="1"; shift; continue ;;
+      --no-auto) AUTO_MODE=""; shift; continue ;;
+    esac
+  fi
   case "$1" in
     -h|--help) usage 0 ;;
-    --auto) AUTO_MODE="1"; shift ;;
-    --no-auto) AUTO_MODE=""; shift ;;
     --auto-submit) AUTO_SUBMIT="1"; shift ;;
     --no-auto-submit) AUTO_SUBMIT=""; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
@@ -195,6 +250,21 @@ PR_NUMBER=$(parse_pr_number "$PR_INPUT") || {
 
 # ---------------- repo discovery ----------------
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
+
+if [[ "$AGENT" == kiro ]]; then
+  # Fail before the worktree/tab are built (#218) — a reviewer that falls back
+  # to a hookless built-in never registers, so its verdict radio never reaches
+  # PM and its self-destruct (#162) leaves the tab behind to say so.
+  aw_require_kiro_agent reviewer "$REPO_ROOT" "task-init $IMPL" || exit 1
+  # A reviewer is trust-all by default, so kiro-cli's trust-all confirmation
+  # would hold its first turn for an answer nobody gives (#157). Warn, never
+  # refuse — and not under --no-launch, where nothing is dispatched and you
+  # start kiro-cli in the tab yourself.
+  [[ -n "$TRUST_ALL" && -z "$NO_LAUNCH" ]] && aw_kiro_warn_trust_gate "$REPO_ROOT" "the reviewer"
+  # Same for the V3 engine's agent-config upgrade dialog (#257), trust-all or not.
+  [[ -z "$NO_LAUNCH" ]] && aw_kiro_warn_upgrade_gate "$REPO_ROOT" "the reviewer"
+fi
+
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 # Worktree-proof main-repo name for radio roles (#165 RC-2): task-reviewer runs
@@ -321,16 +391,47 @@ build_claude_cmd() {
   echo "claude ${mode_prefix}\"/reviewer $slash_args\""
 }
 
+# ---------------- kiro command builder ----------------
+# Every value spliced in is quoted for the `bash -ic` re-parse (#157): a model
+# with a space would otherwise split, and a `$` in any value expand. The model
+# is a bare word, so %q. The PR URL and spec sit inside the prompt's double
+# quotes, where %q is wrong (`\?` stays literal there), so they get the
+# double-quote escape. `!` is covered by the launch line's `set +H`.
+_dq_escape() {
+  local v="$1"
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; v="${v//\$/\\\$}"; v="${v//\`/\\\`}"
+  printf '%s' "$v"
+}
+build_kiro_cmd() {
+  local cmd="kiro-cli chat --agent reviewer"
+  [[ -n "$MODEL" ]] && cmd+=" --model $(printf %q "$MODEL")"
+  [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
+  # Pin the terminal UI: the classic one opens on a dialog that holds the
+  # positional first turn until someone answers it (#157, lib/kiro-launch.sh).
+  cmd+="$(aw_kiro_ui_flag)"
+  local prompt spec_noun="spec"
+  [[ "$TRACKER" == gh ]] && spec_noun="spec issue"
+  prompt="Review PR $(_dq_escape "$PR_URL")"
+  [[ -n "$SPEC_IDENTIFIER" ]] && prompt+=" against $spec_noun $(_dq_escape "$SPEC_IDENTIFIER")"
+  cmd+=" \"$prompt\""
+  echo "$cmd"
+}
+
 # ---------------- radio env injection ----------------
 # Per-PR role so concurrent reviewers don't collide on the radio mailbox.
 # Sonnet by default for the orchestrator (preserves #134 cost win); a
 # pre-set ANTHROPIC_MODEL wins so the caller can pin Opus for a one-off.
+# kiro takes its model as --model on the launch line instead (MODEL above).
 TASK_FORCE_ROLE_VALUE="reviewer-${REPO_RADIO_NAME}-pr${PR_NUMBER}"
-RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5-5}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
 RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
-RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
+if [[ "$AGENT" == kiro ]]; then
+  RESOLVED_MODEL="$MODEL"
+else
+  RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5-5}"
+  RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
+fi
 # Repo-scoped PM address (#165): the reviewer radios its verdict with `--to pm`,
 # resolved by radio's shim; this injected value is the shim's registration-gated
 # launch-time identity so the verdict reaches THIS repo's PM (pm-<reponame>).
@@ -365,10 +466,17 @@ fi
 echo "Opening zellij tab '$SLUG'..."
 if [[ -n "$NO_LAUNCH" ]]; then
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "" "1"
-  echo "Tab opened at $WORKTREE_DIR — claude NOT launched (--no-launch)."
+  echo "Tab opened at $WORKTREE_DIR — $AGENT NOT launched (--no-launch)."
 else
-  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}$(build_claude_cmd)" "1"
-  echo "Started reviewer in $WORKTREE_DIR for PR #$PR_NUMBER (issue: ${ISSUE_NUMBER:-none}, model: $RESOLVED_MODEL)"
+  if [[ "$AGENT" == kiro ]]; then
+    LAUNCH_CMD=$(build_kiro_cmd)
+  else
+    LAUNCH_CMD=$(build_claude_cmd)
+  fi
+  aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}${LAUNCH_CMD}" "1"
+  started="Started reviewer in $WORKTREE_DIR for PR #$PR_NUMBER (issue: ${ISSUE_NUMBER:-none}, model: ${RESOLVED_MODEL:-kiro default}"
+  [[ -n "$TRUST_ALL" ]] && started+=", trust-all"
+  echo "$started)"
 fi
 
 # Disarm the partial-state cleanup trap — the worktree is live, the tab is

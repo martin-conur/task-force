@@ -47,13 +47,13 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
 
   On `review-requested` from a worker, run:
   ```bash
-  task-reviewer <pr-url-or-number> [<issue-url-or-number>]
+  task-reviewer <pr-url-or-number> <JIRA-KEY>
   ```
   in any spare tab. The reviewer runs with `--auto` (auto-permission) by default — the `/reviewer` prompt's authority list rules out anything destructive (no merge, no push, no Status edits), so hands-off dispatch is safe. Pass `--no-auto` if you want to babysit a specific review. Add `Bash(task-reviewer *)` to your project's `.claude/settings.json` `permissions.allow` so you launch reviewers **without a permission prompt** — dispatch them hands-off, you don't need to ask the user first.
 
   Positional args:
   - **PR** (required): URL or bare number.
-  - **Issue** (optional): URL or bare number for the spec issue. **If omitted, auto-detected** from the PR body's first `Closes #N` / `Fixes #N` / `Resolves #N` line (case-insensitive). Pass it explicitly only when the PR body doesn't link a spec, or when you want to override the auto-detected target.
+  - **Spec** (pass it): the Jira key of the spec issue (e.g. `PROJ-123`), handed to `/reviewer` as-is. PR-body auto-detect (`Closes #N`) is GitHub-only, so it is **never inferred** here — without it the review is diff-only.
 
   The reviewer spawns a fresh tab + worktree on the PR's head ref, cross-checks the diff against the spec, runs the `code-review` skill, posts a single thorough PR comment, and radios you back with one of:
 

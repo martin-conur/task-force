@@ -489,6 +489,9 @@ aw_install_ci_guard_hook "$MAIN_WORKTREE"
 # and `radio send --to pm` reports as itself instead of `from: unknown`.
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$ROLE") ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
+# Forward a scratch radio home into the tab, which would otherwise start from
+# the zellij server's env and register in the real ~/.task-force (#262).
+RADIO_ENV_PREFIX+="$(aw_radio_home_env_prefix)"
 # Auto-submit is its own setting (#246): an explicit flag wins, --auto implies
 # it, and with neither nothing is injected — radio then restores what this role
 # had from its auto-submit sidecar, which is what a recovery should do. This is

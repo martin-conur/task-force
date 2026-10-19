@@ -3,6 +3,7 @@
 #
 # Exports:
 #   aw_launch_tab <slug> <cwd> <cmd>
+#   aw_radio_home_env_prefix   (TASK_FORCE_HOME for a launcher's env prefix, #262)
 #
 # Creates a new zellij tab named <slug>, with cwd <cwd>, running <cmd> as the
 # initial pane's command (via `zellij action new-tab --cwd <cwd> --name <slug>
@@ -114,6 +115,21 @@ aw_radio_log() {
   local log_file="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/log"
   mkdir -p "$(dirname "$log_file")" 2>/dev/null || return 0
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$log_file" 2>/dev/null || true
+}
+
+# The radio-home part of a launcher's RADIO_ENV_PREFIX (#262): `TASK_FORCE_HOME=<v> `
+# when the launcher has one, nothing when it does not. A new zellij tab starts
+# from the zellij *server's* environment, not the caller's, so without this a
+# launcher pointed at a scratch home logs there while the agent it starts
+# registers in the real ~/.task-force — one launch split across two radio
+# states, and a probe whose role name matches a live worker overwrites it.
+# Unset stays unset, so the agent defaults exactly as before. %q because the
+# prefix is re-parsed by the tab's `bash -ic`: a path with a space must arrive
+# as one value. Every tab launcher appends this; task-pm execs in place and
+# inherits the env, so it needs none.
+aw_radio_home_env_prefix() {
+  [[ -n "${TASK_FORCE_HOME:-}" ]] || return 0
+  printf 'TASK_FORCE_HOME=%q ' "$TASK_FORCE_HOME"
 }
 
 # Resolve <slug>'s tab_id and append TAB_ID= to <info_file> (#117). On a miss,

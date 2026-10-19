@@ -335,6 +335,9 @@ RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
 # resolved by radio's shim; this injected value is the shim's registration-gated
 # launch-time identity so the verdict reaches THIS repo's PM (pm-<reponame>).
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
+# Forward a scratch radio home into the tab, which would otherwise start from
+# the zellij server's env and register in the real ~/.task-force (#262).
+RADIO_ENV_PREFIX+="$(aw_radio_home_env_prefix)"
 # Explicit even when off: radio reads an unset value as "restore this role's
 # prior setting", which a fresh launch must not inherit (#246).
 if [[ -n "$AUTO_SUBMIT" ]]; then

@@ -31,6 +31,15 @@ case "$*" in
     # Lets tests pin that task-reviewer's ERR trap unwinds the worktree +
     # branch + info file when aw_launch_tab fails partway through (#139).
     [[ -n "${STUB_ZELLIJ_NEW_TAB_FAIL:-}" ]] && exit 1
+    # The calls log joins argv with spaces, which loses the quoting of the
+    # `bash -ic "<cmd>"` payload. Keep that payload verbatim so a test can
+    # re-run it and see what the agent's env really is (#262).
+    for _a in "$@"; do
+      if [[ "$_a" == -- ]]; then
+        printf '%s' "${@: -1}" > "${STUB_CALLS_DIR}/zellij.new-tab-cmd"
+        break
+      fi
+    done
     ;;
   "action write-chars "*)
     # Lets tests pin cmd_send's write-chars-failed outcome line (#166): the

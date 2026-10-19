@@ -244,6 +244,9 @@ RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") ZELLIJ_T
 # gated launch-time identity (step 1), so the ping reaches THIS repo's PM
 # (pm-<reponame>) and never a different repo's PM tab.
 RADIO_ENV_PREFIX+="TASK_FORCE_PM_ROLE=$(printf %q "pm-${REPO_RADIO_NAME}") "
+# Forward a scratch radio home into the tab, which would otherwise start from
+# the zellij server's env and register in the real ~/.task-force (#262).
+RADIO_ENV_PREFIX+="$(aw_radio_home_env_prefix)"
 # Radio's CR (auto-submit) wake-up, so PM pings process without a manual Enter
 # (#128). On by default (#254): the user drives the PM and does not type in
 # worker tabs, so an LF wake there is a `radio check` nobody will ever submit.

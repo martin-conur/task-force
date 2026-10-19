@@ -407,6 +407,15 @@ comment is an unrecoverable loss of the analysis.
 Worker role names follow `worker-<reponame>-<slug>`; discover the live one via
 `ls ~/.task-force/radio/sessions/`.
 
+All of radio's state (sessions, mailboxes, the log) lives under
+`$TASK_FORCE_HOME`, which defaults to `~/.task-force`. Point it at a scratch
+directory to probe or test without touching live roles. `task-work`,
+`task-reviewer` and `task-recreate-worker` pass a set `TASK_FORCE_HOME` into the
+tab they open, because a new zellij tab starts from the zellij server's
+environment and not yours. Without that, a scratch-home probe would register in
+the real `~/.task-force` (#262). `task-pm` runs in place, so it inherits the
+variable without help. When it is unset, nothing is passed and the default applies.
+
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
 the current zellij tab to `pm-<reponame>`, registers that repo-scoped role via
 the `SessionStart` hook, and starts the PM agent in-place. The per-repo role

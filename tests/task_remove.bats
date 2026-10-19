@@ -178,6 +178,89 @@ _assert_clean_removal() {
   assert_success
 }
 
+# #266: the "is anything left?" checks used `${s//[[:space:]]/}`, which bash
+# 3.2's matcher runs superlinearly under a multibyte locale — an 8KB UTF-8 file
+# took 25s, a 30KB CLAUDE.md never finished. Drive the two functions directly in
+# their own bash, under a UTF-8 locale, with an alarm: a hang then kills that
+# bash rather than an orphaned subshell of task-remove spinning on after the
+# test. Only bites on bash 3.2 (macOS's /bin/bash); elsewhere these pass either
+# way and still pin the behaviour.
+_utf8_locale() {
+  locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1
+}
+
+# ~40KB of the user's own text on stdout, non-ASCII on every line. Callers
+# redirect it: a `> /dev/stdout` inside would reopen, and on Linux truncate,
+# whatever file the caller's stdout is.
+_big_utf8_text() {
+  local i
+  for ((i = 0; i < 1000; i++)); do
+    printf 'línea número %d — café ✓ notes of the house\n' "$i"
+  done
+}
+
+_run_with_deadline() {
+  local loc="$1"; shift
+  run env LC_ALL="$loc" perl -e 'alarm 20; exec @ARGV' \
+    bash -c ". '$REPO_ROOT_REAL/lib/loadout-artifacts.sh'; $*"
+}
+
+@test "a large UTF-8 CLAUDE.md is stripped promptly under a UTF-8 locale (#266)" {
+  local loc; loc=$(_utf8_locale)
+  [[ -n "$loc" ]] || skip "no UTF-8 locale installed"
+  _big_utf8_text > "$MAIN_REPO/CLAUDE.md"
+  printf '@.claude/gh-workflow.md\n' >> "$MAIN_REPO/CLAUDE.md"
+
+  _run_with_deadline "$loc" "_la_strip_line '$MAIN_REPO' CLAUDE.md '@.claude/gh-workflow.md' apply import"
+  assert_failure 1   # 1 = stripped, file kept; 142 would be the alarm
+  assert_output --partial "stripped the import from CLAUDE.md"
+  run grep -qxF '@.claude/gh-workflow.md' "$MAIN_REPO/CLAUDE.md"
+  assert_failure
+  run grep -cF 'café' "$MAIN_REPO/CLAUDE.md"
+  assert_output 1000
+}
+
+@test "a CLAUDE.md left holding only whitespace is still removed (#266)" {
+  printf '\n  \t\n@.claude/gh-workflow.md\n\n' > "$MAIN_REPO/CLAUDE.md"
+  run _la_strip_line "$MAIN_REPO" CLAUDE.md '@.claude/gh-workflow.md' apply import
+  assert_success
+  assert_output --partial "removed CLAUDE.md (it held only the import)"
+  assert [ ! -e "$MAIN_REPO/CLAUDE.md" ]
+}
+
+@test "a large UTF-8 workflow-doc tail is read promptly under a UTF-8 locale (#266)" {
+  local loc; loc=$(_utf8_locale)
+  [[ -n "$loc" ]] || skip "no UTF-8 locale installed"
+  local doc="$MAIN_REPO/doc.md"
+  {
+    printf '%s\n' '<!-- task-init:managed:start -->' 'body' '<!-- task-init:managed:end -->'
+    _big_utf8_text
+  } > "$doc"
+
+  # Redirected, not piped: a pipeline would run the function in a subshell the
+  # alarm does not reach.
+  _run_with_deadline "$loc" "_la_workflow_doc_tail '$doc' > '$MAIN_REPO/tail.out'"
+  assert_success
+  run grep -cF 'café' "$MAIN_REPO/tail.out"
+  assert_output 1000
+}
+
+@test "a workflow-doc tail of only the stub and whitespace counts as empty (#266)" {
+  local doc="$MAIN_REPO/doc.md"
+  {
+    printf '%s\n' '<!-- task-init:managed:start -->' 'body' '<!-- task-init:managed:end -->' '' '  '
+    _managed_tail_stub
+    printf '\t\n\n'
+  } > "$doc"
+  run _la_workflow_doc_tail "$doc"
+  assert_success
+  assert_output ""
+
+  printf 'Green here means ./run_tests.sh.\n' >> "$doc"
+  run _la_workflow_doc_tail "$doc"
+  assert_output --partial "Green here means"
+}
+
 @test "a settings.json carrying a non-radio hook keeps that hook and the file" {
   mkdir -p "$MAIN_REPO/.claude"
   cat > "$MAIN_REPO/.claude/settings.json" <<'JSON'

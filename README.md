@@ -1113,7 +1113,7 @@ task-reviewer 42 042-add-login                                # claude-local: PR
 task-reviewer 42 --no-auto                                    # opt out of auto-permission (interactive review)
 ```
 
-`--auto` is the default — the reviewer's authority list rules out merge / push / approve / close / Status, so auto-permission is safe for the review flow, and matches the "dispatch and walk away" intent of the command. Pass `--no-auto` to drop into the interactive permission-prompt mode. Radio auto-submit is a separate setting, also on by default, and `--no-auto` no longer switches it off (#246): clicking through a reviewer's tool calls says nothing about whether PM's pings into it should need an Enter. `--no-auto-submit` is its own opt-out. Kiro reviewers default to `--trust-all-tools` for the same reason; opt out with `--no-trust-all`.
+`--auto` is the default — the reviewer's authority list rules out merge / push / approve / close / Status, so auto-permission is safe for the review flow, and matches the "dispatch and walk away" intent of the command. Pass `--no-auto` to drop into the interactive permission-prompt mode. Radio auto-submit is a separate setting, also on by default, and `--no-auto` no longer switches it off (#246): clicking through a reviewer's tool calls says nothing about whether PM's pings into it should need an Enter. `--no-auto-submit` is its own opt-out. Kiro reviewers default to `--trust-all-tools` for the same reason; opt out with `--no-trust-all`, which likewise leaves auto-submit on (#146). Both agents run the one canonical `bin/task-reviewer`, so a kiro-gh reviewer resolves its spec exactly as a claude-gh one does.
 
 ---
 

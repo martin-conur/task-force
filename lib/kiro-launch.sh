@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # kiro-cli startup gates that hold a dispatched agent's first turn (#157, #257).
-# Sourced by lib/agents/kiro.sh, bin/task-pm and kiro-gh/bin/task-reviewer.
+# Sourced by lib/agents/kiro.sh, bin/task-pm and bin/task-reviewer.
 #
 # A dispatched kiro agent gets its first turn as the positional [INPUT] of
 # `kiro-cli chat` — "The first question to ask" in kiro-cli's own help, and
@@ -42,10 +42,10 @@
 # shellcheck disable=SC2034  # read by the scripts that source this file
 AW_KIRO_DEFAULT_MODEL=claude-opus-5.5
 
-# kiro-gh/bin/task-reviewer's default --model (#259). Also overridden by
+# The kiro reviewer's default --model (#259). Also overridden by
 # TASK_WORK_MODEL, which the reviewer has always read: a worker override set in
 # the shell turns reviewers into that model too.
-# shellcheck disable=SC2034  # read by kiro-gh/bin/task-reviewer
+# shellcheck disable=SC2034  # read by bin/task-reviewer
 AW_KIRO_REVIEWER_MODEL=claude-sonnet-5.5
 
 # aw_kiro_ui_flag

@@ -374,6 +374,12 @@ reviewer never approves, merges, or mutates status. The reviewer tab stays
 open showing the analysis; clean up with `task-done --remove-worktree` when
 done.
 
+The reviewer runs with `--trust-all-tools` by default; `--no-trust-all` (or
+`TASK_WORK_TRUST_ALL=0`) babysits a specific review. Radio auto-submit is a
+separate setting, also on by default, and `--no-trust-all` does not switch it
+off (#146): the supervised review is exactly the one whose verdict should not
+stall on an Enter. `--no-auto-submit` is its own opt-out.
+
 If a worker tab dies unexpectedly, is closed without `task-done`, or kiro
 resumes a session without re-firing the `agentSpawn` hook, the session file's
 `LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session whose

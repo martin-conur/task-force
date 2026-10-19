@@ -51,7 +51,7 @@ launch() {
   case "$1" in
     task-work)            AW_IMPL=claude-gh run "$TASK_WORK" "https://github.com/owner/repo/issues/42" ;;
     task-reviewer)        AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 ;;
-    task-reviewer-kiro)   run "$TASK_REVIEWER_KIRO" 42 ;;
+    task-reviewer-kiro)   AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 ;;
     task-recreate-worker) dead_worker; AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 ;;
   esac
 }

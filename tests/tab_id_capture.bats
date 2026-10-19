@@ -156,7 +156,7 @@ miss_reason() {
 @test "task-reviewer (kiro-gh): a missed capture is reported and logged as task-reviewer" {
   setup_kiro_agents
   export ZELLIJ=fake-session GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
-  run "$TASK_REVIEWER_KIRO" 42
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success
   assert_output --partial "Could not capture the zellij tab id for 'review-pr42'"
   run grep -c 'tab-id: task-reviewer capture missed slug=review-pr42 reason=list-tabs-empty ' "$LOG"

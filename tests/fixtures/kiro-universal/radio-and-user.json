@@ -1,0 +1,76 @@
+{
+  "name": "worker",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "hooks": [
+    {
+      "name": "agentSpawn-0",
+      "trigger": "agentSpawn",
+      "action": {
+        "type": "command",
+        "command": "radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --repo $(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${TASK_FORCE_LOADOUT:-kiro-gh}"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "preToolUse-0",
+      "trigger": "preToolUse",
+      "matcher": "execute_bash",
+      "action": {
+        "type": "command",
+        "command": "./guard.sh"
+      },
+      "timeout": 5
+    },
+    {
+      "name": "stop-0",
+      "trigger": "stop",
+      "action": {
+        "type": "command",
+        "command": "radio ready"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "stop-1",
+      "trigger": "stop",
+      "action": {
+        "type": "command",
+        "command": "./my-own-stop.sh"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "userPromptSubmit-0",
+      "trigger": "userPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "radio busy"
+      },
+      "timeout": 10
+    }
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:f556250df13346b60186e34aaf828658bdaa07391d455ef588cb4a1071dd90ff",
+    "source": "sha256:fa2e1926bc4b1e2870e8a93c66e8f6286a1839b2c0f18ee93d0cd8396d4fd148"
+  }
+}

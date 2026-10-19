@@ -416,6 +416,19 @@ JSON
   assert_output "./scripts/mine.sh"
 }
 
+@test "set: an upgraded (universal-format) kiro agent config loses only its radio hooks (#267)" {
+  _init kiro-gh --owner acme --repo widgets --project 7
+  cp "$KIRO_UNIVERSAL/radio-and-user.json" "$MAIN_REPO/.kiro/agents/worker.json"
+
+  run "$TASK_CONFIG" set assistant claude --yes
+  assert_success
+  assert_output --partial "kept .kiro/agents/worker.json, radio hooks stripped"
+  run jq -r '.hooks | type' "$MAIN_REPO/.kiro/agents/worker.json"
+  assert_output "array"
+  run jq -r '[.hooks[] | .action.command] | join(",")' "$MAIN_REPO/.kiro/agents/worker.json"
+  assert_output "./guard.sh,./my-own-stop.sh"
+}
+
 @test "set: a pristine kiro agent config is deleted, hooks and all" {
   _init kiro-gh --owner acme --repo widgets --project 7
   run "$TASK_CONFIG" set assistant claude --yes

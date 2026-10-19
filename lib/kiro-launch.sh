@@ -108,12 +108,13 @@ aw_kiro_engine() {
 # either value of the setting skips the dialog. Read with kiro-cli from
 # <workdir>, so workspace-scoped settings count. Always returns 0.
 #
-# The fix it names is `false`, not `true`. Both skip the dialog, but true lets
-# kiro-cli rewrite .kiro/agents/*.json in place into its "universal" format,
-# whose `hooks` is an array: the radio hooks survive that rewrite, but
-# task-init's hook merge reads `hooks` as an object and fails on every
-# re-run. Under false the configs stay as task-init wrote them, and V3 loads
-# them as they are, radio hooks firing (verified on 2.32.0).
+# The fix it names is `false`. Under false the configs stay as task-init wrote
+# them, and V3 loads them as they are, radio hooks firing (verified on 2.32.0).
+# `true` skips the dialog too, by rewriting .kiro/agents/*.json in place into
+# kiro-cli's "universal" format, whose `hooks` is an array. That used to be a
+# caveat worth printing, because task-init's hook merge and task-remove's strip
+# read `hooks` only as an object; both handle the array shape since #267, so
+# the message no longer warns the user off it.
 aw_kiro_warn_upgrade_gate() {
   local workdir="${1:-$PWD}" what="${2:-the agent}" v
   [[ "$(aw_kiro_engine "$workdir")" == v3 ]] || return 0
@@ -125,8 +126,6 @@ aw_kiro_warn_upgrade_gate() {
     echo "         dialog before its first turn, and nobody types in a dispatched tab"
     echo "         (#257). Answer it in the tab, or skip it for good:"
     echo "           kiro-cli settings chat.enableAutoAgentUpgrade false"
-    echo "         (true skips it too, but rewrites .kiro/agents/*.json into a format"
-    echo "         task-init cannot merge radio hooks into yet.)"
   } >&2
   return 0
 }

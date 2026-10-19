@@ -372,6 +372,92 @@ teardown() {
   assert [ -f "$TARGET_DIR/.kiro/hooks/mine.json" ]
 }
 
+# ---------------------------------------------------------------------------
+# kiro-cli's "universal" agent-config format (#267): `hooks` is an array
+# ---------------------------------------------------------------------------
+# Fixtures are real `kiro-cli agent upgrade` output — see
+# tests/fixtures/kiro-universal/README.md.
+
+@test "universal format: re-running over an upgraded config with radio hooks changes nothing (#267)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  cp "$KIRO_UNIVERSAL/radio-and-user.json" "$TARGET_DIR/.kiro/agents/worker.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  # The failure this replaces: every agent warned `could not merge radio hooks`.
+  refute_output --partial "could not merge radio hooks"
+  refute_output --partial "could not upgrade"
+  run bash -c "diff <(jq -S . '$KIRO_UNIVERSAL/radio-and-user.json') <(jq -S . '$TARGET_DIR/.kiro/agents/worker.json')"
+  assert_success
+}
+
+@test "universal format: missing radio hooks are added in the array shape, user hooks kept (#267)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  cp "$KIRO_UNIVERSAL/user-only.json" "$TARGET_DIR/.kiro/agents/planner.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  refute_output --partial "could not merge radio hooks"
+  # Still an array — never converted back to the object task-init writes.
+  run jq -r '.hooks | type' "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_output "array"
+  run jq -r '.hooks[] | select(.action.command | startswith("radio ")) | [.name, .trigger, .action.type, .action.command, .timeout] | @tsv' \
+    "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_line --index 0 --partial $'radio-agentSpawn\tagentSpawn\tcommand\tradio register --role $TASK_FORCE_ROLE'
+  assert_line --index 0 --partial $'--loadout ${TASK_FORCE_LOADOUT:-kiro-gh}\t10'
+  assert_line --index 1 $'radio-userPromptSubmit\tuserPromptSubmit\tcommand\tradio busy\t10'
+  assert_line --index 2 $'radio-stop\tstop\tcommand\tradio ready\t10'
+  # The user's own entries are untouched, first in line as they were.
+  run jq -c '.hooks[0:2]' "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_output "$(jq -c '.hooks' "$KIRO_UNIVERSAL/user-only.json")"
+  # And everything outside `hooks` is as kiro-cli left it.
+  run bash -c "diff <(jq -S 'del(.hooks)' '$KIRO_UNIVERSAL/user-only.json') <(jq -S 'del(.hooks)' '$TARGET_DIR/.kiro/agents/planner.json')"
+  assert_success
+}
+
+@test "universal format: the merge is idempotent (#267)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  cp "$KIRO_UNIVERSAL/user-only.json" "$TARGET_DIR/.kiro/agents/planner.json"
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq -r '[.hooks[] | .trigger] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' \
+    "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_output "agentSpawn=2 stop=2 userPromptSubmit=1"
+}
+
+@test "universal format: object-shaped configs beside it stay objects (#267)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  cp "$KIRO_UNIVERSAL/user-only.json" "$TARGET_DIR/.kiro/agents/planner.json"
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  for agent in pm worker reviewer; do
+    run jq -r '.hooks | type' "$TARGET_DIR/.kiro/agents/$agent.json"
+    assert_output "object"
+  done
+}
+
+@test "universal format: a stale radio command in the array is warned about, not rewritten (#267)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq '(.hooks[] | select(.trigger == "stop" and .action.command == "radio ready") | .action.command) = "radio ready && radio check"' \
+    "$KIRO_UNIVERSAL/radio-and-user.json"
+  assert_success
+  printf '%s\n' "$output" > "$TARGET_DIR/.kiro/agents/worker.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  assert_output --partial "worker.json stop: radio ready && radio check — replace with: radio ready"
+  run jq -r '[.hooks[] | select(.trigger == "stop") | .action.command] | join(",")' \
+    "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output "radio ready && radio check,./my-own-stop.sh"
+}
+
 @test "radio-register hook embeds the loadout name (env-overridable) on agentSpawn" {
   run "$KIRO_GH_TASK_INIT"
   assert_success

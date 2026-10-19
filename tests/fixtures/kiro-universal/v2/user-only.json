@@ -1,0 +1,23 @@
+{
+  "name": "planner",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "hooks": {
+    "stop": [
+      {
+        "command": "./my-own-stop.sh"
+      }
+    ],
+    "agentSpawn": [
+      {
+        "command": "./my-own-spawn.sh"
+      }
+    ]
+  }
+}

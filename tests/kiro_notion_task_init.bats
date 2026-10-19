@@ -265,6 +265,25 @@ teardown() {
   assert_failure
 }
 
+@test "universal format: radio hooks are merged into an upgraded config, array shape kept (#267)" {
+  # A real `kiro-cli agent upgrade` output (tests/fixtures/kiro-universal/).
+  run "$KIRO_TASK_INIT"
+  assert_success
+  cp "$KIRO_UNIVERSAL/user-only.json" "$TARGET_DIR/.kiro/agents/planner.json"
+
+  run "$KIRO_TASK_INIT"
+  assert_success
+  refute_output --partial "could not merge radio hooks"
+  run jq -r '.hooks | type' "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_output "array"
+  run jq -r '.hooks[] | select(.trigger == "agentSpawn" and (.action.command | startswith("radio "))) | .action.command' \
+    "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_output --partial '--loadout ${TASK_FORCE_LOADOUT:-kiro-notion}'
+  run jq -r '[.hooks[] | .action.command] | join(",")' "$TARGET_DIR/.kiro/agents/planner.json"
+  assert_output --partial "./my-own-spawn.sh,./my-own-stop.sh,radio register"
+  assert_output --partial ",radio busy,radio ready"
+}
+
 @test "hooks are merged even when the policy KEEPS a customized agent config (#218)" {
   run "$KIRO_TASK_INIT"
   assert_success

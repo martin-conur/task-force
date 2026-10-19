@@ -1,0 +1,48 @@
+{
+  "name": "planner",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "hooks": [
+    {
+      "name": "agentSpawn-0",
+      "trigger": "agentSpawn",
+      "action": {
+        "type": "command",
+        "command": "./my-own-spawn.sh"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "stop-0",
+      "trigger": "stop",
+      "action": {
+        "type": "command",
+        "command": "./my-own-stop.sh"
+      },
+      "timeout": 10
+    }
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:bdadb8bd5d754d764dd23d6ad26e906a6f6e57049c0f3633e15f06e6d11a5d4c",
+    "source": "sha256:bf6896f04837982133c5530e9851894aee72a1e42a3d622b1a8fc45bd3c6678d"
+  }
+}

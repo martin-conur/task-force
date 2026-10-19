@@ -11,11 +11,33 @@ echo "TASK_FORCE_HOME=${TASK_FORCE_HOME-<unset>}" >> "${STUB_CALLS_DIR}/kiro-cli
 #   STUB_KIRO_NO_TUI=1                 a kiro-cli whose `chat` has no --tui flag
 #   STUB_KIRO_TRUST_CONFIRM_DISABLED   the value of chat.disableTrustAllConfirmation;
 #                                      unset means the setting is unset (exit 1)
+# And the V3 upgrade-dialog probes (#257), modelled on 2.32.0, where an unset
+# setting prints `null` and exits 0:
+#   STUB_KIRO_ENGINE         the value of chat.agentEngine; unset prints null
+#   STUB_KIRO_DEFAULT_ENGINE the engine `chat --help` calls the default (v2);
+#                            empty drops the --agent-engine line, as on a
+#                            kiro-cli with one engine
+#   STUB_KIRO_AUTO_UPGRADE   the value of chat.enableAutoAgentUpgrade; unset
+#                            prints null
 if [[ "${1:-}" == chat && "${2:-}" == --help ]]; then
   echo "Usage: kiro-cli-chat chat [OPTIONS] [INPUT]"
   echo "      --agent <AGENT>"
   [[ -n "${STUB_KIRO_NO_TUI:-}" ]] || echo "      --tui"
   echo "      --legacy-ui"
+  if [[ -n "${STUB_KIRO_DEFAULT_ENGINE-v2}" ]]; then
+    echo "      --agent-engine <ENGINE>"
+    echo "          Agent engine to use: \"v1\", \"${STUB_KIRO_DEFAULT_ENGINE-v2}\" (default), or \"v3\""
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == settings && "${*: -1}" == chat.agentEngine ]]; then
+  echo "cwd=$PWD" >> "${STUB_CALLS_DIR}/kiro-cli.engine-cwd"
+  if [[ -n "${STUB_KIRO_ENGINE+x}" ]]; then echo "\"$STUB_KIRO_ENGINE\""; else echo null; fi
+  exit 0
+fi
+if [[ "${1:-}" == settings && "${*: -1}" == chat.enableAutoAgentUpgrade ]]; then
+  echo "cwd=$PWD" >> "${STUB_CALLS_DIR}/kiro-cli.upgrade-cwd"
+  echo "${STUB_KIRO_AUTO_UPGRADE-null}"
   exit 0
 fi
 if [[ "${1:-}" == settings && "${*: -1}" == chat.disableTrustAllConfirmation ]]; then

@@ -23,7 +23,7 @@
 # kiro task-work copies, since the claude ones have no kiro agent to check.
 # shellcheck source=lib/kiro-agent.sh
 source "$AW_ROOT/lib/kiro-agent.sh"
-# --tui and the trust-all warning (#157).
+# --tui and the trust-all warning (#157), the V3 upgrade-dialog warning (#257).
 # shellcheck source=lib/kiro-launch.sh
 source "$AW_ROOT/lib/kiro-launch.sh"
 
@@ -100,9 +100,12 @@ aw_agent_validate_flags() { :; }
 # Also where the trust-all gate is flagged (#157): a warning, never a refusal,
 # and only when kiro-cli is actually dispatched — under --no-launch you start
 # it in the tab yourself. NO_LAUNCH is the body's, like MODEL and TRUST_ALL.
+# The V3 upgrade dialog (#257) is flagged the same way, trust-all or not.
 aw_agent_preflight() {
   aw_require_kiro_agent worker "$1" "task-init $2" || return 1
-  [[ -n "$TRUST_ALL" && -z "${NO_LAUNCH:-}" ]] && aw_kiro_warn_trust_gate "$1" "the worker"
+  [[ -n "${NO_LAUNCH:-}" ]] && return 0
+  [[ -n "$TRUST_ALL" ]] && aw_kiro_warn_trust_gate "$1" "the worker"
+  aw_kiro_warn_upgrade_gate "$1" "the worker"
   return 0
 }
 

@@ -189,12 +189,14 @@ _utf8_locale() {
   locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1
 }
 
-# A ~40KB file of the user's own, non-ASCII on every line.
-_big_utf8_file() {
+# ~40KB of the user's own text on stdout, non-ASCII on every line. Callers
+# redirect it: a `> /dev/stdout` inside would reopen, and on Linux truncate,
+# whatever file the caller's stdout is.
+_big_utf8_text() {
   local i
   for ((i = 0; i < 1000; i++)); do
     printf 'línea número %d — café ✓ notes of the house\n' "$i"
-  done > "$1"
+  done
 }
 
 _run_with_deadline() {
@@ -206,7 +208,7 @@ _run_with_deadline() {
 @test "a large UTF-8 CLAUDE.md is stripped promptly under a UTF-8 locale (#266)" {
   local loc; loc=$(_utf8_locale)
   [[ -n "$loc" ]] || skip "no UTF-8 locale installed"
-  _big_utf8_file "$MAIN_REPO/CLAUDE.md"
+  _big_utf8_text > "$MAIN_REPO/CLAUDE.md"
   printf '@.claude/gh-workflow.md\n' >> "$MAIN_REPO/CLAUDE.md"
 
   _run_with_deadline "$loc" "_la_strip_line '$MAIN_REPO' CLAUDE.md '@.claude/gh-workflow.md' apply import"
@@ -232,7 +234,7 @@ _run_with_deadline() {
   local doc="$MAIN_REPO/doc.md"
   {
     printf '%s\n' '<!-- task-init:managed:start -->' 'body' '<!-- task-init:managed:end -->'
-    _big_utf8_file /dev/stdout
+    _big_utf8_text
   } > "$doc"
 
   # Redirected, not piped: a pipeline would run the function in a subshell the

@@ -759,6 +759,19 @@ teardown() {
   refute_output --partial "trust-all confirmation"
 }
 
+# The V3 upgrade dialog holds the "Review PR …" turn too (#257), trust-all or not.
+@test "kiro task-reviewer: warns about the V3 upgrade dialog on V3 with the setting unset (#257)" {
+  run "$TASK_REVIEWER_KIRO" 42
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+  STUB_KIRO_ENGINE=v3 run "$TASK_REVIEWER_KIRO" 43 --no-trust-all
+  assert_success
+  assert_output --partial "the reviewer on its V3 engine and chat.enableAutoAgentUpgrade is"
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=false run "$TASK_REVIEWER_KIRO" 44
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+}
+
 # The model and the PR URL are spliced into the `bash -ic` payload, so both are
 # %q'd as task-work does (#157). Pinned by re-parsing the captured payload the
 # way the spawned shell does and reading back the argv kiro-cli would receive:

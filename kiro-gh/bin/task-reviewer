@@ -145,6 +145,8 @@ aw_require_kiro_agent reviewer "$REPO_ROOT" "task-init kiro-gh" || exit 1
 # and not under --no-launch, where nothing is dispatched and you start kiro-cli
 # in the tab yourself.
 [[ -n "$TRUST_ALL" && -z "$NO_LAUNCH" ]] && aw_kiro_warn_trust_gate "$REPO_ROOT" "the reviewer"
+# Same for the V3 engine's agent-config upgrade dialog (#257), trust-all or not.
+[[ -z "$NO_LAUNCH" ]] && aw_kiro_warn_upgrade_gate "$REPO_ROOT" "the reviewer"
 REPO_NAME=$(basename "$REPO_ROOT")
 WORKTREE_BASE="${REPO_ROOT}/../${REPO_NAME}-worktrees"
 

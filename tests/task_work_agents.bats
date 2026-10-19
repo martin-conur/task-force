@@ -398,6 +398,56 @@ _session_auto_submit() {
   [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
 }
 
+# The V3 engine's agent-config upgrade dialog holds a dispatched worker's first
+# turn the same way (#257), trust-all or not. It is chat.enableAutoAgentUpgrade:
+# unset prompts, either value skips it. Warned only when the launch runs on V3 —
+# the chat.agentEngine setting, else the default `chat --help` names.
+@test "kiro warns about the V3 upgrade dialog only on V3 with the setting unset (#257)" {
+  # Today's default engine (v2): no dialog, no warning.
+  run env AW_IMPL=kiro-gh "$TASK_WORK" v2-default
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+
+  # V3 by setting, upgrade setting unset: warn, name `false`, launch anyway.
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  STUB_KIRO_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" v3-setting
+  assert_success
+  assert_output --partial "the worker on its V3 engine and chat.enableAutoAgentUpgrade is"
+  assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade false"
+  assert_stub_called zellij "kiro-cli chat --agent worker"
+  # Both read from the repo root, so workspace-scoped settings count.
+  run sort -u "$STUB_CALLS_DIR/kiro-cli.engine-cwd" "$STUB_CALLS_DIR/kiro-cli.upgrade-cwd"
+  assert_output "cwd=$(cd "$MAIN_REPO" && pwd -P)"
+
+  # V3 as kiro-cli's own default (3.0), the engine setting unset.
+  STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" v3-default
+  assert_success
+  assert_output --partial "chat.enableAutoAgentUpgrade false"
+
+  # Either value of the setting skips the dialog, so neither warns.
+  for v in false true; do
+    STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=$v run env AW_IMPL=kiro-gh "$TASK_WORK" "v3-$v"
+    assert_success
+    refute_output --partial "chat.enableAutoAgentUpgrade"
+  done
+
+  # An explicit v2 setting beats a v3 default; a kiro-cli naming no default
+  # engine has nothing to warn about.
+  STUB_KIRO_ENGINE=v2 STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" v2-setting
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+  STUB_KIRO_DEFAULT_ENGINE= run env AW_IMPL=kiro-gh "$TASK_WORK" one-engine
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+}
+
+@test "kiro --no-launch neither warns about nor reads the V3 upgrade setting (#257)" {
+  STUB_KIRO_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-launch no-launch-v3
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+  [[ ! -e "$STUB_CALLS_DIR/kiro-cli.upgrade-cwd" ]]
+}
+
 @test "kiro -a / --trust-all passes --trust-all-tools to kiro-cli" {
   local flag
   for flag in -a --trust-all; do

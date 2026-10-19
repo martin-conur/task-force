@@ -84,6 +84,8 @@ Use the task title as prefix: `<Task title>: <short description>`
 - `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254)
 - `--auto` — accepted for symmetry with claude, and a no-op here: the permission model stays `-a/--trust-all` (#206), and auto-submit is already on
 
+Under kiro-cli's V3 engine (`chat.agentEngine = v3` today; kiro-cli's help calls v2 "the pre-3.0 default"), every dispatched kiro launch — `task-work`, `task-recreate-worker`, `task-reviewer` — would first stop at a dialog offering to upgrade your agent configs to the V3 format. Nobody answers it in a dispatched tab, so the first turn never runs. The launchers warn when the launch would run on V3 and `chat.enableAutoAgentUpgrade` is unset. Set it once with `kiro-cli settings chat.enableAutoAgentUpgrade false`. With `false` the radio hooks keep working under V3. `true`, or accepting the upgrade, rewrites `.kiro/agents/*.json` into a shape `task-init` cannot merge radio hooks into yet (#257).
+
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
 Examples:

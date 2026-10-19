@@ -654,6 +654,19 @@ dead_worker_symlinked_base() {
   assert_output --partial "TASK_FORCE_ROLE=$(role_for issue-42)"
 }
 
+# A rebuilt worker opens on the same positional first turn, so the V3 upgrade
+# dialog would hold it too (#257). Warned through the shared kiro preflight.
+@test "kiro: warns about the V3 upgrade dialog on V3, not under --no-launch (#257)" {
+  dead_worker issue-42
+  STUB_KIRO_ENGINE=v3 AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade false"
+  dead_worker issue-43
+  STUB_KIRO_ENGINE=v3 AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-43 --no-launch
+  assert_success
+  refute_output --partial "chat.enableAutoAgentUpgrade"
+}
+
 @test "kiro: refuses --resume rather than pretending to have a picker" {
   dead_worker issue-42
   AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42 --resume

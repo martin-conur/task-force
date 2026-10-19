@@ -258,8 +258,9 @@ _accept_recovered_role() {
 #
 # Worker / reviewer arm: task-work and task-reviewer write
 # `<worktree-base>/.<slug>.info` at tab creation and radio never touches its
-# SLUG (#188; register rewrites only a stale TAB_ID, #260), so its SLUG plus the main repo name reconstruct the role name the same
-# way those two binaries built it — `worker-<reponame>-<slug>`, or
+# SLUG (#188; register rewrites only a stale TAB_ID, #260), so its SLUG plus
+# the main repo name reconstruct the role name the same way those two
+# binaries built it — `worker-<reponame>-<slug>`, or
 # `reviewer-<reponame>-pr<N>` for a reviewer, whose tab slug is `review-pr<N>`
 # while its role says `pr<N>`. $ZELLIJ_TAB is the primary slug key (it IS the
 # slug, and is what _info_file_tab_id keys off) with basename(worktree) as the

@@ -42,7 +42,27 @@ setup() {
 }
 
 teardown() {
+  [[ -z "${NOJQ_PATH_DIR:-}" ]] || rm -rf "$NOJQ_PATH_DIR"
   teardown_all
+}
+
+# A PATH that is the current one with jq taken out: one directory of symlinks to
+# every command on $PATH except jq, first hit winning as it would on $PATH.
+# task-done needs git, the stubs and most of coreutils, so the bash+coreutils
+# make_nojq_bin is too small here.
+path_without_jq() {
+  local d dir f name
+  d=$(mktemp -d)
+  local IFS=:
+  for dir in $PATH; do
+    [[ -d "$dir" ]] || continue
+    for f in "$dir"/*; do
+      name=${f##*/}
+      [[ "$name" == jq || -e "$d/$name" || ! -x "$f" ]] && continue
+      ln -s "$f" "$d/$name"
+    done
+  done
+  printf '%s' "$d"
 }
 
 # Write a session file with the given TAB_ID= value (empty allowed) at the
@@ -321,8 +341,30 @@ zellij_close_calls() {
   run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_output --partial "could not list zellij tabs to confirm tab id=7"
+  assert_output --partial "list-tabs --json returned nothing parseable"
+  refute_output --partial "jq is not installed"
   run zellij_close_calls
   assert_output ""
   run cat "$TASK_FORCE_HOME/radio/log"
-  assert_output --partial "tab-close: id 7 unverified"
+  assert_output --partial "tab-close: id 7 unverified (list-tabs unreadable)"
+}
+
+@test "with jq missing the id is not closed, and the refusal says jq is why (#260)" {
+  # Fails closed exactly like an unreadable list-tabs, so the message has to say
+  # which it was or "jq is not installed" reads as "zellij is broken".
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 7
+  seed_tabs "7:$SLUG"   # would verify fine — if jq were there to read it
+  NOJQ_PATH_DIR=$(path_without_jq)
+  run env PATH="$NOJQ_PATH_DIR" bash -c 'command -v jq'
+  assert_failure
+
+  run env PATH="$NOJQ_PATH_DIR" AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "jq is not installed"
+  run zellij_close_calls
+  assert_output ""
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab-close: id 7 unverified (no-jq)"
 }

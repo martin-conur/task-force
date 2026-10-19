@@ -380,7 +380,18 @@ _la_workflow_doc_tail() {
   stub=$(_managed_tail_stub)
   # Strip the stub wherever it sits, then see whether anything is left.
   tail=${tail//"$stub"/}
-  printf '%s' "${tail//[[:space:]]/}"
+  if _la_has_content "$tail"; then printf '%s' "$tail"; fi
+}
+
+# _la_has_content <string>
+# True when <string> holds anything besides whitespace. Not
+# `[[ -n "${s//[[:space:]]/}" ]]`: bash 3.2's matcher is superlinear on a
+# bracket class under a multibyte locale, so over a file-sized string that
+# substitution never finishes (#266). A here-string rather than a pipe, because
+# `grep -q` exits on its first match and under the callers' pipefail the
+# SIGPIPE'd printf would make a non-blank file read as blank.
+_la_has_content() {
+  grep -q '[^[:space:]]' <<<"$1"
 }
 
 # Everything in tasks/ that is backlog rather than task-init scaffolding, one
@@ -596,7 +607,7 @@ _la_strip_line() {
 
   local remaining
   remaining=$(grep -vxF -- "$line" "$f" || true)
-  if [[ -z "${remaining//[[:space:]]/}" ]]; then
+  if ! _la_has_content "$remaining"; then
     if [[ "$mode" == apply ]]; then rm -f "$f"; fi
     if [[ "$mode" == plan ]]; then
       printf '  would remove %s (it held only the %s)\n' "$rel" "$what"

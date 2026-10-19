@@ -42,7 +42,27 @@ setup() {
 }
 
 teardown() {
+  [[ -z "${NOJQ_PATH_DIR:-}" ]] || rm -rf "$NOJQ_PATH_DIR"
   teardown_all
+}
+
+# A PATH that is the current one with jq taken out: one directory of symlinks to
+# every command on $PATH except jq, first hit winning as it would on $PATH.
+# task-done needs git, the stubs and most of coreutils, so the bash+coreutils
+# make_nojq_bin is too small here.
+path_without_jq() {
+  local d dir f name
+  d=$(mktemp -d)
+  local IFS=:
+  for dir in $PATH; do
+    [[ -d "$dir" ]] || continue
+    for f in "$dir"/*; do
+      name=${f##*/}
+      [[ "$name" == jq || -e "$d/$name" || ! -x "$f" ]] && continue
+      ln -s "$f" "$d/$name"
+    done
+  done
+  printf '%s' "$d"
 }
 
 # Write a session file with the given TAB_ID= value (empty allowed) at the
@@ -65,6 +85,19 @@ write_info_tab_id() {
   printf 'TAB_ID=%s\n' "$tab_id" >> "$WORKTREE_BASE/.$SLUG.info"
 }
 
+# Seed the zellij stub's list-tabs with one tab per "<id>:<name>" argument.
+# task-done reads it to confirm the tab at TAB_ID is still this worker's before
+# closing it (#260), so every test that expects a close has to say what tab
+# that id belongs to.
+seed_tabs() {
+  local entries='' pair
+  for pair in "$@"; do
+    [[ -z "$entries" ]] || entries+=','
+    entries+="{\"name\": \"${pair#*:}\", \"tab_id\": ${pair%%:*}}"
+  done
+  export STUB_ZELLIJ_TABS_JSON="[${entries}]"
+}
+
 # Returns the set of close-tab-flavored calls made against the zellij stub,
 # one per line.
 zellij_close_calls() {
@@ -79,6 +112,7 @@ zellij_close_calls() {
   export ZELLIJ=fake-session
   export TASK_FORCE_ROLE="$ROLE"
   write_session_file 7
+  seed_tabs "7:$SLUG"
 
   run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
@@ -107,7 +141,7 @@ zellij_close_calls() {
   # Seed the stub so list-tabs/list-panes would report a different,
   # currently-focused tab (id=99). With the bug, an unscoped `close-tab`
   # would have hit that one; with the fix, we still close 7.
-  export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":99}]'
+  seed_tabs "99:pm" "7:$SLUG"
   export STUB_ZELLIJ_PANES_JSON='[{"id":9900,"is_plugin":false,"is_focused":true,"tab_id":99}]'
 
   run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
@@ -190,6 +224,7 @@ zellij_close_calls() {
   # wiped to empty by a re-register, but $INFO_FILE still has the right id.
   write_info_tab_id 12
   write_session_file ""
+  seed_tabs "12:$SLUG"
 
   run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
@@ -206,6 +241,7 @@ zellij_close_calls() {
   export TASK_FORCE_ROLE="$ROLE"
   # Do NOT call write_info_tab_id — $INFO_FILE has BASE_BRANCH/SLUG only.
   write_session_file 7
+  seed_tabs "7:$SLUG"
 
   run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
@@ -217,9 +253,118 @@ zellij_close_calls() {
   export ZELLIJ=fake-session
   export TASK_FORCE_ROLE="$ROLE"
   write_info_tab_id 12
+  seed_tabs "12:$SLUG"
   # No write_session_file call → no radio session file on disk.
 
   run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
   assert_success
   assert_stub_called zellij "action close-tab-by-id 12"
+}
+
+# ---------------------------------------------------------------------------
+# A stale TAB_ID must not close somebody else's tab (#260)
+#
+# 2026-10-18: zellij restarted and renumbered its tabs. A worker resumed in
+# place kept its sidecar's TAB_ID=2; a new worker launched afterwards got id 2;
+# the old worker's task-done then closed the new worker's tab by that id. A tab
+# id is only valid within one zellij server's lifetime, so task-done now checks
+# the name of the tab at that id before acting on it.
+# ---------------------------------------------------------------------------
+
+@test "a stale TAB_ID naming another worker's tab is not closed (#260)" {
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 2
+  # Our own tab came back as id 1; id 2 is now an unrelated worker's.
+  seed_tabs "1:⏸️ $SLUG" "2:▶️ model-defaults"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "Not closing zellij tab id=2: it is now '▶️ model-defaults', not '$SLUG'"
+  # Cleanup itself still completes.
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+  run zellij_close_calls
+  assert_output ""
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab-close: id 2 is now ▶️ model-defaults, not $SLUG"
+}
+
+@test "an emoji-prefixed name of this worker's own slug still matches (#260)" {
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 4
+  seed_tabs "4:⏸️ $SLUG"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_stub_called zellij "action close-tab-by-id 4"
+}
+
+@test "a tab whose name merely ends in the slug's characters is not ours (#260)" {
+  # Match on the space-delimited tail, not on a raw suffix: `not-my-feature`
+  # ends in `my-feature` but belongs to a different worker.
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 5
+  seed_tabs "5:▶️ not-$SLUG"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "Not closing zellij tab id=5"
+  run zellij_close_calls
+  assert_output ""
+}
+
+@test "a TAB_ID no tab holds any more is not closed (#260)" {
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 9
+  seed_tabs "1:pm" "2:$SLUG"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "no tab has id=9 any more"
+  run zellij_close_calls
+  assert_output ""
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab-close: id 9 is gone"
+}
+
+@test "an id that cannot be verified (list-tabs returns nothing) is not closed (#260)" {
+  # Refusing is the safe direction: a tab left open costs a keystroke, closing
+  # the wrong one kills a session.
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 7
+  unset STUB_ZELLIJ_TABS_JSON
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "could not list zellij tabs to confirm tab id=7"
+  assert_output --partial "list-tabs --json returned nothing parseable"
+  refute_output --partial "jq is not installed"
+  run zellij_close_calls
+  assert_output ""
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab-close: id 7 unverified (list-tabs unreadable)"
+}
+
+@test "with jq missing the id is not closed, and the refusal says jq is why (#260)" {
+  # Fails closed exactly like an unreadable list-tabs, so the message has to say
+  # which it was or "jq is not installed" reads as "zellij is broken".
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$ROLE"
+  write_info_tab_id 7
+  seed_tabs "7:$SLUG"   # would verify fine — if jq were there to read it
+  NOJQ_PATH_DIR=$(path_without_jq)
+  run env PATH="$NOJQ_PATH_DIR" bash -c 'command -v jq'
+  assert_failure
+
+  run env PATH="$NOJQ_PATH_DIR" AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "jq is not installed"
+  run zellij_close_calls
+  assert_output ""
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "tab-close: id 7 unverified (no-jq)"
 }

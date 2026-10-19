@@ -80,6 +80,42 @@ aw_zellij_tab_id_miss_reason() {
   echo "no-match no tab named \"$target\" (${#target} chars) in list-tabs; names seen: $names"
 }
 
+# Name of the tab that holds <tab_id> right now (#260). The read half of the
+# check task-done makes before `close-tab-by-id`: an id is only valid within one
+# zellij server's lifetime, so after a restart a sidecar's TAB_ID can name an
+# unrelated tab, and closing it closes that tab. Protocol:
+#   rc 0 + name : a tab has that id; this is its visible name
+#   rc 0 + ""   : list-tabs answered and no tab has that id
+#   rc 2 + ""   : could not ask (jq missing, non-numeric id, list-tabs empty or
+#                 unparseable) — the caller cannot tell "ours" from "not ours"
+aw_zellij_tab_name_by_id() {
+  local id="$1" tabs
+  case "$id" in ''|*[!0-9]*) return 2 ;; esac
+  command -v jq >/dev/null 2>&1 || return 2
+  tabs=$(zellij action list-tabs --json 2>/dev/null || true)
+  printf '%s' "$tabs" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
+  printf '%s' "$tabs"     | jq -r --argjson t "$id" '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
+}
+
+# True when tab name <name> belongs to <slug>: the bare slug, or the slug after
+# a space-separated prefix. radio paints `⏸️ <slug>` / `▶️ <slug>` / `❓︎ <slug>`
+# (#140), and matching on the space-delimited tail rather than on that exact
+# list keeps a prefix added later from turning every teardown into a refusal —
+# while `other-<slug>` still does not pass for `<slug>`.
+aw_tab_name_is_slug() {
+  local name="$1" slug="$2"
+  [[ -n "$slug" ]] || return 1
+  [[ "$name" == "$slug" || "$name" == *" $slug" ]]
+}
+
+# Append one line to radio's log, the place every tab-binding diagnosis lands
+# (`tab-id:` at capture, `tab-close:` at teardown). Never fails the caller.
+aw_radio_log() {
+  local log_file="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/log"
+  mkdir -p "$(dirname "$log_file")" 2>/dev/null || return 0
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$log_file" 2>/dev/null || true
+}
+
 # Resolve <slug>'s tab_id and append TAB_ID= to <info_file> (#117). On a miss,
 # say so on stderr at the moment it happens and append a `tab-id:` line to
 # radio's log (#242): before this the miss was silent, and its only symptom was
@@ -107,11 +143,8 @@ aw_record_tab_id() {
     echo "  has one, task-done will skip closing this tab — close it by hand then."
     echo "  Logged to $log_file (grep 'tab-id:')."
   } >&2
-  if mkdir -p "$(dirname "$log_file")" 2>/dev/null; then
-    printf '%s tab-id: %s capture missed slug=%s reason=%s info=%s detail=%s\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$caller" "$slug" "$code" "$info_file" "${reason#* }" \
-      >> "$log_file" 2>/dev/null || true
-  fi
+  aw_radio_log "$(printf 'tab-id: %s capture missed slug=%s reason=%s info=%s detail=%s' \
+    "$caller" "$slug" "$code" "$info_file" "${reason#* }")"
   return 0
 }
 

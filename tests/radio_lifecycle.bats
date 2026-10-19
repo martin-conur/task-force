@@ -1168,3 +1168,70 @@ _queue_offline() {
   assert_output --partial "tab_id= tab_id_src=none"
   assert_output --partial "no tab binding for worker-foo"
 }
+
+# ----- register keeps task-work's sidecar TAB_ID in step (#260) --------------
+#
+# After a zellij restart renumbers tabs, the documented hand repair is
+# `radio register --role … --tab …` from the role's own tab. It rebound radio's
+# session file and left `<worktree-base>/.<slug>.info` naming the old id — the
+# id task-done closes by. On 2026-10-18 that id belonged to a newly launched
+# worker by teardown time, and task-done closed that worker's tab.
+
+@test "a register that resolves the tab live from zellij rewrites a stale sidecar TAB_ID (#260)" {
+  setup_repo
+  setup_stubs
+  setup_worktree w-foo
+  printf 'TAB_ID=%s\n' 2 >> "$WORKTREE_BASE/.w-foo.info"
+  # Post-restart: our tab is id 1 now, id 2 is someone else's.
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"⏸️ w-foo","tab_id":1},{"name":"▶️ model-defaults","tab_id":2}]'
+
+  # The hand repair, painted tab name and all.
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && ZELLIJ=fake '$RADIO' register --role worker-foo --tab '⏸️ w-foo' --repo '$WORKTREE_BASE/w-foo' --agent claude --loadout claude-gh"
+  assert_success
+  run grep -c '^TAB_ID=' "$WORKTREE_BASE/.w-foo.info"
+  assert_output "1"
+  run grep '^TAB_ID=' "$WORKTREE_BASE/.w-foo.info"
+  assert_output "TAB_ID=1"
+  # The rest of the sidecar is untouched.
+  run cat "$WORKTREE_BASE/.w-foo.info"
+  assert_output --partial "SLUG=w-foo"
+  assert_output --partial "BASE_BRANCH=main"
+  run cat "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  assert_output --partial "TAB_ID=1"
+  run cat "$TASK_FORCE_HOME/radio/log"
+  assert_output --partial "rewrote \$INFO_FILE TAB_ID=2 -> 1 for worker-foo"
+}
+
+@test "a register never ADDS a TAB_ID to a sidecar that has none (#260)" {
+  # No TAB_ID line means a launcher is about to write one — task-work's capture,
+  # or task-recreate-worker between its strip and its rebind (#218). An append
+  # here would race theirs and leave two lines.
+  setup_repo
+  setup_stubs
+  setup_worktree w-foo
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"w-foo","tab_id":1}]'
+
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && ZELLIJ=fake '$RADIO' register --role worker-foo --tab w-foo --repo '$WORKTREE_BASE/w-foo' --agent claude --loadout claude-gh"
+  assert_success
+  run grep -c '^TAB_ID=' "$WORKTREE_BASE/.w-foo.info"
+  assert_output "0"
+}
+
+@test "a register whose zellij lookup misses leaves the sidecar TAB_ID alone (#260)" {
+  # Only a live hit is the current server's truth. A preserved or info-file id
+  # is exactly the possibly-stale value the rewrite exists to replace.
+  setup_repo
+  setup_stubs
+  setup_worktree w-foo
+  printf 'TAB_ID=%s\n' 2 >> "$WORKTREE_BASE/.w-foo.info"
+  # A prior session file whose TAB_ID (5) differs, so the miss takes the
+  # preserve branch with a value a wrongly-unguarded rewrite would copy over.
+  mkdir -p "$TASK_FORCE_HOME/radio/sessions"
+  printf 'ROLE=worker-foo\nTAB=w-foo\nTAB_ID=5\nSTATE=idle\n' > "$TASK_FORCE_HOME/radio/sessions/worker-foo.info"
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":1}]'
+
+  run bash -c "cd '$WORKTREE_BASE/w-foo' && ZELLIJ=fake '$RADIO' register --role worker-foo --tab w-foo --repo '$WORKTREE_BASE/w-foo' --agent claude --loadout claude-gh"
+  assert_success
+  run grep '^TAB_ID=' "$WORKTREE_BASE/.w-foo.info"
+  assert_output "TAB_ID=2"
+}

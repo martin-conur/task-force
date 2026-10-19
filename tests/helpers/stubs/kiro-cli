@@ -2,6 +2,9 @@
 # Stub for kiro-cli — records all invocations, silently succeeds.
 echo "kiro-cli $*" >> "${STUB_CALLS_DIR}/kiro-cli.calls"
 echo "TASK_FORCE_ROLE=${TASK_FORCE_ROLE:-} ZELLIJ_TAB=${ZELLIJ_TAB:-} TASK_FORCE_PM_ROLE=${TASK_FORCE_PM_ROLE:-} TASK_FORCE_AUTO_SUBMIT=${TASK_FORCE_AUTO_SUBMIT:-}" >> "${STUB_CALLS_DIR}/kiro-cli.env"
+# The radio home it was started with, `<unset>` when none (#262). Its own file:
+# kiro-cli.env lines are matched whole by existing tests.
+echo "TASK_FORCE_HOME=${TASK_FORCE_HOME-<unset>}" >> "${STUB_CALLS_DIR}/kiro-cli.home"
 
 # The two probes the launchers make before a launch (#157). Modelled on
 # kiro-cli 2.29.1; each knob reproduces the other state.

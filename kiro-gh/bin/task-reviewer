@@ -272,6 +272,9 @@ TASK_FORCE_ROLE_VALUE="reviewer-${REPO_NAME}-pr${PR_NUMBER}"
 RADIO_ENV_PREFIX="TASK_FORCE_ROLE=$(printf %q "$TASK_FORCE_ROLE_VALUE") "
 RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
+# Forward a scratch radio home into the tab, which would otherwise start from
+# the zellij server's env and register in the real ~/.task-force (#262).
+RADIO_ENV_PREFIX+="$(aw_radio_home_env_prefix)"
 # Match the claude-variant convention: dispatched-with-trust-all reviewers
 # opt into radio's CR auto-submit wake-up so PM pings process without a
 # manual Enter (task-work does the same for every worker since #254 — see

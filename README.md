@@ -596,6 +596,8 @@ Single-quoting `-b '…'` is not the fix — prose contains apostrophes, and the
 
 Role names are addressable strings, not free-form: the PM is `pm-<reponame>` (per-repo since #165, so two repos' PMs never collide), and each worker is `worker-<reponame>-<slug>` (e.g. `worker-task-force-issue-42`). List live ones with `ls ~/.task-force/radio/sessions/`. Workers always send `--to pm`; radio resolves it to the right `pm-<reponame>` using the injected `$TASK_FORCE_PM_ROLE` (or the sender's own identity). One PM can oversee several repos with `task-pm --also <repo>`, which aliases `pm-<other>` into its single inbox.
 
+All of radio's state (sessions, mailboxes, the log) lives under `$TASK_FORCE_HOME`, which defaults to `~/.task-force`. Point it at a scratch directory to probe or test without touching live roles. A new zellij tab starts from the zellij **server's** environment, not the shell that ran the launcher, so `task-work`, `task-reviewer` (claude and kiro) and `task-recreate-worker` put a set `TASK_FORCE_HOME` on the tab's command (`aw_radio_home_env_prefix` in `lib/zellij-tab.sh`). Before #262 they did not: the launcher logged to the scratch home while the agent it started registered in the real one, and a probe whose role name matched a live worker would have overwritten that worker's session file. `task-pm` execs in place and inherits the variable. When it is unset, nothing is added and the default applies.
+
 ### Command surface
 
 | Command | What it does |

@@ -410,11 +410,25 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
 
 **No model writes any of it.** Every value is read from radio's state, task-work's sidecars, the tracker or the forge. A gh or local item is described by its issue or task-file title and the first paragraph of its body; a jira or notion item is `PROJ-42 · <slug>` until its PR exists, because the shell cannot read those trackers. Once a PR exists, its title and `## Summary` take over on every tracker.
 
-**In flight** is every worktree whose `.<slug>.info` sidecar exists — not every fresh heartbeat, so a resumed or roleless worker still shows — with its session state, its PR and a status word (`implementing`, `pr-open`, `under-review`, `changes-requested`, `re-review`, `waiting-merge`, `merged`) derived from the latest review intent. **Next** is the PM's queue, else the tracker's backlog. **Done** is the merged PRs that delivered an item in the last 24 hours, or the last 10, whichever is more; merged PRs are fetched once and cached for good.
+**In flight** is every worktree whose `.<slug>.info` sidecar exists — not every fresh heartbeat, so a resumed or roleless worker still shows — with its session state, its PR and a status word (`implementing`, `pr-open`, `under-review`, `changes-requested`, `re-review`, `waiting-merge`, `merged`) derived from the latest review intent. **Next** is the PM's queue, written with [`task-monitor-queue`](#task-monitor-queue--the-pms-queue), else the tracker's backlog. **Done** is the merged PRs that delivered an item in the last 24 hours, or the last 10, whichever is more; merged PRs are fetched once and cached for good.
 
 **Attention** fires on exactly three signals and nothing else: an unread PM inbox (`--also` aliases count toward the primary), a finished review on a still-open PR the PM has not answered, and a worker in `awaiting`. The third is claude-only for now: only the claude loadouts wire `radio awaiting`.
 
 `--local` exists so a front end can refresh on every filesystem event without waiting on GitHub: it shadows `gh` with a function that fails, so every forge read falls back to the cache under `$TASK_FORCE_HOME/monitor/<repo>/`. The schema (`"schema": 1`) is documented in [`docs/task-monitor-schema.md`](docs/task-monitor-schema.md), with a full example beside it.
+
+### `task-monitor-queue` — the PM's queue
+
+**Next** is a short ordered list the PM writes when it and the user agree on what comes next (#275). Writing it is the PM's only board cost, so each call answers with one line and the PM never reads it back:
+
+```bash
+task-monitor-queue set 267 266 180 --note 267="kiro hooks first"   # replace, in order
+task-monitor-queue add 290                                         # append
+task-monitor-queue rm 266                                          # drop
+task-monitor-queue clear                                           # empty
+task-monitor-queue                                                 # show it
+```
+
+A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page URL, a task file name. Refs are compared by their last path segment, ignoring a URL's query string and fragment, so `267`, `#267` and `…/issues/267` are one item, and so are a Notion page URL with and without `?pvs=4`. That is what lets `task-work` drop the ref it dispatches from the queue whatever form the PM queued it in, so a dispatched item never comes back as "next" after it lands. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears it. `--note` splits on the first `=`, so a ref containing `=` cannot take a note, and `--` goes before a ref that starts with `-`. The file is `$TASK_FORCE_HOME/monitor/<repo>/queue`, one ref per line with an optional tab-separated note, and `task-monitor-queue` owns that format.
 
 ## `task-monitor` — the board, live
 
@@ -430,7 +444,7 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
  ↑↓ move  ⏎ expand  o open PR/issue  t jump to tab  a all repos  q quit
 ```
 
-- **Real time without waiting on GitHub.** A change under `$TASK_FORCE_HOME/radio` (sessions, mailboxes), `$TASK_FORCE_HOME/monitor` (the PM queue, the forge cache) or a repo's worktree base (a `.<slug>.info` sidecar appearing or going) triggers a `--local` snapshot, debounced. Forge state comes from a full snapshot every 45 seconds (`--poll SECS`, 30-600).
+- **Real time without waiting on GitHub.** A change under `$TASK_FORCE_HOME/radio` (sessions, mailboxes), `$TASK_FORCE_HOME/monitor` (the PM queue that `task-monitor-queue` writes, the forge cache) or a repo's worktree base (a `.<slug>.info` sidecar appearing or going) triggers a `--local` snapshot, debounced. Forge state comes from a full snapshot every 45 seconds (`--poll SECS`, 30-600).
 - **Never blank.** A snapshot that fails or times out leaves the last good one on screen; the header says `stale <age>` and the footer says why. `forge <age>` means disk state is current but PR state is from the last full run.
 - **Keys.** `↑↓` move, `⏎` expand a done item to its full PR body (scrollable) or enter a repo from the overview, `o` open the PR or issue, `t` jump to the item's zellij tab (the worker's; the PM's for a queued or done item, or for an overview row), `a` toggle the overview, `q` quit.
 - **`t` stays in this zellij session.** Each overview row names its repo's zellij session; `zellij action` cannot switch sessions, so a tab elsewhere is named, not attempted. Within the session, `t` goes to the recorded `TAB_ID` only while that tab still bears the item's name, the check `task-done` makes before it closes a tab (#260).

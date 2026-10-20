@@ -303,7 +303,29 @@ session, and goes to a tab only while the tab at the recorded id still bears the
 item's name, the check `task-done` makes before closing one (#260). It holds no
 task-force logic: every value is a snapshot field. Build it from the task-force
 checkout with `cargo build --release --manifest-path monitor/Cargo.toml`
-(`install.sh` does not build it yet; #277).
+(`install.sh` does not build it yet; #277). Its Next section is the queue the
+PM writes with `task-monitor-queue`, below, else the tracker's backlog.
+
+`task-monitor-queue` — the PM's short-term queue, the board's **Next** (#275)
+
+The PM writes it when it and the user agree on what comes next. Each call
+answers with one line, and the PM never reads it back: that is its whole board
+cost. `task-work` takes the ref it dispatches off the queue itself, so nobody
+has to `rm` a dispatched item.
+
+```bash
+task-monitor-queue set <ref>... [--note <ref>=<text>]   # replace, in order
+task-monitor-queue add <ref>...                         # append
+task-monitor-queue rm <ref>...                          # drop
+task-monitor-queue clear                                # empty
+task-monitor-queue                                      # show it
+```
+
+Refs are compared by their last path segment, ignoring a URL's query string
+and fragment, so `267`, `#267` and an issue URL ending in `/issues/267` are one
+item. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears
+it. `--note` splits on the first `=`, so a ref that contains `=` cannot take a
+note.
 
 ### PM ↔ worker messaging (radio)
 

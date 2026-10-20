@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-monitor-queue — the PM's short-term queue: what comes next in this repo
+# (#275, epic #272 3/6).
+#
+# The PM writes it when the user and the PM agree on what comes next, and
+# task-monitor-snapshot reads it as the board's "Next" section. Writing it is
+# the PM's only board cost, so every write answers with one short line and the
+# PM never has to read the file back.
+#
+# This command owns the queue file's format. The file is
+# ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue, <repo> being the
+# sanitized main-repo name (the same directory the snapshot caches in). One
+# tracker ref per line, in order, with an optional one-line note after a tab.
+# Blank lines and `#` comments are ignored on read and never written.
+#
+# Refs are compared by key, not by spelling: leading `#`s, a URL's query
+# string and fragment, and any URL or path prefix are dropped, so `267`,
+# `#267` and .../issues/267 are one item, as are tasks/012-x.md and 012-x.md. That is what lets task-work drop the ref it
+# dispatches (`rm --quiet <its ref>`) whatever form the PM queued it in.
+#
+# Must run on /bin/bash 3.2: no associative arrays, no mapfile.
+
+# Resolve own path through symlinks -> AW_ROOT.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: task-monitor-queue [show]
+       task-monitor-queue set <ref>... [--note <ref>=<text>]...
+       task-monitor-queue add <ref>... [--note <ref>=<text>]...
+       task-monitor-queue rm <ref>... [--quiet]
+       task-monitor-queue clear
+       (every form also takes --repo DIR)
+
+The PM's short-term queue for this repo: the "Next" section of task-monitor.
+
+  show    print the queue, one item per line (the default)
+  set     replace the queue with <ref>... in that order. A ref that was
+          already queued keeps its note unless --note gives a new one
+  add     append <ref>... to the end; a ref already queued keeps its place
+          and only takes the new note, if one is given
+  rm      drop <ref>...; a ref that is not queued is ignored
+  clear   empty the queue
+
+  --note <ref>=<text>  a one-line note for <ref>, which must be one of the
+                       refs given or already queued. An empty text clears it.
+                       It splits on the first `=`, so a ref that itself
+                       contains `=` cannot take a note
+  --quiet              print nothing on success
+  --repo DIR           the repo containing DIR instead of $PWD
+
+A ref is a tracker ref: an issue number, a URL, a Jira key, a task file.
+`267`, `#267` and .../issues/267 name the same item; a URL's query string
+and fragment are ignored. Put `--` before a ref that starts with `-`.
+
+Writes ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue.
+EOF
+  exit "${1:-0}"
+}
+
+CMD=show
+case "${1:-}" in
+  show|set|add|rm|clear) CMD="$1"; shift ;;
+  -h|--help|help) usage 0 ;;
+esac
+
+ARGS=()
+NOTE_ARGS=()
+QUIET=0
+REPO_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --note)
+      [[ $# -ge 2 ]] || { echo "Error: --note requires <ref>=<text>" >&2; exit 2; }
+      [[ "$2" == ?*=* ]] || { echo "Error: --note takes <ref>=<text>, got: $2" >&2; exit 2; }
+      NOTE_ARGS+=("$2"); shift 2 ;;
+    --quiet) QUIET=1; shift ;;
+    --repo)
+      [[ $# -ge 2 ]] || { echo "Error: --repo requires a value" >&2; exit 2; }
+      REPO_ARG="$2"; shift 2 ;;
+    -h|--help) usage 0 ;;
+    --) shift; ARGS+=("$@"); break ;;
+    -*) echo "Error: unknown option: $1" >&2; usage 2 >&2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+case "$CMD" in
+  show|clear)
+    [[ ${#ARGS[@]} -eq 0 ]] || { echo "Error: $CMD takes no refs" >&2; exit 2; } ;;
+  set|add|rm)
+    [[ ${#ARGS[@]} -gt 0 ]] || { echo "Error: $CMD needs at least one ref" >&2; exit 2; } ;;
+esac
+if [[ ${#NOTE_ARGS[@]} -gt 0 && "$CMD" != set && "$CMD" != add ]]; then
+  echo "Error: --note goes with set or add" >&2
+  exit 2
+fi
+
+ROOT=$(aw_main_repo_root "${REPO_ARG:-$PWD}") \
+  || { echo "Error: not in a git repo: ${REPO_ARG:-$PWD}" >&2; exit 1; }
+QUEUE="${TASK_FORCE_HOME:-$HOME/.task-force}/monitor/$(aw_main_repo_name "$ROOT")/queue"
+
+# ----- helpers --------------------------------------------------------------
+
+# A ref with every leading `#` gone. One would be enough for `#267`, but the
+# stored form must never start with `#`: the reader skips such a line as a
+# comment, so `##5` kept as `#5` would vanish from the queue.
+_strip_hashes() {
+  local r="$1"
+  while [[ "$r" == '#'* ]]; do r="${r#\#}"; done
+  printf '%s' "$r"
+}
+
+# The identity a ref is compared by: no leading `#`, no query string or
+# fragment, no trailing `/`, and only the last path segment of a URL or a path.
+# So a Notion page URL and the same URL with `?pvs=4` are one item.
+_key() {
+  local k
+  k=$(_strip_hashes "$1")
+  k="${k%%\?*}"
+  k="${k%%#*}"
+  k="${k%/}"
+  printf '%s' "${k##*/}"
+}
+
+# A ref goes on one line before a tab, so it may hold neither whitespace nor
+# be empty.
+_check_ref() {
+  [[ -n "$(_strip_hashes "$1")" ]] || { echo "Error: empty ref" >&2; exit 2; }
+  case "$1" in
+    *[[:space:]]*) echo "Error: a ref cannot contain whitespace: $1" >&2; exit 2 ;;
+  esac
+}
+
+# A note is one line: tabs and newlines become spaces.
+_clean_note() {
+  printf '%s' "$1" | tr '\t\n\r' '   '
+}
+
+# The current queue, as parallel arrays.
+REFS=()
+NOTES=()
+if [[ -f "$QUEUE" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    REFS+=("${line%%$'\t'*}")
+    if [[ "$line" == *$'\t'* ]]; then NOTES+=("${line#*$'\t'}"); else NOTES+=(""); fi
+  done < "$QUEUE"
+fi
+
+# Index of <ref> in REFS by key, or nothing.
+_index_of() {
+  local k i
+  k=$(_key "$1")
+  for ((i = 0; i < ${#REFS[@]}; i++)); do
+    if [[ "$(_key "${REFS[$i]}")" == "$k" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Read-modify-write with no lock: a PM `set` racing task-work's `rm` can lose
+# one of the two updates. Accepted: the window is milliseconds, and the PM, the
+# only real writer, re-runs `set` whenever the agreed order changes anyway.
+_write() {
+  local i dir tmp
+  if [[ ${#REFS[@]} -eq 0 ]]; then
+    rm -f "$QUEUE"
+    return 0
+  fi
+  dir=$(dirname "$QUEUE")
+  mkdir -p "$dir"
+  tmp="$QUEUE.tmp.$$"
+  : > "$tmp"
+  for ((i = 0; i < ${#REFS[@]}; i++)); do
+    if [[ -n "${NOTES[$i]}" ]]; then
+      printf '%s\t%s\n' "${REFS[$i]}" "${NOTES[$i]}" >> "$tmp"
+    else
+      printf '%s\n' "${REFS[$i]}" >> "$tmp"
+    fi
+  done
+  mv -f "$tmp" "$QUEUE"
+}
+
+# The one line a write answers with: the new order, refs only.
+_summary() {
+  [[ "$QUIET" == 1 ]] && return 0
+  if [[ ${#REFS[@]} -eq 0 ]]; then
+    echo "queue: (empty)"
+  else
+    echo "queue: ${REFS[*]}"
+  fi
+}
+
+# Apply every --note to REFS / NOTES. Each must name a queued ref.
+_apply_notes() {
+  local n ref i
+  [[ ${#NOTE_ARGS[@]} -gt 0 ]] || return 0
+  for n in "${NOTE_ARGS[@]}"; do
+    ref="${n%%=*}"
+    if ! i=$(_index_of "$ref"); then
+      echo "Error: --note names $ref, which is not in the queue" >&2
+      exit 2
+    fi
+    NOTES[i]=$(_clean_note "${n#*=}")
+  done
+}
+
+# ----- commands -------------------------------------------------------------
+
+case "$CMD" in
+  show)
+    if [[ ${#REFS[@]} -eq 0 ]]; then
+      [[ "$QUIET" == 1 ]] || echo "queue: (empty)"
+      exit 0
+    fi
+    for ((i = 0; i < ${#REFS[@]}; i++)); do
+      if [[ -n "${NOTES[$i]}" ]]; then
+        printf '%d  %s  %s\n' "$((i + 1))" "${REFS[$i]}" "${NOTES[$i]}"
+      else
+        printf '%d  %s\n' "$((i + 1))" "${REFS[$i]}"
+      fi
+    done
+    ;;
+  set)
+    OLD_REFS=("${REFS[@]+"${REFS[@]}"}")
+    OLD_NOTES=("${NOTES[@]+"${NOTES[@]}"}")
+    REFS=()
+    NOTES=()
+    for ref in "${ARGS[@]}"; do
+      _check_ref "$ref"
+      _index_of "$ref" >/dev/null && continue
+      note=""
+      for ((i = 0; i < ${#OLD_REFS[@]}; i++)); do
+        if [[ "$(_key "${OLD_REFS[$i]}")" == "$(_key "$ref")" ]]; then
+          note="${OLD_NOTES[$i]}"
+          break
+        fi
+      done
+      REFS+=("$(_strip_hashes "$ref")")
+      NOTES+=("$note")
+    done
+    _apply_notes
+    _write
+    _summary
+    ;;
+  add)
+    for ref in "${ARGS[@]}"; do
+      _check_ref "$ref"
+      _index_of "$ref" >/dev/null && continue
+      REFS+=("$(_strip_hashes "$ref")")
+      NOTES+=("")
+    done
+    _apply_notes
+    _write
+    _summary
+    ;;
+  rm)
+    for ref in "${ARGS[@]}"; do
+      [[ -n "$ref" ]] || continue
+      i=$(_index_of "$ref") || continue
+      KEEP_REFS=()
+      KEEP_NOTES=()
+      for ((j = 0; j < ${#REFS[@]}; j++)); do
+        [[ "$j" -eq "$i" ]] && continue
+        KEEP_REFS+=("${REFS[$j]}")
+        KEEP_NOTES+=("${NOTES[$j]}")
+      done
+      REFS=("${KEEP_REFS[@]+"${KEEP_REFS[@]}"}")
+      NOTES=("${KEEP_NOTES[@]+"${KEEP_NOTES[@]}"}")
+    done
+    _write
+    _summary
+    ;;
+  clear)
+    REFS=()
+    NOTES=()
+    _write
+    _summary
+    ;;
+esac

@@ -135,8 +135,8 @@ that PR:
 
 - `source: "queue"`: the PM's queue, in its order. It is read from
   `${TASK_FORCE_HOME}/monitor/<name>/queue`, one ref per line, with an optional
-  tab-separated note and `#` comments. The command that writes this file is
-  #272's sub-issue 3, which owns the format.
+  tab-separated note and `#` comments. `task-monitor-queue` (#275) writes this
+  file and owns the format; `task-work` drops the ref it dispatches from it.
 - `source: "tracker"`: the queue is empty, so the tracker's fallback is used.
   - **gh**: open issues on the configured project whose status is none of the
     three in the workflow doc (starting work, in review, done), compared

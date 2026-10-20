@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
+use crate::refresh::Mode;
 use crate::snapshot::{Repo, Snapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,17 @@ pub enum Action {
         name: String,
         session: Option<String>,
     },
+}
+
+/// What [`App::offer`] did with a snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offer {
+    /// A newer one is on screen.
+    Rejected,
+    Taken,
+    /// Taken, but its disk state is older than what it replaced: run a
+    /// local refresh to bring that back.
+    TakenNeedsLocal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,9 +79,10 @@ pub struct Freshness {
 
 pub struct App {
     pub snapshot: Option<Snapshot>,
-    /// When the collector run behind `snapshot` started; a slower run that
-    /// started earlier never replaces it.
+    /// When the collector run behind `snapshot` started, and its kind. See
+    /// [`App::superseded`] for which results replace it.
     pub snapshot_started: Option<Instant>,
+    snapshot_mode: Option<Mode>,
     pub freshness: Freshness,
     pub view: View,
     /// The repo view's last repo, so `a` toggles back to it.
@@ -90,6 +103,7 @@ impl App {
         App {
             snapshot: None,
             snapshot_started: None,
+            snapshot_mode: None,
             freshness: Freshness::default(),
             view: if in_repo {
                 View::Repo(String::new())
@@ -105,14 +119,37 @@ impl App {
         }
     }
 
-    /// Take a new snapshot unless a run that started later already landed.
-    /// Returns whether it was taken.
-    pub fn offer(&mut self, started: Instant, snap: Snapshot, now: DateTime<Utc>) -> bool {
-        if self.snapshot_started.is_some_and(|s| s > started) {
+    /// Whether the outcome of a `mode` run that started at `started` is
+    /// older news than the snapshot on screen. A run that started later
+    /// wins, except that a full run is never superseded by a local one: a
+    /// local run cannot ask the forge, so its PR state is only the cache
+    /// the full run is about to refresh. With heartbeats rewriting session
+    /// files all the time, a local run landing mid-full-run is the normal
+    /// case, and a plain start-time rule would drop every full result.
+    fn superseded(&self, started: Instant, mode: Mode) -> bool {
+        let Some(shown) = self.snapshot_started else {
             return false;
+        };
+        shown > started && !(mode == Mode::Full && self.snapshot_mode == Some(Mode::Local))
+    }
+
+    /// Take a run's snapshot unless it is superseded.
+    pub fn offer(
+        &mut self,
+        started: Instant,
+        mode: Mode,
+        snap: Snapshot,
+        now: DateTime<Utc>,
+    ) -> Offer {
+        if self.superseded(started, mode) {
+            return Offer::Rejected;
         }
+        // A full run older than the local data it replaces read disk before
+        // that local run did: right for the forge, behind on disk.
+        let behind = self.snapshot_started.is_some_and(|shown| shown > started);
         self.snapshot = Some(snap);
         self.snapshot_started = Some(started);
+        self.snapshot_mode = Some(mode);
         self.freshness.received_at = Some(now);
         self.freshness.error = None;
         // The empty name means "the current repo", fixed on the first snapshot.
@@ -121,11 +158,19 @@ impl App {
             self.view = first.map(View::Repo).unwrap_or(View::Overview);
         }
         self.reselect();
-        true
+        if behind {
+            Offer::TakenNeedsLocal
+        } else {
+            Offer::Taken
+        }
     }
 
-    pub fn failed(&mut self, now: DateTime<Utc>, why: String) {
-        self.freshness.error = Some((now, why));
+    /// Mark the screen stale for a failed run, unless the screen already
+    /// shows something newer than that run could have.
+    pub fn failed(&mut self, started: Instant, mode: Mode, now: DateTime<Utc>, why: String) {
+        if !self.superseded(started, mode) {
+            self.freshness.error = Some((now, why));
+        }
     }
 
     pub fn repos(&self) -> &[Repo] {
@@ -388,7 +433,7 @@ mod tests {
 
     fn app_with(json: &str, in_repo: bool) -> App {
         let mut app = App::new(in_repo);
-        app.offer(Instant::now(), parse(json).unwrap(), now());
+        app.offer(Instant::now(), Mode::Full, parse(json).unwrap(), now());
         app
     }
 
@@ -540,7 +585,7 @@ mod tests {
         app.key(Key::Down, now()); // home-env
         let mut snap = parse(MULTI).unwrap();
         snap.repos[0].in_flight.reverse();
-        app.offer(Instant::now(), snap, now());
+        app.offer(Instant::now(), Mode::Local, snap, now());
         let repo = app.current_repo().unwrap();
         let Some(Row::InFlight(i)) = app.selected_row() else {
             panic!()
@@ -548,23 +593,87 @@ mod tests {
         assert_eq!(repo.in_flight[i].slug.as_deref(), Some("home-env"));
     }
 
+    fn empty() -> Snapshot {
+        parse(r#"{"schema":1,"repos":[]}"#).unwrap()
+    }
+
     #[test]
-    fn a_run_that_started_earlier_never_replaces_a_later_one() {
-        let mut app = App::new(true);
+    fn a_run_that_started_earlier_never_replaces_a_later_one_of_its_kind() {
         let early = Instant::now();
         let late = early + std::time::Duration::from_millis(5);
-        assert!(app.offer(late, parse(MULTI).unwrap(), now()));
-        assert!(!app.offer(early, parse(r#"{"schema":1,"repos":[]}"#).unwrap(), now()));
-        assert_eq!(app.repos().len(), 4);
+        for mode in [Mode::Local, Mode::Full] {
+            let mut app = App::new(true);
+            assert_eq!(
+                app.offer(late, mode, parse(MULTI).unwrap(), now()),
+                Offer::Taken
+            );
+            assert_eq!(app.offer(early, mode, empty(), now()), Offer::Rejected);
+            assert_eq!(app.repos().len(), 4);
+        }
+        // Nor does an older local run replace a newer full one.
+        let mut app = App::new(true);
+        app.offer(late, Mode::Full, parse(MULTI).unwrap(), now());
+        assert_eq!(
+            app.offer(early, Mode::Local, empty(), now()),
+            Offer::Rejected
+        );
+    }
+
+    #[test]
+    fn a_local_run_landing_during_a_full_one_does_not_drop_the_full_result() {
+        let full_start = Instant::now();
+        let local_start = full_start + std::time::Duration::from_secs(5);
+        let mut app = App::new(true);
+        // The local run started after the full one and finished first.
+        assert_eq!(
+            app.offer(local_start, Mode::Local, empty(), now()),
+            Offer::Taken
+        );
+        let mut full = parse(MULTI).unwrap();
+        full.mode = Some("full".into());
+        assert_eq!(
+            app.offer(full_start, Mode::Full, full, now()),
+            Offer::TakenNeedsLocal
+        );
+        assert_eq!(app.snapshot.as_ref().unwrap().mode.as_deref(), Some("full"));
+        // The rerun it asks for starts later still, and replaces it.
+        let rerun = local_start + std::time::Duration::from_secs(1);
+        assert_eq!(
+            app.offer(rerun, Mode::Local, parse(MULTI).unwrap(), now()),
+            Offer::Taken
+        );
+    }
+
+    #[test]
+    fn a_failure_older_than_the_screen_does_not_mark_it_stale() {
+        let early = Instant::now();
+        let late = early + std::time::Duration::from_millis(5);
+        let mut app = App::new(true);
+        app.offer(late, Mode::Local, parse(MULTI).unwrap(), now());
+        app.failed(early, Mode::Local, now(), "old local run timed out".into());
+        assert!(app.freshness.error.is_none());
+        app.failed(
+            late + std::time::Duration::from_millis(1),
+            Mode::Local,
+            now(),
+            "new".into(),
+        );
+        assert!(app.freshness.error.is_some());
+        // A full run's failure still counts against local data: the forge
+        // state on screen is what failed to refresh.
+        let mut app = App::new(true);
+        app.offer(late, Mode::Local, parse(MULTI).unwrap(), now());
+        app.failed(early, Mode::Full, now(), "gh timed out".into());
+        assert!(app.freshness.error.is_some());
     }
 
     #[test]
     fn a_failure_keeps_the_last_good_snapshot() {
         let mut app = app_with(MULTI, true);
-        app.failed(now(), "timed out".into());
+        app.failed(Instant::now(), Mode::Full, now(), "timed out".into());
         assert_eq!(app.repos().len(), 4);
         assert!(app.freshness.error.is_some());
-        app.offer(Instant::now(), parse(MULTI).unwrap(), now());
+        app.offer(Instant::now(), Mode::Local, parse(MULTI).unwrap(), now());
         assert!(app.freshness.error.is_none());
     }
 }

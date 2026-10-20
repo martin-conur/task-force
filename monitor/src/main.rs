@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use app::{Action, App, Key};
+use app::{Action, App, Key, Offer};
 use refresh::{Collector, Mode, Scheduler, Watcher};
 
 const USAGE: &str = "\
@@ -212,12 +212,16 @@ fn main() {
             } => {
                 sched.finished(mode, Instant::now());
                 match result {
-                    Ok(snap) => {
-                        if app.offer(started, snap, Utc::now()) {
+                    Ok(snap) => match app.offer(started, mode, snap, Utc::now()) {
+                        Offer::Rejected => {}
+                        taken => {
                             watcher.sync(app.snapshot.as_ref());
+                            if taken == Offer::TakenNeedsLocal {
+                                sched.fs_event(Instant::now());
+                            }
                         }
-                    }
-                    Err(why) => app.failed(Utc::now(), why),
+                    },
+                    Err(why) => app.failed(started, mode, Utc::now(), why),
                 }
             }
             Msg::Key(k) => match app.key(k, Utc::now()) {
@@ -245,4 +249,44 @@ fn main() {
         }
     }
     ratatui::restore();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyEvent, KeyEventState};
+
+    fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn ctrl_c_quits_and_a_bare_c_is_just_a_key() {
+        assert_eq!(
+            to_key(press(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Key::Quit)
+        );
+        assert_eq!(
+            to_key(press(KeyCode::Char('c'), KeyModifiers::NONE)),
+            Some(Key::Char('c'))
+        );
+        assert_eq!(
+            to_key(press(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Key::Enter)
+        );
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..press(KeyCode::Char('q'), KeyModifiers::NONE)
+        };
+        assert_eq!(
+            to_key(release),
+            None,
+            "only presses count, or every key acts twice"
+        );
+    }
 }

@@ -748,7 +748,12 @@ mod tests {
 
     fn app(json: &str, in_repo: bool) -> App {
         let mut app = App::new(in_repo);
-        app.offer(Instant::now(), parse(json).unwrap(), now());
+        app.offer(
+            Instant::now(),
+            crate::refresh::Mode::Full,
+            parse(json).unwrap(),
+            now(),
+        );
         app
     }
 
@@ -884,7 +889,12 @@ mod tests {
     #[test]
     fn a_failed_refresh_keeps_the_screen_and_marks_it_stale() {
         let mut a = app(MULTI, true);
-        a.failed(now(), "task-monitor-snapshot timed out after 20s".into());
+        a.failed(
+            Instant::now(),
+            crate::refresh::Mode::Local,
+            now(),
+            "task-monitor-snapshot timed out after 20s".into(),
+        );
         let s = render(&mut a, 100, 30);
         assert!(s[0].contains("stale 0s"), "{}", s[0]);
         assert!(
@@ -913,7 +923,12 @@ mod tests {
         let mut a = App::new(true);
         let s = render(&mut a, 80, 10);
         assert!(screen(&s).contains("loading the first snapshot"));
-        a.failed(now(), "boom".into());
+        a.failed(
+            Instant::now(),
+            crate::refresh::Mode::Local,
+            now(),
+            "boom".into(),
+        );
         assert!(screen(&render(&mut a, 80, 10)).contains("snapshot failed: boom"));
     }
 

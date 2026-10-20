@@ -398,6 +398,26 @@ It opens a fresh tab on the **existing** worktree and launches the agent with th
 
 ---
 
+## `task-monitor-snapshot` — the board as JSON
+
+With task-force a ticket takes minutes, and a session runs ten or more of them, all referred to by number. The PM and the workers keep up; the human driving the PM loses track of what `#262` was. `task-monitor-snapshot` is the data layer of task-monitor (epic #272): it prints one JSON document saying what is **in flight**, what is **next** and what is **done** in a repo, each as a title plus a plain one-paragraph description, and whether the repo **needs you**.
+
+```bash
+task-monitor-snapshot --json            # this repo
+task-monitor-snapshot --all             # every repo radio knows about, one entry each
+task-monitor-snapshot --local           # disk only: no forge calls, merged with the last full run
+```
+
+**No model writes any of it.** Every value is read from radio's state, task-work's sidecars, the tracker or the forge. A gh or local item is described by its issue or task-file title and the first paragraph of its body; a jira or notion item is `PROJ-42 · <slug>` until its PR exists, because the shell cannot read those trackers. Once a PR exists, its title and `## Summary` take over on every tracker.
+
+**In flight** is every worktree whose `.<slug>.info` sidecar exists — not every fresh heartbeat, so a resumed or roleless worker still shows — with its session state, its PR and a status word (`implementing`, `pr-open`, `under-review`, `changes-requested`, `re-review`, `waiting-merge`, `merged`) derived from the latest review intent. **Next** is the PM's queue, else the tracker's backlog. **Done** is the merged PRs that delivered an item in the last 24 hours, or the last 10, whichever is more; merged PRs are fetched once and cached for good.
+
+**Attention** fires on exactly three signals and nothing else: an unread PM inbox (`--also` aliases count toward the primary), a finished review on a still-open PR the PM has not answered, and a worker in `awaiting`. The third is claude-only for now: only the claude loadouts wire `radio awaiting`.
+
+`--local` exists so a front end can refresh on every filesystem event without waiting on GitHub: it shadows `gh` with a function that fails, so every forge read falls back to the cache under `$TASK_FORCE_HOME/monitor/<repo>/`. The schema (`"schema": 1`) is documented in [`docs/task-monitor-schema.md`](docs/task-monitor-schema.md), with a full example beside it.
+
+---
+
 ## Per-combo setup
 
 Pick the section that matches what you installed.

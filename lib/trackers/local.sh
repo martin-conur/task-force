@@ -12,6 +12,8 @@
 
 # shellcheck source=lib/board-regen.sh
 source "$AW_ROOT/lib/board-regen.sh"
+# shellcheck source=lib/task-file.sh
+source "$AW_ROOT/lib/task-file.sh"
 
 aw_tracker_usage_steps() {
   echo "  1. Show the diff summary and existing PR (or print gh pr create command)"
@@ -140,3 +142,65 @@ _aw_json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 # Only the noun differs from the default: the spec still passes to /reviewer
 # verbatim, with no PR-body convention to fall back on (#144, #239).
 aw_tracker_review_spec_shape() { echo "a local task slug or filename"; }
+
+# ---------------- task-monitor-snapshot hooks ----------------
+#
+# The backlog is files in the repo, so these never touch the forge and work the
+# same in the snapshot's --local mode as in a full one.
+
+# The task file a ref names. The .info sidecar records an absolute path into the
+# main checkout; the PM queue may hold a filename or a bare slug instead. Prints
+# nothing when no file matches.
+_aw_local_task_file() {
+  local ref="$1" slug="$2" root="$3" f
+  for f in "$ref" "$root/tasks/$ref" "$root/tasks/$ref.md" "$root/tasks/$(basename "$ref")"; do
+    [[ -n "$f" && "$f" != */ && -f "$f" ]] && { printf '%s' "$f"; return 0; }
+  done
+  for f in "$root"/tasks/[0-9][0-9][0-9]-"${slug:-$ref}".md; do
+    [[ -f "$f" ]] && { printf '%s' "$f"; return 0; }
+  done
+  return 0
+}
+
+# Item object for one task file: frontmatter title and id, and the first prose
+# paragraph of the body. The ref is the file path, as task-work records it.
+_aw_local_task_item() {
+  local f="$1" ref="${2:-$1}" id title slug desc
+  id=$(aw_task_fm "$f" id)
+  title=$(aw_task_fm "$f" title)
+  slug=$(aw_tracker_ref_slug "$f")
+  desc=$(tm_strip_frontmatter < "$f" | tm_first_paragraph)
+  jq -cn --arg ref "$ref" --arg id "$id" --arg title "${title:-$slug}" --arg d "$desc" --arg url "$f" '
+    {ref: $ref, label: (if $id == "" then null else $id end),
+     number: ($id | if test("^[0-9]+$") then tonumber else null end),
+     title: $title, description: (if $d == "" then null else $d end), url: $url}'
+}
+
+aw_tracker_item_describe() {
+  local f
+  f=$(_aw_local_task_file "$1" "${2:-}" "$3")
+  if [[ -z "$f" ]]; then
+    _aw_tracker_item_describe_default "$@"
+    return
+  fi
+  _aw_local_task_item "$f" "$1"
+}
+
+# The tasks/ backlog in its own order — numeric id, as task-board's Todo column
+# sorts it — skipping anything whose frontmatter says in-progress or done.
+aw_tracker_next_fallback() {
+  local root="$1" limit="${3:-10}" tf base status id
+  [[ -d "$root/tasks" ]] || return 0
+  for tf in "$root"/tasks/*.md; do
+    [[ -f "$tf" ]] || continue
+    base=$(basename "$tf")
+    [[ "$base" == "_board.md" || "$base" == "README.md" ]] && continue
+    status=$(aw_task_fm "$tf" status)
+    case "$status" in in-progress|in_progress|"in progress"|done) continue ;; esac
+    id=$(aw_task_fm "$tf" id)
+    [[ "$id" =~ ^[0-9]+$ ]] || id=9999
+    printf '%s\t%s\n' "$id" "$tf"
+  done | sort -t "$(printf '\t')" -k1,1n -k2,2 | head -n "$limit" | while IFS="$(printf '\t')" read -r id tf; do
+    _aw_local_task_item "$tf"
+  done
+}

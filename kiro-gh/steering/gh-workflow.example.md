@@ -263,6 +263,30 @@ gh run list -c "$(git rev-parse HEAD)" --limit 1 --json databaseId --jq 'length'
 # 0 => no run for this commit; "green" is not a claim you can make
 ```
 
+`task-monitor-snapshot` — the board as JSON: in flight, next, done, and whether this repo needs you (#273)
+
+It prints one JSON document (`"schema": 1`, documented in task-force's
+`docs/task-monitor-schema.md`) and is the data layer of task-monitor. Every
+value comes from disk, the tracker or the forge, and no model is asked to write
+or summarise any of it.
+
+- **In flight** is every worktree whose `.<slug>.info` sidecar exists, joined to
+  its radio session, its PR and the latest review intent.
+- **Next** is the PM's queue, else the tracker's backlog (gh project items in
+  none of the three statuses, or the local `tasks/` files). There is none on
+  jira or notion.
+- **Done** is the merged PRs that delivered an item in the last 24 hours, or
+  the last 10, whichever is more.
+- **Attention** fires on exactly three signals: an unread PM inbox, a finished
+  review on a still-open PR that the PM has not answered, and a worker in
+  `awaiting`. The `awaiting` signal is claude-only for now.
+
+```bash
+task-monitor-snapshot --json            # this repo
+task-monitor-snapshot --all             # every repo radio knows about
+task-monitor-snapshot --local           # no forge calls: disk + the last full run's cache
+```
+
 ### PM ↔ worker messaging (radio)
 
 Radio is the **canonical** coordination channel between the PM and workers — every

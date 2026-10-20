@@ -148,25 +148,10 @@ is_in_flight() {
   [[ -n "$IN_FLIGHT_SLUGS" ]] && printf '%s' "$IN_FLIGHT_SLUGS" | grep -qxF "$1"
 }
 
-# Read a single field from YAML frontmatter (very small grammar — keys are
-# simple lowercase, values are scalar; strips surrounding quotes).
-# Usage: read_fm <file> <key>
-read_fm() {
-  local file="$1" key="$2"
-  awk -v key="$key" '
-    /^---[[:space:]]*$/ {
-      if (in_fm) { exit }
-      in_fm = 1; next
-    }
-    in_fm && $0 ~ "^" key "[[:space:]]*:" {
-      sub("^" key "[[:space:]]*:[[:space:]]*", "")
-      gsub(/^"|"$/, "")
-      gsub(/^'\''|'\''$/, "")
-      print
-      exit
-    }
-  ' "$file"
-}
+# The frontmatter reader is shared with lib/trackers/local.sh's task-monitor
+# hooks (#273), so it lives in a lib rather than here.
+# shellcheck source=lib/task-file.sh
+source "$AW_ROOT/lib/task-file.sh"
 
 # Collect tasks into three temp files; each line is "<sort_id>\t<display>".
 # We use temp files (instead of `declare -n` namerefs) because bash 3.2 has
@@ -186,11 +171,11 @@ for tf in "$TASKS_DIR"/*.md; do
   # Skip the board itself and the README
   [[ "$base" == "_board.md" || "$base" == "README.md" ]] && continue
 
-  fm_id=$(read_fm "$tf" "id")
-  fm_title=$(read_fm "$tf" "title")
-  fm_status=$(read_fm "$tf" "status")
-  fm_priority=$(read_fm "$tf" "priority")
-  fm_pr=$(read_fm "$tf" "pr")
+  fm_id=$(aw_task_fm "$tf" "id")
+  fm_title=$(aw_task_fm "$tf" "title")
+  fm_status=$(aw_task_fm "$tf" "status")
+  fm_priority=$(aw_task_fm "$tf" "priority")
+  fm_pr=$(aw_task_fm "$tf" "pr")
 
   # Derive slug from filename: strip leading NNN- and trailing .md
   slug="${base%.md}"

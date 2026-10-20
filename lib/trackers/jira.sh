@@ -77,3 +77,27 @@ aw_tracker_usage_examples() {
 # Only the noun differs from the default: the spec still passes to /reviewer
 # verbatim, with no PR-body convention to fall back on (#144, #239).
 aw_tracker_review_spec_shape() { echo "a Jira issue key (e.g. PROJ-123) or browse URL"; }
+
+# ---------------- task-monitor-snapshot hooks ----------------
+#
+# Still the default's `ref · slug` title, since the shell cannot read Jira. The
+# only difference is that a browse URL is shortened to its key, so the label
+# reads `PROJ-42` whichever form task-work was given.
+aw_tracker_item_describe() {
+  local ref="$1" slug="${2:-}" key
+  if [[ "$ref" =~ atlassian\.net/browse/([A-Z][A-Z0-9_]+-[0-9]+) ]]; then
+    key="${BASH_REMATCH[1]}"
+    _aw_tracker_item_describe_default "$key" "$slug" | jq -c --arg url "$ref" '.url = $url'
+    return
+  fi
+  _aw_tracker_item_describe_default "$@"
+}
+
+# The head branch carries the key lowercased (task/proj-42); give the label its
+# real case back, as aw_tracker_pr_section does for the PR title.
+aw_tracker_pr_item() {
+  local item
+  item=$(_aw_tracker_pr_item_default "$@") || return 1
+  printf '%s' "$item" | jq -c '
+    if (.ref | test("^[a-z][a-z0-9_]+-[0-9]+$")) then .label = (.ref | ascii_upcase) else . end'
+}

@@ -144,6 +144,16 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q .attention.active)" false
 }
 
+@test "worktree_base names the directory holding the repo's sidecars" {
+  # The front end watches it for a new .<slug>.info, so it must be the
+  # directory task-work writes them to, not a path the reader re-derives.
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  snap
+  assert_success
+  [[ -f "$(q .worktree_base)/.issue-5.info" ]]
+  assert_equal "$(q '.in_flight[0].worktree | split("/") | .[:-1] | join("/")')" "$(q .worktree_base)"
+}
+
 @test "--help exits 0 and names the flags" {
   run /bin/bash "$SNAP" --help
   assert_success

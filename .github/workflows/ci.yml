@@ -44,3 +44,59 @@ jobs:
 
       - name: Check loadout drift
         run: bash tools/check-drift.sh
+
+  # The task-monitor front end (#276). Stable on both OSes; the MSRV job keeps
+  # `rust-version` in monitor/Cargo.toml honest (ratatui 0.30 needs 1.88).
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: monitor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: monitor
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  rust-msrv:
+    name: Rust MSRV (1.88)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: monitor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: monitor
+
+      - name: Build and test on the declared rust-version
+        run: |
+          grep -qx 'rust-version = "1.88"' Cargo.toml
+          cargo build --locked
+          cargo test --locked

@@ -6,6 +6,7 @@
     {
       "name": "task-force",
       "root": "/home/you/src/task-force",
+      "worktree_base": "/home/you/src/task-force-worktrees",
       "loadout": "claude-gh",
       "tracker": "gh",
       "agent": "claude",

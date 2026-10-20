@@ -416,6 +416,28 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
 
 `--local` exists so a front end can refresh on every filesystem event without waiting on GitHub: it shadows `gh` with a function that fails, so every forge read falls back to the cache under `$TASK_FORCE_HOME/monitor/<repo>/`. The schema (`"schema": 1`) is documented in [`docs/task-monitor-schema.md`](docs/task-monitor-schema.md), with a full example beside it.
 
+## `task-monitor` — the board, live
+
+`task-monitor` is the terminal front end over that JSON (Rust + ratatui, in [`monitor/`](monitor/)). Inside a repo it opens on that repo's view; outside one, or with `--all`, on the overview of every repo radio knows about.
+
+```
+ task-force · PM claude · ✉ 1 unread                         12:04 · live
+─────────────────────────────────────────────────────────────────────────────
+ IN FLIGHT (2)
+ ▸ #267   kiro upgraded agent-config breaks task-init/remove   PR #270 re-review
+          Teach the hook merge and strip the new array hook shape         ▶ 14m
+ …
+ ↑↓ move  ⏎ expand  o open PR/issue  t jump to tab  a all repos  q quit
+```
+
+- **Real time without waiting on GitHub.** A change under `$TASK_FORCE_HOME/radio` (sessions, mailboxes), `$TASK_FORCE_HOME/monitor` (the PM queue, the forge cache) or a repo's worktree base (a `.<slug>.info` sidecar appearing or going) triggers a `--local` snapshot, debounced. Forge state comes from a full snapshot every 45 seconds (`--poll SECS`, 30-600).
+- **Never blank.** A snapshot that fails or times out leaves the last good one on screen; the header says `stale <age>` and the footer says why. `forge <age>` means disk state is current but PR state is from the last full run.
+- **Keys.** `↑↓` move, `⏎` expand a done item to its full PR body (scrollable) or enter a repo from the overview, `o` open the PR or issue, `t` jump to the item's zellij tab (the worker's; the PM's for a queued or done item, or for an overview row), `a` toggle the overview, `q` quit.
+- **`t` stays in this zellij session.** Each overview row names its repo's zellij session; `zellij action` cannot switch sessions, so a tab elsewhere is named, not attempted. Within the session, `t` goes to the recorded `TAB_ID` only while that tab still bears the item's name, the check `task-done` makes before it closes a tab (#260).
+- **No task-force logic in Rust.** Every word comes from the snapshot; status words are a lookup of its `status` field.
+
+Build it from the task-force checkout with `cargo build --release --manifest-path monitor/Cargo.toml` and run `monitor/target/release/task-monitor`; it finds `bin/task-monitor-snapshot` beside it, and `$TASK_MONITOR_SNAPSHOT` overrides that. `install.sh` does not build or link it yet (#277). It needs Rust 1.88 or newer; CI builds, tests and lints it on Linux and macOS.
+
 ---
 
 ## Per-combo setup

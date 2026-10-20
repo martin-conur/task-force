@@ -293,6 +293,24 @@ task-monitor-snapshot --all             # every repo radio knows about
 task-monitor-snapshot --local           # no forge calls: disk + the last full run's cache
 ```
 
+`task-monitor` — the board, live, in the terminal (#276)
+
+The ratatui front end over that JSON. It opens on the repo view (In flight /
+Next / Done) inside a repo, and on the all-repos overview (`a`, or `--all`)
+outside one: one row per repo with its attention light, the signal in words,
+and the zellij session it runs in. A change under radio's state or a worktree
+sidecar refreshes it from disk at once (`--local`); forge state refreshes every
+45s (`--poll SECS`). A failed or slow refresh never blanks the screen: the last
+good snapshot stays up, marked `stale`. Keys: `↑↓` move, `⏎` expand (a done
+item's full PR body, scrollable) or enter a repo, `o` open the PR or issue, `t`
+jump to the item's tab (the worker's, or the PM's for a queued or done item),
+`a` toggle the overview, `q` quit. `t` stays inside the monitor's own zellij
+session, and goes to a tab only while the tab at the recorded id still bears the
+item's name, the check `task-done` makes before closing one (#260). It holds no
+task-force logic: every value is a snapshot field. Build it from the task-force
+checkout with `cargo build --release --manifest-path monitor/Cargo.toml`
+(`install.sh` does not build it yet; #277).
+
 ### PM ↔ worker messaging (radio)
 
 Radio is the **canonical** coordination channel between the PM and workers — every

@@ -51,7 +51,8 @@ ignore fields it does not know.
 | `tracker`, `agent` | string \| null | the loadout's two halves |
 | `pm` | object | the PM session (see below) |
 | `forge` | object | `available`: the forge has answered for this repo at least once. A repo with no GitHub remote never has, so it reports `false` rather than a permanent `stale`; its PR-derived fields are simply empty. `fetched_at`: the last time the forge answered, or null. `stale`: the forge is available, but this run did not hear from it (always so under `--local`), so PR state shows the last result |
-| `in_flight` | array | one entry per worktree sidecar |
+| `in_flight` | array | one entry per live worktree's sidecar |
+| `orphans` | array | sidecars whose worktree is gone (see below) |
 | `next` | object | `source` (`queue` \| `tracker` \| `none`) and `items` |
 | `done` | object | `window_hours` (24), `min_items` (10) and `items` |
 | `attention` | object | `active` and `signals` |
@@ -98,10 +99,24 @@ first paragraph after its `Closes #N` line, then its first paragraph.
 
 ### `in_flight[]`
 
-An item is in flight while its `<worktree-base>/.<slug>.info` sidecar exists.
-A fresh heartbeat is not required, so a resumed or roleless session is still in
-flight. Reviewer sidecars (`PR_NUMBER=`) are not items; they attach to the item
-whose PR they review.
+An item is in flight while its `<worktree-base>/.<slug>.info` sidecar exists
+and its worktree, `<worktree-base>/<slug>`, is live: the directory exists and
+`git worktree list` registers it. A fresh heartbeat is not required, so a
+resumed or roleless session is still in flight. Reviewer sidecars
+(`PR_NUMBER=`) are not items; they attach to the item whose PR they review. A
+sidecar whose worktree is not live is in `orphans` instead, reviewer or not.
+
+### `orphans[]`
+
+Sidecars left behind by a worktree removal that bypassed `task-done` (a
+`gh pr merge --delete-branch`, a `git worktree remove`, an `rm -rf`). The
+snapshot only reports them; nothing deletes them.
+
+| field | meaning |
+|---|---|
+| `slug` | the sidecar's `SLUG=`, else its file name |
+| `info_path` | the sidecar file |
+| `reason` | `missing`: no worktree directory. `unregistered`: a directory, but not a worktree git lists for this repo |
 
 The item fields above, plus:
 

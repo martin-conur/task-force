@@ -77,8 +77,17 @@ DOC
 }
 
 # sidecar <slug> <key> <ref> [extra KEY=VALUE lines...]
+# Adds the live worktree the sidecar describes, as task-work does: a sidecar
+# whose worktree is gone is an orphan, not in flight (#286). ORPHAN=missing
+# writes the sidecar alone; ORPHAN=unregistered adds a plain directory git does
+# not know as a worktree.
 sidecar() {
   local slug="$1" key="$2" ref="$3"; shift 3
+  case "${ORPHAN:-}" in
+    missing) ;;
+    unregistered) mkdir -p "$WORKTREE_BASE/$slug" ;;
+    *) git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug" ;;
+  esac
   { printf 'BASE_BRANCH=main\nSLUG=%s\n%s=%s\nTAB_ID=4\n' "$slug" "$key" "$ref"
     local l; for l in "$@"; do printf '%s\n' "$l"; done; } > "$WORKTREE_BASE/.$slug.info"
 }
@@ -179,6 +188,49 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.in_flight[0].slug')" issue-5
   assert_equal "$(q '.in_flight[0].session')" null
   assert_equal "$(q '.in_flight[0].status')" implementing
+}
+
+@test "in flight: a sidecar whose worktree directory is gone is an orphan, not in flight" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  ORPHAN=missing sidecar issue-6 GH_URL https://github.com/acme/widgets/issues/6
+  snap
+  assert_success
+  assert_equal "$(q '[.in_flight[].slug] | join(" ")')" issue-5
+  assert_equal "$(q '.orphans | length')" 1
+  assert_equal "$(q '.orphans[0].slug')" issue-6
+  assert_equal "$(q '.orphans[0].reason')" missing
+  [[ "$(q '.orphans[0].info_path')" == */.issue-6.info ]]
+  [[ -f "$(q '.orphans[0].info_path')" ]]
+}
+
+@test "in flight: a directory git does not list as a worktree is an orphan" {
+  ORPHAN=unregistered sidecar issue-6 GH_URL https://github.com/acme/widgets/issues/6
+  snap
+  assert_success
+  assert_equal "$(q '.in_flight | length')" 0
+  assert_equal "$(q '.orphans[0].slug')" issue-6
+  assert_equal "$(q '.orphans[0].reason')" unregistered
+}
+
+@test "in flight: a worktree removed with git worktree remove leaves an orphan sidecar" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  snap
+  assert_equal "$(q '.in_flight | length')" 1
+  assert_equal "$(q '.orphans')" "[]"
+  git -C "$MAIN_REPO" worktree remove "$WORKTREE_BASE/issue-5"
+  snap
+  assert_equal "$(q '.in_flight | length')" 0
+  assert_equal "$(q '.orphans[0].reason')" missing
+}
+
+@test "in flight: an orphaned reviewer sidecar attaches to nothing" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  ORPHAN=missing sidecar review-pr9 GH_URL https://github.com/acme/widgets/pull/9 PR_NUMBER=9 ISSUE_NUMBER=5
+  pr_fixture 9 task/issue-5 "Closes #5" > "$BATS_TEST_TMPDIR/p9"
+  open_prs "$BATS_TEST_TMPDIR/p9"
+  snap
+  assert_equal "$(q '.in_flight[0].reviewers | length')" 0
+  assert_equal "$(q '.orphans[0].slug')" review-pr9
 }
 
 @test "in flight: the worker session's STATE and heartbeat are joined" {

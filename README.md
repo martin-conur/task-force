@@ -986,8 +986,17 @@ PM's tab gets focused; on the next turn the PM picks it up and dispatches a work
 **5. Worker opens the PR, bumps Status, pings PM.** Once the implementation is in, the worker opens the PR:
 
 ```bash
-gh pr create --base main --head task/issue-42 --fill
+gh pr create --base main --head task/issue-42 --fill --body-file - <<'BODY'
+## Summary
+Two or three plain sentences for you, not for a reviewer: what changed and why.
+
+Closes #42
+
+…the rest of the description…
+BODY
 ```
+
+The body always opens with `## Summary`, on every loadout. It is the part of a PR you read when "#42" no longer tells you what the work was, so it is written for you rather than for the reviewer, and the reviewer flags a PR without one as a nit. `Closes …` and the rest of the description follow it.
 
 Then bumps the project Status field to `In Review` (or keeps it at `In Progress` if the project has no In Review column — the worker reads the mapping from `.claude/gh-workflow.md`), and pings the PM:
 

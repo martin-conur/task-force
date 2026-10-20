@@ -68,8 +68,18 @@ Workflow:
      INFO=$WBASE/.$WSLUG.info
      BASE=main; [ -f $INFO ] && . $INFO
      ```
-   - Run: `gh pr create --base $BASE --head $(git rev-parse --abbrev-ref HEAD) --fill`
-     This opens an editor so the user can review and submit the PR.
+   - Run it with the PR body on stdin:
+     ```bash
+     gh pr create --base $BASE --head $(git rev-parse --abbrev-ref HEAD) --fill --body-file - <<'BODY'
+     ## Summary
+     <Two or three plain sentences: what changed and why.>
+
+     Closes tasks/<NNN-slug>.md
+
+     <The rest of the description.>
+     BODY
+     ```
+     The body **must open with `## Summary`**: two or three plain sentences, written for the user rather than a reviewer, saying what changed and why. The `Closes` line and the rest of the description follow it. `--fill` still takes the title from your commits; `--body-file -` supplies the body, and the quoted `<<'BODY'` delimiter keeps the shell from command-substituting the backticks in it. Write the body and its `BODY` terminator flush left: GitHub renders an indented `## Summary` as code, not a heading.
 
 9. **Bump status to `in-review`** in the task file's frontmatter (same sed
    pattern, value `in-review`) and write the PR URL into the `pr:` field.

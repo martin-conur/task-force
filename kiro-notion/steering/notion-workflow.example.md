@@ -45,6 +45,10 @@ Customize these to match your Notion database schema:
 ### Commit Convention
 Use the task name as prefix: `<Task name>: <description>`
 
+### PR Body
+
+The worker opens every PR body with `## Summary`: two or three plain sentences, written for you rather than for a reviewer, saying what changed and why. `Closes <Notion page URL>` and the rest of the description follow it. The reviewer flags a PR without one as a nit. The summary is what to read when a ticket number no longer tells you what the work was.
+
 ### Shell Commands
 
 `task-work <slug> [notion-url] [options]` — create worktree + zellij tab + worker agent

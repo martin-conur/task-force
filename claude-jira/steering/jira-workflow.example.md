@@ -48,6 +48,10 @@ The Planner writes its spec into the issue **description** (overwriting) **OR** 
 
 Reference the Jira key as a prefix: `{KEY}-123: <short description>`
 
+### PR Body
+
+The worker opens every PR body with `## Summary`: two or three plain sentences, written for you rather than for a reviewer, saying what changed and why. `Closes {KEY}-123` and the rest of the description follow it. The reviewer flags a PR without one as a nit. The summary is what to read when a ticket number no longer tells you what the work was.
+
 ### Shell Commands
 
 `task-work <JIRA-KEY-or-url-or-slug> [options]` — create worktree + zellij tab + worker session

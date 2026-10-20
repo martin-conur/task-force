@@ -671,3 +671,32 @@ project_page() {
   run bash -c "source '$lib'; printf '%s\n' 'just this' | tm_pr_summary"
   assert_output "just this"
 }
+
+# #278: kiro-cli has no hook for "waiting on the user", so worker-awaiting is
+# claude-only. Every doc that describes the signal says so and names the
+# kiro-cli version that was checked, so the claim can be re-tested later.
+@test "every doc describing worker-awaiting names the kiro gap and the kiro-cli version" {
+  local docs=(
+    "$REPO_ROOT_REAL/.claude/gh-workflow.md"
+    "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
+  )
+  local f
+  for f in "${docs[@]}"; do
+    run grep -qF 'The `awaiting` signal is claude-only: kiro-cli (checked on' "$f"
+    assert_success
+    run grep -q 'claude-only for now' "$f"
+    assert_failure
+  done
+  run grep -qF 'kiro-cli (checked on 2.32.0) has no hook that fires while it' "$REPO_ROOT_REAL/docs/task-monitor-schema.md"
+  assert_success
+  run grep -qF '#### No awaiting state on kiro' "$REPO_ROOT_REAL/README.md"
+  assert_success
+  run grep -qF '(#no-awaiting-state-on-kiro)' "$REPO_ROOT_REAL/README.md"
+  assert_success
+}

@@ -191,8 +191,11 @@ radio id cannot order two messages from the same second: after the timestamp it
 holds the sender and a random suffix. So messages sort by `created_at`, then by
 their position among the log's `send id=` lines, then by id.
 
-`worker-awaiting` is claude-only for now. Only the claude loadouts wire
-`radio awaiting`, and #272's sub-issue 6 looks into a kiro equivalent.
+`worker-awaiting` is claude-only. Only the claude loadouts wire
+`radio awaiting`. kiro-cli (checked on 2.32.0) has no hook that fires while it
+waits on the user, so a waiting kiro worker reads `idle` after a question, and
+most likely `busy` during a tool-approval prompt. The README's "No awaiting
+state on kiro" section has the evidence (#278).
 
 A role belongs to the longest repo name it starts with, so
 `worker-task-force-x` is `task-force`'s even when a repo named `task` exists.

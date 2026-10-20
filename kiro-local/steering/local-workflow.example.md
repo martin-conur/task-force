@@ -71,6 +71,10 @@ branch. Live in-progress state lives in `.git/task-force/state.json`
 
 Use the task title as prefix: `<Task title>: <short description>`
 
+### PR Body
+
+The worker opens every PR body with `## Summary`: two or three plain sentences, written for you rather than for a reviewer, saying what changed and why. `Closes tasks/NNN-slug.md` and the rest of the description follow it. The reviewer flags a PR without one as a nit. The summary is what to read when a ticket number no longer tells you what the work was.
+
 ### Shell Commands
 
 `task-work tasks/NNN-slug.md [options]` — create worktree + zellij tab + worker session

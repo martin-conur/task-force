@@ -60,6 +60,10 @@ The worker reads these three values and updates the project item's Status field 
 
 Use the issue title as prefix: `<Issue title>: <short description>`
 
+### PR Body
+
+The worker opens every PR body with `## Summary`: two or three plain sentences, written for you rather than for a reviewer, saying what changed and why. `Closes #N` and the rest of the description follow it. The reviewer flags a PR without one as a nit. The summary is what to read when a ticket number no longer tells you what the work was.
+
 ### Shell Commands
 
 `task-work <slug> [gh-url] [options]` — create worktree + zellij tab + worker session

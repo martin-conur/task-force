@@ -157,3 +157,93 @@ ALL_WORKER_PROMPTS=(
     done
   done
 }
+
+# --- PR body opens with ## Summary -------------------------------------------
+#
+# The PR body's `## Summary` is what a human reads once a ticket number no
+# longer means anything, and the monitor's Done section parses it. Every
+# shipped worker prompt must ask for it first, on stdin, with the tracker's own
+# `Closes` line after it; every reviewer must flag its absence as a nit.
+
+# The tracker each worker prompt closes against, keyed by file.
+closes_line_for() {
+  case "$1" in
+    *claude-jira/*)                      echo 'Closes <ISSUE-KEY>' ;;
+    *claude-notion/*|*kiro-notion/*)     echo 'Closes <Notion page URL>' ;;
+    *claude-local/*|*kiro-local/*)       echo 'Closes tasks/<NNN-slug>.md' ;;
+    *)                                   echo 'Closes #<N>' ;;
+  esac
+}
+
+@test "all 8 worker prompts open the PR body with ## Summary, then Closes" {
+  for f in "${ALL_WORKER_PROMPTS[@]}"; do
+    run worker_prompt "$f"
+    assert_success
+    [[ "$output" == *"--fill --body-file - <<'BODY'"* ]] || { echo "no stdin body in $f"; return 1; }
+    [[ "$output" == *"must open with \`## Summary\`"* ]] || { echo "no Summary rule in $f"; return 1; }
+    [[ "$output" == *"written for the user rather than a reviewer"* ]] || { echo "no audience in $f"; return 1; }
+    # The example body: ## Summary is its first line, the Closes line follows.
+    body=$(awk "/<<'BODY'\$/ && /gh pr create/{p=1; next} p && /^ *BODY\$/{exit} p{sub(/^ +/, \"\"); print}" <<<"$output")
+    [ "$(head -1 <<<"$body")" = '## Summary' ] || { echo "body does not open with ## Summary in $f: $body"; return 1; }
+    closes=$(closes_line_for "$f")
+    grep -qxF "$closes" <<<"$body" || { echo "no '$closes' in $f: $body"; return 1; }
+  done
+}
+
+@test "no worker prompt still relies on --fill alone for the PR body" {
+  # A bare --fill takes the body from commit messages, which never carry a
+  # ## Summary written for the user.
+  for f in "${ALL_WORKER_PROMPTS[@]}"; do
+    run worker_prompt "$f"
+    assert_success
+    [[ "$output" != *"HEAD) --fill\`"* && "$output" != *"HEAD) --fill"$'\n'* ]] || { echo "bare --fill in $f"; return 1; }
+  done
+}
+
+@test "the ## Summary rule is byte-identical across the claude worker prompts" {
+  ref=$(grep -F 'must open with `## Summary`' "$REPO_ROOT_REAL/claude-gh/commands/worker.md")
+  [ -n "$ref" ]
+  for lo in claude-jira claude-notion claude-local; do
+    other=$(grep -F 'must open with `## Summary`' "$REPO_ROOT_REAL/$lo/commands/worker.md")
+    [ "$ref" = "$other" ] || { echo "$lo diverges"; return 1; }
+  done
+}
+
+@test "all reviewer prompts treat a missing ## Summary as a nit" {
+  local reviewers=(
+    "$REPO_ROOT_REAL/.claude/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-gh/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-jira/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md"
+    "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"
+    "$REPO_ROOT_REAL/kiro-gh/agents/reviewer.json"
+  )
+  for f in "${reviewers[@]}"; do
+    run worker_prompt "$f"
+    assert_success
+    line=$(grep -F 'does not open with `## Summary`' <<<"$output")
+    [ -n "$line" ] || { echo "no Summary check in $f"; return 1; }
+    [[ "$line" == *"nit"* && "$line" == *"never blocks"* ]] || { echo "not a nit in $f: $line"; return 1; }
+  done
+}
+
+@test "every workflow doc and the README describe the ## Summary convention" {
+  local docs=(
+    "$REPO_ROOT_REAL/.claude/gh-workflow.md"
+    "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
+    "$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
+    "$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
+  )
+  for f in "${docs[@]}"; do
+    run grep -q '^### PR Body$' "$f"
+    assert_success
+    run grep -qF 'The worker opens every PR body with `## Summary`' "$f"
+    assert_success
+  done
+  run grep -qF 'The body always opens with `## Summary`, on every loadout.' "$REPO_ROOT_REAL/README.md"
+  assert_success
+}

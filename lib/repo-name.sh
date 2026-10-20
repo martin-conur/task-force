@@ -19,16 +19,23 @@ aw_sanitize_repo_name() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g'
 }
 
-# Print the sanitized main-repo name for the git repo containing $1 (default cwd).
-# Falls back to the sanitized basename of $1 when git can't answer (not a repo).
-aw_main_repo_name() {
-  local dir="${1:-$PWD}" common root
-  common=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || {
-    aw_sanitize_repo_name "$(basename "$dir")"; return; }
-  [[ -n "$common" ]] || { aw_sanitize_repo_name "$(basename "$dir")"; return; }
+# Print the MAIN worktree root of the git repo containing $1 (default cwd): the
+# same absolute path from every linked worktree of one repo. Empty, and
+# non-zero, when git can't answer.
+aw_main_repo_root() {
+  local dir="${1:-$PWD}" common
+  common=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || return 1
+  [[ -n "$common" ]] || return 1
   # --git-common-dir is absolute for a linked worktree, relative (".git") for
   # the main worktree — resolve it against $dir in the relative case.
   case "$common" in /*) : ;; *) common="$dir/$common" ;; esac
-  root=$(cd "$common/.." 2>/dev/null && pwd) || root="$dir"
+  (cd "$common/.." 2>/dev/null && pwd)
+}
+
+# Print the sanitized main-repo name for the git repo containing $1 (default cwd).
+# Falls back to the sanitized basename of $1 when git can't answer (not a repo).
+aw_main_repo_name() {
+  local dir="${1:-$PWD}" root
+  root=$(aw_main_repo_root "$dir") || root="$dir"
   aw_sanitize_repo_name "$(basename "$root")"
 }

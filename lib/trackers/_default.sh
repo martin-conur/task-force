@@ -208,3 +208,77 @@ aw_tracker_review_no_spec_warning() {
   echo "  PR-body auto-detect is GitHub-only — pass the spec id (Jira key, Notion URL,"
   echo "  local task slug) as the 2nd positional arg to enable spec-compliance review."
 }
+
+# ---------------- task-monitor-snapshot hooks ----------------
+#
+# What the monitor shows for an item comes from the tracker, deterministically:
+# no model writes it (#272). These hooks print JSON for bin/task-monitor-snapshot
+# to assemble, and need jq plus lib/monitor-text.sh, which that binary sources
+# before any module.
+#
+# Every item object has one shape, so the snapshot never asks which tracker made
+# it: {ref, label, number, title, description, url}. `ref` is what the tracker
+# names the item by, `label` is what a human reads in a list (`#267`,
+# `PROJ-42`), and any field the tracker cannot know is null.
+#
+# A hook that reaches the forge returns NON-ZERO when the forge does not answer,
+# rather than printing nothing. That is the snapshot's only way to tell "nothing
+# to show" from "could not ask", and the second is what makes it fall back to the
+# last forge result instead of blanking the item. Its --local mode depends on it:
+# it shadows `gh` with a function that fails, so every forge-backed hook takes
+# that path.
+
+# aw_tracker_item_describe <ref> <slug> <repo_root>
+#
+# One item object for an in-flight or queued item, before any PR exists. The
+# default is the jira / notion row of the epic's table: the shell has no read
+# access to those trackers (they are agent-only MCP) and task-force adds no API
+# credentials, so the title is the ref and the worker slug, `PROJ-42 ·
+# kiro-universal-config`. A ref that is a URL is too long to be a label, so it
+# becomes the url and the slug stands alone.
+aw_tracker_item_describe() { _aw_tracker_item_describe_default "$@"; }
+
+_aw_tracker_item_describe_default() {
+  local ref="$1" slug="${2:-}" label="" url="" title
+  case "$ref" in
+    *://*) url="$ref" ;;
+    *)     label="$ref" ;;
+  esac
+  if [[ -n "$label" && -n "$slug" ]]; then
+    title="$label · $slug"
+  elif [[ -n "$slug" ]]; then
+    title="$slug"
+  else
+    title="$label"
+  fi
+  jq -cn --arg ref "$ref" --arg label "$label" --arg title "$title" --arg url "$url" \
+    '{ref: $ref, label: (if $label == "" then null else $label end), number: null,
+      title: $title, description: null, url: (if $url == "" then null else $url end)}'
+}
+
+# aw_tracker_pr_item <head_ref> <pr_body>
+#
+# Which item a pull request delivers, as an item object without title or
+# description (the PR supplies those). Returns 1 for a PR that delivers none.
+# The default links through the `task/<slug>` head branch task-work creates,
+# which is the only link a non-gh tracker has: its refs never appear in a PR
+# body in any shape the shell could parse.
+aw_tracker_pr_item() { _aw_tracker_pr_item_default "$@"; }
+
+_aw_tracker_pr_item_default() {
+  local head="$1" slug
+  [[ "$head" == task/* ]] || return 1
+  slug="${head#task/}"
+  [[ -n "$slug" ]] || return 1
+  jq -cn --arg slug "$slug" \
+    '{ref: $slug, label: $slug, number: null, title: null, description: null, url: null}'
+}
+
+# aw_tracker_next_fallback <repo_root> <workflow_doc> <limit>
+#
+# The "Next" section when the PM's queue is empty: item objects, one per line,
+# in the tracker's own order. In-flight items are NOT excluded here; the caller
+# does that, so print a few more than <limit>. The default has no backlog it can
+# read (jira / notion), so it prints nothing and succeeds — "the section says it
+# is empty" is the decided behaviour there, not a failure to fall back from.
+aw_tracker_next_fallback() { :; }

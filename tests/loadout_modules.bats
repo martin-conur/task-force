@@ -61,6 +61,13 @@ TRACKER_HOOKS_TASK_REVIEWER=(
   aw_tracker_review_usage_spec
   aw_tracker_review_no_spec_warning
 )
+# What bin/task-monitor-snapshot asks of a tracker (#273): describe an item, link
+# a merged PR to the item it delivers, and list the Todo fallback for "Next".
+TRACKER_HOOKS_TASK_MONITOR=(
+  aw_tracker_item_describe
+  aw_tracker_pr_item
+  aw_tracker_next_fallback
+)
 # No _default.sh on the agent axis: every agent module defines every hook, so
 # this list is what a new agent module has to implement.
 AGENT_HOOKS_TASK_WORK=(
@@ -219,6 +226,18 @@ _compose() {
   assert [ -n "$impls" ]
   for impl in $impls; do
     for hook in "${TRACKER_HOOKS_TASK_REVIEWER[@]}"; do
+      run _compose "$impl" "declare -F $hook >/dev/null"
+      [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
+    done
+  done
+}
+
+@test "every impl composes a tracker module defining all task-monitor-snapshot hooks" {
+  local impls impl hook
+  impls=$(bash -c "source '$DETECT'; aw_all_impls")
+  assert [ -n "$impls" ]
+  for impl in $impls; do
+    for hook in "${TRACKER_HOOKS_TASK_MONITOR[@]}"; do
       run _compose "$impl" "declare -F $hook >/dev/null"
       [[ "$status" -eq 0 ]] || { echo "impl=$impl hook=$hook did not resolve" >&2; return 1; }
     done

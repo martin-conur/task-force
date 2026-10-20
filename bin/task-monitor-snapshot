@@ -1,0 +1,505 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-monitor-snapshot — one JSON document describing what is in flight, next
+# and done in a repo, plus the attention signals that say whether it needs you
+# (#273, epic #272).
+#
+# This is the data layer of task-monitor. The ratatui front end renders it and
+# owns change detection; everything it shows is read here, deterministically,
+# from disk, the tracker and the forge. No model is ever asked to produce or
+# summarise anything (#272's first anti-goal). The schema is documented in
+# docs/task-monitor-schema.md, and `"schema": 1` is the contract.
+#
+# It reuses the modules that own each format instead of re-deriving them:
+#   - lib/trackers/<tracker>.sh describes items, links PRs to items and lists
+#     the Todo fallback, through hooks with _default.sh bodies;
+#   - radio's on-disk state under ${TASK_FORCE_HOME:-~/.task-force}/radio is
+#     read directly: session files (KEY=VALUE), message frontmatter;
+#   - task-work's <worktree-base>/.<slug>.info sidecars define what is in
+#     flight. A sidecar, not a fresh heartbeat: a resumed or roleless session is
+#     still in flight.
+#
+# Two modes. A full run asks the forge (`gh`) and caches what it learned under
+# ${TASK_FORCE_HOME}/monitor/<repo>/. `--local` asks nothing: `gh` is shadowed
+# by a function that fails, so every forge-backed hook takes its "could not ask"
+# path and the run merges with the last full run's cache. That is what lets the
+# front end refresh on a filesystem event without ever waiting on GitHub.
+#
+# Must run on /bin/bash 3.2: no associative arrays, no mapfile, and no pattern
+# substitution over large strings (#266). Bodies go through awk and jq.
+
+# Resolve own path through symlinks -> AW_ROOT.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/detect-impl.sh
+source "$AW_ROOT/lib/detect-impl.sh"
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
+# shellcheck source=lib/tracker-settings.sh
+source "$AW_ROOT/lib/tracker-settings.sh"
+# shellcheck source=lib/monitor-text.sh
+source "$AW_ROOT/lib/monitor-text.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: task-monitor-snapshot [--json] [--all] [--local] [--repo DIR]
+
+Print one JSON document (schema 1) describing a repo's in-flight, next and done
+work and its attention signals. See docs/task-monitor-schema.md.
+
+  --json       the output format (the only one; accepted for clarity)
+  --all        every repo radio knows about (session files' REPO=), plus this one
+  --local      no forge calls: read disk only and merge with the last full run
+  --repo DIR   describe the repo containing DIR instead of $PWD
+
+Reads ${TASK_FORCE_HOME:-~/.task-force}. Writes only its own cache, under
+${TASK_FORCE_HOME}/monitor/<repo>/.
+EOF
+  exit "${1:-0}"
+}
+
+ALL=0
+LOCAL_ONLY=0
+REPO_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json)  shift ;;
+    --all)   ALL=1; shift ;;
+    --local) LOCAL_ONLY=1; shift ;;
+    --repo)
+      [[ $# -ge 2 ]] || { echo "Error: --repo requires a value" >&2; exit 2; }
+      REPO_ARG="$2"; shift 2 ;;
+    -h|--help) usage 0 ;;
+    *) echo "Error: unknown argument: $1" >&2; usage 2 >&2 ;;
+  esac
+done
+
+command -v jq >/dev/null 2>&1 || { echo "Error: jq is required" >&2; exit 1; }
+
+TF_HOME="${TASK_FORCE_HOME:-$HOME/.task-force}"
+SESSIONS_DIR="$TF_HOME/radio/sessions"
+MAILBOX_DIR="$TF_HOME/radio/mailbox"
+DEAD_LETTER_DIR="$TF_HOME/radio/dead-letter"
+MONITOR_HOME="$TF_HOME/monitor"
+
+# How many items Next and Done show at least. Done shows the last 24 hours or
+# the last DONE_MIN merges, whichever is more (#272's builder default).
+NEXT_LIMIT=10
+DONE_MIN=10
+MERGED_INDEX_LIMIT=50
+
+if [[ "$LOCAL_ONLY" == 1 ]]; then
+  # The whole of --local's "no forge calls" guarantee. Every forge read in this
+  # file and in the tracker hooks goes through `gh`, so shadowing it makes each
+  # one fail fast and fall back to the cache; nothing has to remember to check
+  # a flag.
+  gh() { return 1; }
+fi
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+CUTOFF=$(jq -rn --arg now "$NOW" '($now | fromdateiso8601) - 86400 | todate')
+
+# ----- helpers --------------------------------------------------------------
+
+# One KEY=VALUE field of a session or .info file. Never `source` either: both
+# are written by other processes.
+_field() {
+  local line
+  [[ -f "$1" ]] || return 0
+  line=$(grep -E "^$2=" "$1" 2>/dev/null | head -1) || return 0
+  printf '%s' "${line#*=}"
+}
+
+_atomic_write() {
+  local target="$1" tmp
+  tmp="$target.tmp.$$"
+  mkdir -p "$(dirname "$target")"
+  cat > "$tmp" && mv -f "$tmp" "$target"
+}
+
+# Every radio session file as one object, {role: {KEY: value}}.
+_sessions_json() {
+  local f
+  for f in "$SESSIONS_DIR"/*.info; do
+    [[ -f "$f" ]] || continue
+    awk -v r="$(basename "$f" .info)" '
+      index($0, "=") > 1 { print r "\t" substr($0, 1, index($0, "=") - 1) "\t" substr($0, index($0, "=") + 1) }
+    ' "$f"
+  done | jq -Rsc '
+    split("\n") | map(select(. != "") | split("\t"))
+    | reduce .[] as $l ({}; .[$l[0]][$l[1]] = ($l[2:] | join("\t")))'
+}
+
+# Every radio message's frontmatter, one object per line: inbox, processed and
+# dead-letter alike. The radio log is no use here — its `send` lines carry no
+# `pr=` field — so the PR timeline is rebuilt from the messages themselves.
+_messages_ndjson() {
+  local dirs=() d
+  for d in "$MAILBOX_DIR" "$DEAD_LETTER_DIR"; do
+    [[ -d "$d" ]] && dirs+=("$d")
+  done
+  [[ ${#dirs[@]} -gt 0 ]] || return 0
+  find "${dirs[@]}" -type f -name '*.md' -exec awk '
+    function flush() {
+      if (fname != "" && !printed) {
+        print fname "\t" id "\t" from "\t" to "\t" intent "\t" pr "\t" created
+        printed = 1
+      }
+    }
+    FNR == 1 { flush(); fname = FILENAME; printed = 0; fence = 0
+               id = ""; from = ""; to = ""; intent = ""; pr = ""; created = "" }
+    /^---[ \t\r]*$/ { fence++; if (fence >= 2) { flush(); nextfile } ; next }
+    fence != 1 { next }
+    index($0, "id: ") == 1         { id = substr($0, 5) }
+    index($0, "from: ") == 1       { from = substr($0, 7) }
+    index($0, "to: ") == 1         { to = substr($0, 5) }
+    index($0, "intent: ") == 1     { intent = substr($0, 9) }
+    index($0, "pr: ") == 1         { pr = substr($0, 5) }
+    index($0, "created_at: ") == 1 { created = substr($0, 13) }
+    END { flush() }
+  ' {} + | jq -Rc --arg dl "$DEAD_LETTER_DIR/" '
+    split("\t") as $f | ($f[0] | split("/")) as $p
+    | {id: $f[1], from: $f[2], to: $f[3], intent: $f[4],
+       pr: (if $f[5] == "" then null else $f[5] end), created_at: $f[6],
+       box: (if ($f[0] | startswith($dl)) then "dead-letter" else $p[-2] end),
+       mailbox: (if ($f[0] | startswith($dl)) then $p[-2] else $p[-3] end)}'
+}
+
+# The repos to describe: this one (or --repo's), and with --all every repo a
+# session file names. A worker's REPO= is its worktree, so each is resolved to
+# its main root; a worktree that is gone resolves to nothing and is skipped.
+_repo_roots() {
+  local here="" f r
+  if [[ -n "$REPO_ARG" ]]; then
+    [[ -d "$REPO_ARG" ]] || { echo "Error: --repo '$REPO_ARG' is not a directory" >&2; return 1; }
+    here=$(aw_main_repo_root "$REPO_ARG") || { echo "Error: --repo '$REPO_ARG' is not in a git repo" >&2; return 1; }
+  else
+    here=$(aw_main_repo_root "$PWD" 2>/dev/null) || here=""
+  fi
+  if [[ -z "$here" && "$ALL" != 1 ]]; then
+    echo "Error: not in a git repo (pass --repo DIR, or --all)" >&2
+    return 1
+  fi
+  {
+    [[ -n "$here" ]] && printf '%s\n' "$here"
+    if [[ "$ALL" == 1 ]]; then
+      for f in "$SESSIONS_DIR"/*.info; do
+        [[ -f "$f" ]] || continue
+        r=$(_field "$f" REPO)
+        [[ -n "$r" && -d "$r" ]] || continue
+        aw_main_repo_root "$r" || true
+      done | sort -u
+    fi
+  } | awk 'NF && !seen[$0]++'
+}
+
+# The loadout a repo runs: its one workflow doc, else what its PM registered
+# with. Empty when neither says — the repo is still described, with the default
+# tracker hooks.
+_repo_impl() {
+  local root="$1" name="$2" matches
+  matches=$(aw_detect_matches "$root")
+  if [[ -n "$matches" && $(printf '%s\n' "$matches" | wc -l) -eq 1 ]]; then
+    printf '%s' "$matches"
+    return 0
+  fi
+  _field "$SESSIONS_DIR/pm-$name.info" LOADOUT
+}
+
+# An item object for <ref>: live from the tracker, else the last full run's
+# cache, else the default `ref · slug`. Prints "<source>\t<json>" so the caller
+# knows whether there is anything new to cache.
+_describe() {
+  local ref="$1" slug="$2" root="$3" cache_json="$4" item
+  if item=$(aw_tracker_item_describe "$ref" "$slug" "$root" 2>/dev/null) && [[ -n "$item" ]]; then
+    printf 'live\t%s\n' "$item"
+    return 0
+  fi
+  item=$(jq -c --arg ref "$ref" '.issues[$ref] // empty' <<<"$cache_json")
+  if [[ -n "$item" ]]; then
+    printf 'cache\t%s\n' "$item"
+    return 0
+  fi
+  printf 'default\t%s\n' "$(_aw_tracker_item_describe_default "$ref" "$slug")"
+}
+
+# Fetch merged PR <n> into the on-disk cache, once ever: a merged PR never
+# changes. A no-op under --local, and when it is already cached.
+_cache_merged_pr() {
+  local root="$1" dir="$2" n="$3" json
+  [[ -s "$dir/$n.json" ]] && return 0
+  json=$(cd "$root" && gh pr view "$n" --json number,title,body,url,headRefName,mergedAt,mergeCommit,state 2>/dev/null) || return 0
+  [[ -n "$json" ]] || return 0
+  printf '%s\n' "$json" | _atomic_write "$dir/$n.json"
+}
+
+# PR object for the monitor: the forge's fields plus the plain-text summary.
+_pr_object() {
+  local pr_json="$1" summary
+  summary=$(jq -r '.body // ""' <<<"$pr_json" | tm_pr_summary)
+  jq -c --arg s "$summary" '{
+    number, url, title, state: (.state // null), is_draft: (.isDraft // false),
+    head: (.headRefName // null), summary: (if $s == "" then null else $s end),
+    merged_at: (.mergedAt // null), merge_sha: (.mergeCommit.oid // null)}' <<<"$pr_json"
+}
+
+# ----- one repo -------------------------------------------------------------
+
+# Writes the repo object to stdout. Runs in a subshell per repo, so the tracker
+# module it sources never leaks into the next repo's.
+_snapshot_repo() {
+  local root="$1" names_json="$2" name wtbase impl tracker agent doc cache prev
+  local w="$WORK/$3"
+  mkdir -p "$w"
+  name=$(aw_main_repo_name "$root")
+  # task-work builds the base from the raw basename, not the sanitized name.
+  wtbase="$(dirname "$root")/$(basename "$root")-worktrees"
+  impl=$(_repo_impl "$root" "$name")
+  tracker=""; agent=""; doc=""
+  if [[ -n "$impl" ]]; then
+    tracker="${impl##*-}"
+    agent="${impl%%-*}"
+    doc=$(aw_impl_workflow_doc "$root" "$impl" || true)
+  fi
+
+  # shellcheck source=lib/trackers/_default.sh
+  source "$AW_ROOT/lib/trackers/_default.sh"
+  if [[ -n "$tracker" && -r "$AW_ROOT/lib/trackers/$tracker.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$AW_ROOT/lib/trackers/$tracker.sh"
+  fi
+
+  cache="$MONITOR_HOME/$name"
+  prev='{}'
+  [[ -s "$cache/forge.json" ]] && prev=$(jq -c . "$cache/forge.json" 2>/dev/null || echo '{}')
+  [[ "$LOCAL_ONLY" == 1 ]] || mkdir -p "$cache/prs"
+
+  # --- forge: the PR lists. A failed call keeps the previous result rather
+  # than blanking it, and fetched_at moves only when the forge answered.
+  local open_prs merged_index fetched_at forge_ok=0
+  fetched_at=$(jq -r '.fetched_at // empty' <<<"$prev")
+  if open_prs=$(cd "$root" && gh pr list --state open --limit 100 \
+       --json number,title,body,url,headRefName,isDraft,state 2>/dev/null) && [[ -n "$open_prs" ]]; then
+    fetched_at="$NOW"
+    forge_ok=1
+  else
+    open_prs=$(jq -c '.open_prs // null' <<<"$prev")
+  fi
+  if ! { merged_index=$(cd "$root" && gh pr list --state merged --limit "$MERGED_INDEX_LIMIT" \
+       --json number,mergedAt,headRefName 2>/dev/null) && [[ -n "$merged_index" ]]; }; then
+    merged_index=$(jq -c '.merged // null' <<<"$prev")
+  fi
+  merged_index=$(jq -c 'if . == null then null else sort_by(.mergedAt) | reverse end' <<<"$merged_index")
+
+  # --- in flight: one sidecar per worktree. Reviewers' sidecars carry
+  # PR_NUMBER=; they attach to their PR's item instead of being one.
+  # issues_new collects what the tracker said this run; refs_seen every ref this
+  # run looked up, so the cache keeps only descriptions something still shows.
+  local info slug ref key described src item pr_json n issues_new='{}' refs_seen=''
+  : > "$w/inflight.ndjson"
+  : > "$w/reviewers.ndjson"
+  for info in "$wtbase"/.*.info; do
+    [[ -f "$info" ]] || continue
+    slug=$(_field "$info" SLUG)
+    [[ -n "$slug" ]] || { slug=$(basename "$info" .info); slug="${slug#.}"; }
+    n=$(_field "$info" PR_NUMBER)
+    if [[ -n "$n" ]]; then
+      jq -cn --arg slug "$slug" --arg pr "$n" '{slug: $slug, pr: $pr}' >> "$w/reviewers.ndjson"
+      continue
+    fi
+    ref=""
+    key=$(aw_tracker_info_key 2>/dev/null || true)
+    [[ -n "$key" ]] && ref=$(_field "$info" "$key")
+    if [[ -z "$ref" ]]; then
+      for key in GH_URL JIRA_REF NOTION_URL TASK_FILE; do
+        ref=$(_field "$info" "$key")
+        [[ -n "$ref" ]] && break
+      done
+    fi
+    described=$(_describe "$ref" "$slug" "$root" "$prev")
+    refs_seen+="$ref"$'\n'
+    src="${described%%$'\t'*}"
+    item="${described#*$'\t'}"
+    if [[ "$src" == live && -n "$ref" ]]; then
+      issues_new=$(jq -c --arg ref "$ref" --argjson item "$item" '.[$ref] = $item' <<<"$issues_new")
+    fi
+
+    # The PR is found by its head branch, which is task/<slug> on every tracker.
+    pr_json=$(jq -c --arg h "task/$slug" '[(. // [])[] | select(.headRefName == $h)][0] // empty' <<<"$open_prs")
+    if [[ -z "$pr_json" ]]; then
+      n=$(jq -r --arg h "task/$slug" '[(. // [])[] | select(.headRefName == $h)][0].number // empty' <<<"$merged_index")
+      if [[ -n "$n" ]]; then
+        [[ "$LOCAL_ONLY" == 1 ]] || _cache_merged_pr "$root" "$cache/prs" "$n"
+        if [[ -s "$cache/prs/$n.json" ]]; then
+          pr_json=$(jq -c . "$cache/prs/$n.json")
+        else
+          pr_json=$(jq -cn --argjson n "$n" '{number: $n, state: "MERGED"}')
+        fi
+      fi
+    fi
+    [[ -n "$pr_json" ]] && pr_json=$(_pr_object "$pr_json") || pr_json=null
+
+    jq -cn --arg slug "$slug" --arg ref "$ref" --arg base "$(_field "$info" BASE_BRANCH)" \
+      --arg tab_id "$(_field "$info" TAB_ID)" --arg wt "$wtbase/$slug" \
+      --argjson item "$item" --argjson pr "$pr_json" '
+      {slug: $slug, ref: (if $ref == "" then null else $ref end), branch: ("task/" + $slug),
+       base: (if $base == "" then null else $base end), worktree: $wt,
+       tab_id: (if $tab_id == "" then null else $tab_id end), item: $item, pr: $pr}' \
+      >> "$w/inflight.ndjson"
+  done
+
+  # --- next: the PM's queue, else the tracker's fallback.
+  #
+  # The queue file's format is owned by the `task-monitor next` command (#272
+  # sub-issue 3). Until that lands this reads the shape it is expected to keep:
+  # one ref per line, an optional note after a tab, `#` comments ignored.
+  local queue="$cache/queue" next_source=none line note fallback fb_ok=1
+  : > "$w/next.ndjson"
+  if [[ -s "$queue" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      case "$line" in ''|'#'*) continue ;; esac
+      ref="${line%%$'\t'*}"
+      note=""
+      [[ "$line" == *$'\t'* ]] && note="${line#*$'\t'}"
+      described=$(_describe "$ref" "" "$root" "$prev")
+      refs_seen+="$ref"$'\n'
+      src="${described%%$'\t'*}"
+      item="${described#*$'\t'}"
+      if [[ "$src" == live ]]; then
+        issues_new=$(jq -c --arg ref "$ref" --argjson item "$item" '.[$ref] = $item' <<<"$issues_new")
+      fi
+      jq -c --arg note "$note" '. + {note: (if $note == "" then null else $note end)}' <<<"$item" >> "$w/next.ndjson"
+      next_source=queue
+    done < "$queue"
+  fi
+  local inflight_count
+  inflight_count=$(wc -l < "$w/inflight.ndjson" | tr -d ' ')
+  if [[ "$next_source" == none ]]; then
+    if fallback=$(aw_tracker_next_fallback "$root" "$doc" "$((NEXT_LIMIT + inflight_count))" 2>/dev/null); then
+      :
+    else
+      fb_ok=0
+      fallback=$(jq -c '(.next_fallback // [])[]' <<<"$prev")
+    fi
+    if [[ -n "$fallback" ]]; then
+      printf '%s\n' "$fallback" | jq -c '. + {note: null}' >> "$w/next.ndjson"
+      next_source=tracker
+    fi
+  fi
+
+  # --- done: merged PRs that deliver an item, newest first. Each is fetched
+  # once and cached for good; under --local only cached ones are shown.
+  local merged_at head body
+  : > "$w/done.ndjson"
+  if [[ "$merged_index" != null ]]; then
+    local count=0
+    while IFS=$'\t' read -r n merged_at; do
+      [[ -n "$n" ]] || continue
+      if [[ "$count" -ge "$DONE_MIN" && "$merged_at" < "$CUTOFF" ]]; then
+        break
+      fi
+      [[ "$LOCAL_ONLY" == 1 ]] || _cache_merged_pr "$root" "$cache/prs" "$n"
+      [[ -s "$cache/prs/$n.json" ]] || continue
+      pr_json=$(jq -c . "$cache/prs/$n.json")
+      head=$(jq -r '.headRefName // ""' <<<"$pr_json")
+      body=$(jq -r '.body // ""' <<<"$pr_json")
+      item=$(aw_tracker_pr_item "$head" "$body" 2>/dev/null) || continue
+      [[ -n "$item" ]] || continue
+      jq -cn --argjson item "$item" --argjson pr "$(_pr_object "$pr_json")" --argjson raw "$pr_json" '
+        $item + {title: $pr.title, description: $pr.summary, summary: $pr.summary, body: ($raw.body // ""),
+                 url: $pr.url, pr: $pr | del(.summary), merged_at: $pr.merged_at, merge_sha: $pr.merge_sha}' \
+        >> "$w/done.ndjson"
+      count=$((count + 1))
+    done < <(jq -r '(. // [])[] | [(.number | tostring), (.mergedAt // "")] | @tsv' <<<"$merged_index")
+  fi
+
+  # --- the cache for the next run. Only parts that answered are replaced.
+  if [[ "$LOCAL_ONLY" != 1 ]]; then
+    local fb_json=null
+    if [[ "$fb_ok" == 1 && "$next_source" != queue ]]; then
+      fb_json=$(printf '%s\n' "$fallback" | jq -sc 'map(select(. != null))')
+    fi
+    jq -c --arg at "$fetched_at" --argjson open "$open_prs" --argjson merged "$merged_index" \
+      --argjson issues "$issues_new" --argjson fb "$fb_json" --arg seen "$refs_seen" '
+      ($seen | split("\n") | map(select(. != ""))) as $seen
+      | .fetched_at = (if $at == "" then null else $at end)
+      | .open_prs = $open | .merged = $merged
+      | .issues = (((.issues // {}) | with_entries(select(.key as $k | $seen | index([$k]) != null))) + $issues)
+      | if $fb != null then .next_fallback = $fb else . end' <<<"$prev" \
+      | _atomic_write "$cache/forge.json"
+  fi
+
+  # --- assemble.
+  jq -n \
+    --arg name "$name" --arg root "$root" --arg impl "$impl" --arg tracker "$tracker" \
+    --arg agent "$agent" --arg fetched_at "$fetched_at" \
+    --arg next_source "$next_source" --argjson next_limit "$NEXT_LIMIT" \
+    --argjson forge_ok "$forge_ok" --argjson names "$names_json" \
+    --argjson open_prs "$open_prs" --argjson merged "$merged_index" \
+    --slurpfile sessions "$WORK/sessions.json" \
+    --slurpfile messages "$WORK/messages.ndjson" \
+    --slurpfile inflight "$w/inflight.ndjson" \
+    --slurpfile reviewer_infos "$w/reviewers.ndjson" \
+    --slurpfile next "$w/next.ndjson" \
+    --slurpfile done_items "$w/done.ndjson" \
+    -f "$AW_ROOT/lib/monitor-assemble.jq"
+}
+
+# ----- main -----------------------------------------------------------------
+
+ROOTS=$(_repo_roots) || exit 1
+
+_sessions_json > "$WORK/sessions.json"
+[[ -s "$WORK/sessions.json" ]] || echo '{}' > "$WORK/sessions.json"
+_messages_ndjson > "$WORK/messages.ndjson"
+
+# Every repo name radio knows, so a role is attributed to the longest repo name
+# it starts with: `worker-task-force-x` belongs to task-force, not to `task`.
+NAMES=$({
+  # aw_main_repo_name prints no newline; without one each name would run into
+  # the next.
+  printf '%s\n' "$ROOTS" | while IFS= read -r r; do [[ -n "$r" ]] && { aw_main_repo_name "$r"; echo; }; done
+  jq -r '.[] | .REPO_NAME // empty' "$WORK/sessions.json"
+} | jq -Rsc 'split("\n") | map(select(. != "")) | unique')
+
+# One subshell per repo, run side by side: each spends most of its time
+# waiting on `gh`, and they share nothing but read-only inputs. A repo that
+# fails is reported and left out rather than failing the whole document.
+i=0
+while IFS= read -r root; do
+  [[ -n "$root" ]] || continue
+  i=$((i + 1))
+  ( _snapshot_repo "$root" "$NAMES" "repo$i" > "$WORK/repo$i.json" ) &
+done <<<"$ROOTS"
+wait
+
+: > "$WORK/repos.ndjson"
+j=0
+while [[ "$j" -lt "$i" ]]; do
+  j=$((j + 1))
+  if jq -e . "$WORK/repo$j.json" >/dev/null 2>&1; then
+    cat "$WORK/repo$j.json" >> "$WORK/repos.ndjson"
+  else
+    echo "task-monitor-snapshot: skipped $(sed -n "${j}p" <<<"$ROOTS"): its snapshot failed" >&2
+  fi
+done
+
+# Every repo failing is a failure, not an empty board: the front end keeps its
+# last good snapshot on a non-zero exit instead of rendering nothing.
+if [[ "$i" -gt 0 && ! -s "$WORK/repos.ndjson" ]]; then
+  exit 1
+fi
+
+jq -s --arg now "$NOW" --arg mode "$([[ "$LOCAL_ONLY" == 1 ]] && echo local || echo full)" \
+  '{schema: 1, generated_at: $now, mode: $mode, repos: .}' "$WORK/repos.ndjson"

@@ -87,3 +87,72 @@ TXT
 aw_tracker_review_no_spec_warning() {
   echo "⚠ No spec issue associated with PR #$1 (no second arg, no Closes/Fixes in body)."
 }
+
+# ---------------- task-monitor-snapshot hooks ----------------
+#
+# gh is the one tracker the shell can read, so it describes items from the
+# issue itself: its title, and the first paragraph of its body.
+
+# <ref> is an issue URL (the .info sidecar's GH_URL) or a bare number (the PM
+# queue's). `gh issue view` takes either, a number only from inside the repo.
+aw_tracker_item_describe() {
+  local ref="$1" root="$3" json desc
+  [[ -n "$ref" ]] || return 1
+  json=$(cd "$root" 2>/dev/null && gh issue view "$ref" --json number,title,body,url 2>/dev/null) || return 1
+  [[ -n "$json" ]] || return 1
+  desc=$(printf '%s' "$json" | jq -r '.body // ""' | tm_first_paragraph)
+  printf '%s' "$json" | jq -c --arg ref "$ref" --arg d "$desc" '
+    {ref: $ref, label: ("#" + (.number | tostring)), number: .number, title: .title,
+     description: (if $d == "" then null else $d end), url: .url}'
+}
+
+# `Closes #N` (and its Fixes / Resolves kin, which GitHub honours alike) is how
+# a gh PR names its issue, so it wins over the head branch. Same pattern as
+# aw_tracker_review_spec above: the first such line is the one that counts.
+aw_tracker_pr_item() {
+  local head="$1" body="${2:-}" n
+  n=$(printf '%s\n' "$body" \
+    | grep -iEo '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+    | head -1 | grep -Eo '[0-9]+' || true)
+  if [[ -z "$n" && "$head" =~ ^task/issue-([0-9]+)$ ]]; then
+    n="${BASH_REMATCH[1]}"
+  fi
+  if [[ -z "$n" ]]; then
+    _aw_tracker_pr_item_default "$head"
+    return
+  fi
+  jq -cn --argjson n "$n" \
+    '{ref: ($n | tostring), label: ("#" + ($n | tostring)), number: $n, title: null, description: null, url: null}'
+}
+
+# Open project items in none of the three configured statuses (in progress / in
+# review / done), in the order `gh project item-list` returns them. Read from the
+# workflow doc rather than added as new settings (#272): the doc already names
+# the project and all three statuses. Compared case-insensitively, since the
+# template says `In Progress` and GitHub's own default column is `In progress`.
+aw_tracker_next_fallback() {
+  local root="$1" doc="$2" limit="${3:-10}" owner repo project statuses json item desc
+  owner=$(tf_tracker_value "$doc" gh owner)
+  repo=$(tf_tracker_value "$doc" gh repo)
+  project=$(tf_tracker_value "$doc" gh project)
+  [[ -n "$owner" && -n "$project" ]] || return 0
+  # shellcheck disable=SC2016  # the backticks are literal markdown, not expansions
+  statuses=$(sed -n -E 's/^- \*\*Status when (starting work|in review|done)\*\*: `([^`]*)`.*/\2/p' "$doc" 2>/dev/null \
+    | jq -Rsc 'split("\n") | map(ascii_downcase | select(. != ""))')
+  json=$(cd "$root" 2>/dev/null && gh project item-list "$project" --owner "$owner" --format json --limit 200 2>/dev/null) || return 1
+  [[ -n "$json" ]] || return 1
+  printf '%s' "$json" | jq -c --arg repo "${repo:+$owner/$repo}" --argjson skip "$statuses" --argjson limit "$limit" '
+    [ .items[]
+      | select(.content.type == "Issue")
+      | select($repo == "" or .content.repository == $repo)
+      | select(((.status // "") | ascii_downcase) as $s | ($skip | index($s)) | not)
+    ][:$limit][]
+    | .content
+    | {ref: (.number | tostring), label: ("#" + (.number | tostring)), number: .number,
+       title: .title, body: (.body // ""), url: .url}' \
+  | while IFS= read -r item; do
+      desc=$(printf '%s' "$item" | jq -r .body | tm_first_paragraph)
+      printf '%s' "$item" | jq -c --arg d "$desc" \
+        'del(.body) | .description = (if $d == "" then null else $d end)'
+    done
+}

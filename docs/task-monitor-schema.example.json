@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "generated_at": "2026-10-20T14:33:14Z",
+  "mode": "full",
+  "repos": [
+    {
+      "name": "task-force",
+      "root": "/home/you/src/task-force",
+      "loadout": "claude-gh",
+      "tracker": "gh",
+      "agent": "claude",
+      "pm": {
+        "role": "pm-task-force",
+        "state": "idle",
+        "since": "2026-10-18T20:49:28Z",
+        "tab": "⏸️ pm-task-force",
+        "tab_id": "0",
+        "zellij_session": "task-force",
+        "agent": "claude",
+        "alias_of": null,
+        "unread": 1
+      },
+      "forge": {
+        "fetched_at": "2026-10-20T14:33:14Z",
+        "stale": false
+      },
+      "in_flight": [
+        {
+          "slug": "monitor-snapshot",
+          "ref": "https://github.com/martin-conur/task-force/issues/273",
+          "branch": "task/monitor-snapshot",
+          "base": "main",
+          "worktree": "/home/you/src/task-force-worktrees/monitor-snapshot",
+          "label": "#273",
+          "number": 273,
+          "url": "https://github.com/martin-conur/task-force/issues/273",
+          "title": "task-monitor 1/6: snapshot --json collector (bash) and schema",
+          "description": "Part of #272 (see the epic body for the full design). This is the data layer; everything else reads it.",
+          "item": {
+            "ref": "https://github.com/martin-conur/task-force/issues/273",
+            "label": "#273",
+            "number": 273,
+            "title": "task-monitor 1/6: snapshot --json collector (bash) and schema",
+            "description": "Part of #272 (see the epic body for the full design). This is the data layer; everything else reads it.",
+            "url": "https://github.com/martin-conur/task-force/issues/273"
+          },
+          "pr": null,
+          "status": "implementing",
+          "last_intent": null,
+          "session": {
+            "role": "worker-task-force-monitor-snapshot",
+            "state": "busy",
+            "since": "2026-10-20T14:11:57Z",
+            "tab": "▶️ monitor-snapshot",
+            "tab_id": "1",
+            "zellij_session": "task-force",
+            "agent": "claude"
+          },
+          "tab_id": "1",
+          "reviewers": []
+        }
+      ],
+      "next": {
+        "source": "tracker",
+        "items": [
+          {
+            "ref": "19",
+            "label": "#19",
+            "number": 19,
+            "title": "installing and init should select code assistant separately from the task tracking",
+            "url": "https://github.com/martin-conur/task-force/issues/19",
+            "description": "The install + init flow forces users to pick a *combination* (e.g. `claude-gh`) from a flattened 7–8-line TUI list. The codebase mirrors this: there are seven cross-product loadout directories (`claude-jira`, `claude-notion`, `claude-gh`, `claude-local`, `kiro-notion`, `kiro-gh`, `kiro-local`).",
+            "note": null
+          },
+          {
+            "ref": "90",
+            "label": "#90",
+            "number": 90,
+            "title": "README: add demo gif of the PM ↔ worker radio handshake",
+            "url": "https://github.com/martin-conur/task-force/issues/90",
+            "description": "The README is dense and well-written but text-heavy. A new visitor scrolling to the radio messaging or workflow sections has no immediate visceral sense of *what the experience feels like* — multiple zellij tabs, the PM tab focusing when a worker pings, the worker waking up on `approved-and-merged`. A 30–60s demo recording is the single highest-ROI step for adoption.",
+            "note": null
+          }
+        ]
+      },
+      "done": {
+        "window_hours": 24,
+        "min_items": 10,
+        "items": [
+          {
+            "ref": "266",
+            "label": "#266",
+            "number": 266,
+            "title": "task-remove hangs at 100% CPU in _la_strip_line under bash 3.2 with a UTF-8 locale (#266)",
+            "description": "Two \"is anything left?\" checks in `lib/loadout-artifacts.sh` used `${s//[[:space:]]/}`. Bash 3.2's matcher is superlinear on a bracket class under a multibyte locale. On macOS `/bin/bash`, an 8KB UTF-8 file took 25s and a ~30KB `CLAUDE.md` never finished. The two checks:",
+            "url": "https://github.com/martin-conur/task-force/pull/269",
+            "summary": "Two \"is anything left?\" checks in `lib/loadout-artifacts.sh` used `${s//[[:space:]]/}`. Bash 3.2's matcher is superlinear on a bracket class under a multibyte locale. On macOS `/bin/bash`, an 8KB UTF-8 file took 25s and a ~30KB `CLAUDE.md` never finished. The two checks:",
+            "body": "Closes #266\n\n## What\nTwo \"is anything left?\" checks in `lib/loadout-artifacts.sh` used `${s//[[:space:]]/}`. Bash 3.2's matcher is superlinear on a bracket clas…",
+            "pr": {
+              "number": 269,
+              "url": "https://github.com/martin-conur/task-force/pull/269",
+              "title": "task-remove hangs at 100% CPU in _la_strip_line under bash 3.2 with a UTF-8 locale (#266)",
+              "state": "MERGED",
+              "is_draft": false,
+              "head": "task/task-remove-hang",
+              "merged_at": "2026-10-19T17:24:59Z",
+              "merge_sha": "1415b86f7b499bdbb7057fcdc771084ff8717fd3"
+            },
+            "merged_at": "2026-10-19T17:24:59Z",
+            "merge_sha": "1415b86f7b499bdbb7057fcdc771084ff8717fd3"
+          }
+        ]
+      },
+      "attention": {
+        "active": true,
+        "signals": [
+          {
+            "kind": "unread-inbox",
+            "count": 1,
+            "text": "✉ 1 unread"
+          },
+          {
+            "kind": "review-waiting-merge",
+            "prs": [
+              270
+            ],
+            "text": "1 review waiting merge"
+          },
+          {
+            "kind": "worker-awaiting",
+            "workers": [
+              {
+                "role": "worker-task-force-pr-summary-section",
+                "slug": "pr-summary-section",
+                "since": "2026-10-20T14:02:11Z"
+              }
+            ],
+            "text": "❓ pr-summary-section is asking"
+          }
+        ]
+      }
+    }
+  ]
+}

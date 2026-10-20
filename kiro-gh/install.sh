@@ -11,8 +11,9 @@ echo "Installing kiro-gh scripts..."
 # task-done and task-work resolve the same way but then compose modules out of
 # lib/trackers/ (and, for task-work, lib/agents/) instead of exec'ing a
 # per-loadout copy (#236, #237);
-# task-board, task-pm, radio, task-config, task-remove and
-# task-recreate-worker are canonical single copies (#170, #219, #220, #230, #238 —
+# task-board, task-pm, radio, task-config, task-remove,
+# task-recreate-worker and task-monitor-snapshot are canonical single copies
+# (#170, #219, #220, #230, #238, #273 —
 # task-config and task-remove act *across* loadouts, so a per-loadout copy would
 # make no sense; task-pm and task-recreate-worker differ by agent only in their
 # final launch line).
@@ -42,6 +43,8 @@ ln -sf "$SCRIPT_DIR/../bin/task-remove" ~/.local/bin/task-remove
 echo "  ✓ Script: task-remove (canonical)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-recreate-worker" ~/.local/bin/task-recreate-worker
 echo "  ✓ Script: task-recreate-worker (canonical)"; sleep 0.05
+ln -sf "$SCRIPT_DIR/../bin/task-monitor-snapshot" ~/.local/bin/task-monitor-snapshot
+echo "  ✓ Script: task-monitor-snapshot (canonical)"; sleep 0.05
 # endregion:install-shared-symlinks
 ln -sf "$SCRIPT_DIR/../bin/task-reviewer" ~/.local/bin/task-reviewer
 echo "  ✓ Script: task-reviewer (canonical + kiro routing)"; sleep 0.05

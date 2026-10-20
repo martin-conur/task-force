@@ -26,6 +26,18 @@ teardown() {
   assert [ -L "$HOME/.local/bin/task-done" ]
 }
 
+# The shared stanza is drift-guarded, so one loadout per agent proves all seven.
+@test "install symlinks task-monitor-snapshot to the canonical root bin (#273)" {
+  local impl target
+  for impl in claude-gh kiro-local; do
+    bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
+    assert [ -L "$HOME/.local/bin/task-monitor-snapshot" ]
+    target=$(cd "$(dirname "$(readlink "$HOME/.local/bin/task-monitor-snapshot")")" && pwd -P)
+    assert_equal "$target" "$(cd "$REPO_ROOT_REAL/bin" && pwd -P)"
+    rm -f "$HOME/.local/bin/task-monitor-snapshot"
+  done
+}
+
 @test "kiro-gh install symlinks task-pm and radio into ~/.local/bin" {
   bash "$REPO_ROOT_REAL/kiro-gh/install.sh" >/dev/null
   assert [ -L "$HOME/.local/bin/task-pm" ]

@@ -344,9 +344,11 @@ task-monitor-queue clear                                # empty
 task-monitor-queue                                      # show it
 ```
 
-Refs are compared by their last path segment, so `267`, `#267` and an issue
-URL ending in `/issues/267` are one item. `set` keeps the note of a ref that
-stays queued; `--note <ref>=` clears it.
+Refs are compared by their last path segment, ignoring a URL's query string
+and fragment, so `267`, `#267` and an issue URL ending in `/issues/267` are one
+item. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears
+it. `--note` splits on the first `=`, so a ref that contains `=` cannot take a
+note.
 
 ### PM ↔ worker messaging (radio)
 

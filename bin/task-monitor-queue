@@ -15,9 +15,9 @@ set -euo pipefail
 # tracker ref per line, in order, with an optional one-line note after a tab.
 # Blank lines and `#` comments are ignored on read and never written.
 #
-# Refs are compared by key, not by spelling: a leading `#` and any URL or path
-# prefix are dropped, so `267`, `#267` and .../issues/267 are one item, as are
-# tasks/012-x.md and 012-x.md. That is what lets task-work drop the ref it
+# Refs are compared by key, not by spelling: leading `#`s, a URL's query
+# string and fragment, and any URL or path prefix are dropped, so `267`,
+# `#267` and .../issues/267 are one item, as are tasks/012-x.md and 012-x.md. That is what lets task-work drop the ref it
 # dispatches (`rm --quiet <its ref>`) whatever form the PM queued it in.
 #
 # Must run on /bin/bash 3.2: no associative arrays, no mapfile.
@@ -55,12 +55,15 @@ The PM's short-term queue for this repo: the "Next" section of task-monitor.
   clear   empty the queue
 
   --note <ref>=<text>  a one-line note for <ref>, which must be one of the
-                       refs given or already queued. An empty text clears it
+                       refs given or already queued. An empty text clears it.
+                       It splits on the first `=`, so a ref that itself
+                       contains `=` cannot take a note
   --quiet              print nothing on success
   --repo DIR           the repo containing DIR instead of $PWD
 
 A ref is a tracker ref: an issue number, a URL, a Jira key, a task file.
-`267`, `#267` and .../issues/267 name the same item.
+`267`, `#267` and .../issues/267 name the same item; a URL's query string
+and fragment are ignored. Put `--` before a ref that starts with `-`.
 
 Writes ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue.
 EOF
@@ -88,6 +91,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --repo requires a value" >&2; exit 2; }
       REPO_ARG="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
+    --) shift; ARGS+=("$@"); break ;;
     -*) echo "Error: unknown option: $1" >&2; usage 2 >&2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
@@ -110,10 +114,23 @@ QUEUE="${TASK_FORCE_HOME:-$HOME/.task-force}/monitor/$(aw_main_repo_name "$ROOT"
 
 # ----- helpers --------------------------------------------------------------
 
-# The identity a ref is compared by: no leading `#`, no trailing `/`, and only
-# the last path segment of a URL or a path.
+# A ref with every leading `#` gone. One would be enough for `#267`, but the
+# stored form must never start with `#`: the reader skips such a line as a
+# comment, so `##5` kept as `#5` would vanish from the queue.
+_strip_hashes() {
+  local r="$1"
+  while [[ "$r" == '#'* ]]; do r="${r#\#}"; done
+  printf '%s' "$r"
+}
+
+# The identity a ref is compared by: no leading `#`, no query string or
+# fragment, no trailing `/`, and only the last path segment of a URL or a path.
+# So a Notion page URL and the same URL with `?pvs=4` are one item.
 _key() {
-  local k="${1#\#}"
+  local k
+  k=$(_strip_hashes "$1")
+  k="${k%%\?*}"
+  k="${k%%#*}"
   k="${k%/}"
   printf '%s' "${k##*/}"
 }
@@ -121,8 +138,8 @@ _key() {
 # A ref goes on one line before a tab, so it may hold neither whitespace nor
 # be empty.
 _check_ref() {
+  [[ -n "$(_strip_hashes "$1")" ]] || { echo "Error: empty ref" >&2; exit 2; }
   case "$1" in
-    ''|'#') echo "Error: empty ref" >&2; exit 2 ;;
     *[[:space:]]*) echo "Error: a ref cannot contain whitespace: $1" >&2; exit 2 ;;
   esac
 }
@@ -156,6 +173,9 @@ _index_of() {
   return 1
 }
 
+# Read-modify-write with no lock: a PM `set` racing task-work's `rm` can lose
+# one of the two updates. Accepted: the window is milliseconds, and the PM, the
+# only real writer, re-runs `set` whenever the agreed order changes anyway.
 _write() {
   local i dir tmp
   if [[ ${#REFS[@]} -eq 0 ]]; then
@@ -231,7 +251,7 @@ case "$CMD" in
           break
         fi
       done
-      REFS+=("${ref#\#}")
+      REFS+=("$(_strip_hashes "$ref")")
       NOTES+=("$note")
     done
     _apply_notes
@@ -242,7 +262,7 @@ case "$CMD" in
     for ref in "${ARGS[@]}"; do
       _check_ref "$ref"
       _index_of "$ref" >/dev/null && continue
-      REFS+=("${ref#\#}")
+      REFS+=("$(_strip_hashes "$ref")")
       NOTES+=("")
     done
     _apply_notes

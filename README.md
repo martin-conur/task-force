@@ -428,7 +428,7 @@ task-monitor-queue clear                                           # empty
 task-monitor-queue                                                 # show it
 ```
 
-A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page URL, a task file name. Refs are compared by their last path segment, so `267`, `#267` and `…/issues/267` are one item. That is what lets `task-work` drop the ref it dispatches from the queue whatever form the PM queued it in, so a dispatched item never comes back as "next" after it lands. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears it. The file is `$TASK_FORCE_HOME/monitor/<repo>/queue`, one ref per line with an optional tab-separated note, and `task-monitor-queue` owns that format.
+A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page URL, a task file name. Refs are compared by their last path segment, ignoring a URL's query string and fragment, so `267`, `#267` and `…/issues/267` are one item, and so are a Notion page URL with and without `?pvs=4`. That is what lets `task-work` drop the ref it dispatches from the queue whatever form the PM queued it in, so a dispatched item never comes back as "next" after it lands. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears it. `--note` splits on the first `=`, so a ref containing `=` cannot take a note, and `--` goes before a ref that starts with `-`. The file is `$TASK_FORCE_HOME/monitor/<repo>/queue`, one ref per line with an optional tab-separated note, and `task-monitor-queue` owns that format.
 
 ## `task-monitor` — the board, live
 

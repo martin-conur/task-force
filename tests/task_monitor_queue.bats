@@ -207,3 +207,30 @@ queue_file() { sed 's/\t/<TAB>/' "$QUEUE"; }
     assert_output true
   done
 }
+
+@test "a ref's leading #s are all stripped, so ##5 is stored as 5 and not read back as a comment" {
+  run nx set '##5' 6
+  assert_output "queue: 5 6"
+  run nx show
+  assert_output "$(printf '1  5\n2  6')"
+  run nx set '##'
+  assert_failure 2
+  assert_output --partial "empty ref"
+}
+
+@test "-- ends the options, so a ref may start with -" {
+  run nx add -- -9 10
+  assert_success
+  assert_output "queue: -9 10"
+  run nx rm -- -9
+  assert_output "queue: 10"
+}
+
+@test "a URL's query string and fragment do not change its key" {
+  nx set 'https://www.notion.so/acme/Fix-auth-abc123?pvs=4' 7 >/dev/null
+  run nx rm 'https://www.notion.so/acme/Fix-auth-abc123'
+  assert_output "queue: 7"
+  nx set 'https://www.notion.so/acme/Fix-auth-abc123' 7 >/dev/null
+  run nx add 'https://www.notion.so/acme/Fix-auth-abc123#section' 'https://github.com/acme/widgets/issues/7?x=1'
+  assert_output "queue: https://www.notion.so/acme/Fix-auth-abc123 7"
+}

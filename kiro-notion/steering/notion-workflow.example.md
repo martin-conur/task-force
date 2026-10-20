@@ -268,7 +268,10 @@ value comes from disk, the tracker or the forge, and no model is asked to write
 or summarise any of it.
 
 - **In flight** is every worktree whose `.<slug>.info` sidecar exists, joined to
-  its radio session, its PR and the latest review intent.
+  its radio session, its PR and the latest review intent. The worktree must
+  still be live (its directory exists and `git worktree list` has it): a
+  sidecar left behind by a removal that bypassed `task-done` is listed under
+  `orphans` instead (#286).
 - **Next** is the PM's queue, else the tracker's backlog (gh project items in
   none of the three statuses, or the local `tasks/` files). There is none on
   jira or notion.

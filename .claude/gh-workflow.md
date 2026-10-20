@@ -309,7 +309,8 @@ session, and goes to a tab only while the tab at the recorded id still bears the
 item's name, the check `task-done` makes before closing one (#260). It holds no
 task-force logic: every value is a snapshot field. Build it from the task-force
 checkout with `cargo build --release --manifest-path monitor/Cargo.toml`
-(`install.sh` does not build it yet; #277).
+(`install.sh` does not build it yet; #277). Its Next section is the queue the
+PM writes with `task-monitor-queue`, below, else the tracker's backlog.
 
 `task-monitor-queue` — the PM's short-term queue, the board's **Next** (#275)
 

@@ -436,7 +436,7 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
 - **`t` stays in this zellij session.** Each overview row names its repo's zellij session; `zellij action` cannot switch sessions, so a tab elsewhere is named, not attempted. Within the session, `t` goes to the recorded `TAB_ID` only while that tab still bears the item's name, the check `task-done` makes before it closes a tab (#260).
 - **No task-force logic in Rust.** Every word comes from the snapshot; status words are a lookup of its `status` field.
 
-Build it from the task-force checkout with `cargo build --release --manifest-path monitor/Cargo.toml` and run `monitor/target/release/task-monitor`; it finds `bin/task-monitor-snapshot` beside it, and `$TASK_MONITOR_SNAPSHOT` overrides that. `install.sh` does not build or link it yet (#277).
+Build it from the task-force checkout with `cargo build --release --manifest-path monitor/Cargo.toml` and run `monitor/target/release/task-monitor`; it finds `bin/task-monitor-snapshot` beside it, and `$TASK_MONITOR_SNAPSHOT` overrides that. `install.sh` does not build or link it yet (#277). It needs Rust 1.88 or newer; CI builds, tests and lints it on Linux and macOS.
 
 ---
 

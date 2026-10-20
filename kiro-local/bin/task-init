@@ -308,6 +308,18 @@ _radio_install_hooks() {
   # name / timeout the upgrade itself gives an entry (verified on 2.32.0;
   # `kiro-cli agent validate` accepts the result, and a re-run of the upgrade
   # still reports the file "already universal").
+  #
+  # A universal config with no hooks at all has no `hooks` to read the shape
+  # off, so its shape comes from `permissions`. That is the field kiro-cli's
+  # upgrade keys the hooks shape on (probed on 2.32.0): an object `hooks` in a
+  # file that has `permissions` is reported "out of sync (not rebuilt)", with or
+  # without the `kiroUpgrade` fingerprint, and an array is accepted in every
+  # case. `kiroUpgrade` alone would miss a V3-only config, which has no
+  # fingerprint, and give it the hybrid kiro-cli refuses to rebuild.
+  #
+  # The `radio-<trigger>` name can repeat a user entry's name. kiro-cli 2.32.0
+  # does not require unique names (`agent validate`, `agent upgrade` and
+  # `agent list` all accept duplicates), so nothing here avoids one.
   local target tmp merged=0
   for target in "$agents_dir"/*.json; do
     [[ -f "$target" ]] || continue
@@ -333,8 +345,9 @@ _radio_install_hooks() {
       # than silently editing a key that is not ours.
       def drop_radio(arr):
         [ (arr // [])[] | select(is_radio | not) ];
-      if (.hooks | type) == "array" then
-        .hooks |= ( add_radio_u("agentSpawn";       $spawn)
+      if (.hooks | type) == "array" or (.hooks == null and has("permissions")) then
+        .hooks |= ( (. // [])
+                  | add_radio_u("agentSpawn";       $spawn)
                   | add_radio_u("userPromptSubmit"; $ups)
                   | add_radio_u("stop";             $stop)
                   | map(select((.trigger == "agentStop" and is_radio) | not)) )

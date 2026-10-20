@@ -1,0 +1,11 @@
+{
+  "name": "reviewer",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ]
+}

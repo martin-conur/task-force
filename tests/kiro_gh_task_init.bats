@@ -417,6 +417,41 @@ teardown() {
   assert_success
 }
 
+@test "universal format: a hook-less upgraded config gets an array hooks, not a hybrid object (#267)" {
+  # Real upgrade output of a v2 config that had no hooks: no `hooks` key at all,
+  # so there is no shape to read off it. An object here is the hybrid kiro-cli's
+  # upgrade reports "out of sync (not rebuilt)".
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  cp "$KIRO_UNIVERSAL/no-hooks.json" "$TARGET_DIR/.kiro/agents/reviewer.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks | type' "$TARGET_DIR/.kiro/agents/reviewer.json"
+  assert_output "array"
+  run jq -r '[.hooks[] | "\(.name)=\(.action.command | split(" ")[0:2] | join(" "))"] | join(",")' \
+    "$TARGET_DIR/.kiro/agents/reviewer.json"
+  assert_output "radio-agentSpawn=radio register,radio-userPromptSubmit=radio busy,radio-stop=radio ready"
+  run bash -c "diff <(jq -S . '$KIRO_UNIVERSAL/no-hooks.json') <(jq -S 'del(.hooks)' '$TARGET_DIR/.kiro/agents/reviewer.json')"
+  assert_success
+}
+
+@test "universal format: the shape comes from permissions, not the kiroUpgrade fingerprint (#267)" {
+  # Derived from the real fixture by dropping `kiroUpgrade`: the shape of a V3-only
+  # config, which carries no fingerprint. kiro-cli 2.32.0 still reports an object
+  # `hooks` in such a file "out of sync", so `permissions` has to decide it.
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq 'del(.kiroUpgrade)' "$KIRO_UNIVERSAL/no-hooks.json"
+  assert_success
+  printf '%s\n' "$output" > "$TARGET_DIR/.kiro/agents/reviewer.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  run jq -r '.hooks | type' "$TARGET_DIR/.kiro/agents/reviewer.json"
+  assert_output "array"
+}
+
 @test "universal format: the merge is idempotent (#267)" {
   run "$KIRO_GH_TASK_INIT"
   assert_success

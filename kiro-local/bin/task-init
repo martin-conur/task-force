@@ -297,6 +297,29 @@ _radio_install_hooks() {
   fi
 
 # region:kiro-radio-hooks-jq-merge
+  # Two shapes of `hooks` reach this merge (#267). task-init writes an object
+  # keyed by trigger, {"agentSpawn": [{"command": …}], …}. kiro-cli's V3 engine
+  # can rewrite the file into its "universal" format, where `hooks` is an array
+  # of {name, trigger, action: {type, command}, timeout} — on the upgrade
+  # dialog, under chat.enableAutoAgentUpgrade=true, or by `kiro-cli agent
+  # upgrade`. The merge keeps whichever shape the file already has and never
+  # converts one into the other: a radio entry is recognised by its command in
+  # either shape, and a missing one is added in the shape around it, with the
+  # name / timeout the upgrade itself gives an entry (verified on 2.32.0;
+  # `kiro-cli agent validate` accepts the result, and a re-run of the upgrade
+  # still reports the file "already universal").
+  #
+  # A universal config with no hooks at all has no `hooks` to read the shape
+  # off, so its shape comes from `permissions`. That is the field kiro-cli's
+  # upgrade keys the hooks shape on (probed on 2.32.0): an object `hooks` in a
+  # file that has `permissions` is reported "out of sync (not rebuilt)", with or
+  # without the `kiroUpgrade` fingerprint, and an array is accepted in every
+  # case. `kiroUpgrade` alone would miss a V3-only config, which has no
+  # fingerprint, and give it the hybrid kiro-cli refuses to rebuild.
+  #
+  # The `radio-<trigger>` name can repeat a user entry's name. kiro-cli 2.32.0
+  # does not require unique names (`agent validate`, `agent upgrade` and
+  # `agent list` all accept duplicates), so nothing here avoids one.
   local target tmp merged=0
   for target in "$agents_dir"/*.json; do
     [[ -f "$target" ]] || continue
@@ -306,22 +329,36 @@ _radio_install_hooks() {
       --arg ups   "$busy_cmd" \
       --arg stop  "$ready_cmd" \
       '
+      def is_radio: (.command // .action.command? // "") | startswith("radio ");
       def add_radio(arr; cmd):
-        if (arr // []) | any((.command // "") | startswith("radio ")) then arr
+        if (arr // []) | any(is_radio) then arr
         else (arr // []) + [{command: cmd}]
+        end;
+      def add_radio_u(trig; cmd):
+        if any(.[]; .trigger == trig and is_radio) then .
+        else . + [{name: "radio-\(trig)", trigger: trig,
+                   action: {type: "command", command: cmd}, timeout: 10}]
         end;
       # `agentStop` is not a valid kiro-cli trigger — an agent config carrying
       # one fails to load wholesale, taking every other hook with it. Drop any
       # radio-owned entry there; leave anything we did not write alone rather
       # than silently editing a key that is not ours.
       def drop_radio(arr):
-        [ (arr // [])[] | select(((.command // "") | startswith("radio ")) | not) ];
-      .hooks //= {}
-      | .hooks.agentSpawn       = add_radio(.hooks.agentSpawn;       $spawn)
-      | .hooks.userPromptSubmit = add_radio(.hooks.userPromptSubmit; $ups)
-      | .hooks.stop             = add_radio(.hooks.stop;             $stop)
-      | .hooks.agentStop        = drop_radio(.hooks.agentStop)
-      | if (.hooks.agentStop | length) == 0 then del(.hooks.agentStop) else . end
+        [ (arr // [])[] | select(is_radio | not) ];
+      if (.hooks | type) == "array" or (.hooks == null and has("permissions")) then
+        .hooks |= ( (. // [])
+                  | add_radio_u("agentSpawn";       $spawn)
+                  | add_radio_u("userPromptSubmit"; $ups)
+                  | add_radio_u("stop";             $stop)
+                  | map(select((.trigger == "agentStop" and is_radio) | not)) )
+      else
+        .hooks //= {}
+        | .hooks.agentSpawn       = add_radio(.hooks.agentSpawn;       $spawn)
+        | .hooks.userPromptSubmit = add_radio(.hooks.userPromptSubmit; $ups)
+        | .hooks.stop             = add_radio(.hooks.stop;             $stop)
+        | .hooks.agentStop        = drop_radio(.hooks.agentStop)
+        | if (.hooks.agentStop | length) == 0 then del(.hooks.agentStop) else . end
+      end
       ' "$target" >"$tmp"; then
       rm -f "$tmp"
       echo "Warning: could not merge radio hooks into $target (invalid JSON?)" >&2
@@ -336,20 +373,26 @@ _radio_install_hooks() {
   # A radio-prefixed command that isn't the one we install blocks add_radio from
   # installing the right one, so the repo would keep a stale hook while
   # task-init prints success — the same trap #172 found on the claude side.
-  # Warn loudly rather than silently rewriting a command someone chose.
+  # Warn loudly rather than silently rewriting a command someone chose. Both
+  # `hooks` shapes are read, as in the merge above (#267).
   local stray="" one
   for target in "$agents_dir"/*.json; do
     [[ -f "$target" ]] || continue
     one=$(jq -r \
       --arg spawn "$register_cmd" --arg ups "$busy_cmd" --arg stop "$ready_cmd" \
       --arg name "${target##*/}" '
-      def stray(arr; evt; expected):
-        [ (arr // [])[] | .command // ""
+      def entries(evt):
+        if (.hooks | type) == "array"
+        then [ .hooks[] | select(.trigger == evt) | .action.command? // "" ]
+        else [ (.hooks[evt]? // [])[] | .command // "" ]
+        end;
+      def stray(evt; expected):
+        [ entries(evt)[]
           | select(startswith("radio ") and . != expected)
           | "\($name) \(evt): \(.) — replace with: \(expected)" ];
-      ( stray(.hooks.agentSpawn;       "agentSpawn";       $spawn)
-      + stray(.hooks.userPromptSubmit; "userPromptSubmit"; $ups)
-      + stray(.hooks.stop;             "stop";             $stop)
+      ( stray("agentSpawn";       $spawn)
+      + stray("userPromptSubmit"; $ups)
+      + stray("stop";             $stop)
       ) | .[]
       ' "$target" 2>/dev/null || true)
     if [[ -n "$one" ]]; then stray+="$one"$'\n'; fi

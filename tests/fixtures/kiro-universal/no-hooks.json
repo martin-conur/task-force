@@ -1,0 +1,28 @@
+{
+  "name": "reviewer",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:13ede5f409abc0581e8d935286cc7510d708536e69784bef88a9f4f441413cd3",
+    "source": "sha256:43fa375c34dceda7a39f13739996df8a611b1186a75142c816c084ca6fc43dba"
+  }
+}

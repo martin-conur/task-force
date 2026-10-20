@@ -1,0 +1,57 @@
+{
+  "name": "pm",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "hooks": [
+    {
+      "name": "agentSpawn-0",
+      "trigger": "agentSpawn",
+      "action": {
+        "type": "command",
+        "command": "radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --repo $(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${TASK_FORCE_LOADOUT:-kiro-gh}"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "stop-0",
+      "trigger": "stop",
+      "action": {
+        "type": "command",
+        "command": "radio ready"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "userPromptSubmit-0",
+      "trigger": "userPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "radio busy"
+      },
+      "timeout": 10
+    }
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:77256a8f5a9fd52c18cb02663fd26845d6f9b4559244a5cdc75a719f3a9bfab0",
+    "source": "sha256:ed5caa7fd2c7babfe8906be86dc15224183be87a7dfd924f02221b4f4faee8e2"
+  }
+}

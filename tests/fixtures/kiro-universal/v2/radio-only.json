@@ -1,0 +1,28 @@
+{
+  "name": "pm",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "hooks": {
+    "agentSpawn": [
+      {
+        "command": "radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --repo $(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${TASK_FORCE_LOADOUT:-kiro-gh}"
+      }
+    ],
+    "userPromptSubmit": [
+      {
+        "command": "radio busy"
+      }
+    ],
+    "stop": [
+      {
+        "command": "radio ready"
+      }
+    ]
+  }
+}

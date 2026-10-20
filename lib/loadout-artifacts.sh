@@ -254,23 +254,31 @@ la_owned_paths() {
 # Print the agent config with every radio-owned hook entry removed, emptied
 # triggers dropped, and `hooks` itself dropped if that empties it.
 #
-# The `(.command // "") | startswith("radio ")` test is the exact mirror of the
+# The `is_radio` test is the exact mirror of the
 # guard kiro-*/bin/task-init's _radio_install_hooks merge uses to recognise its
 # own work (#218/#222) — an entry of the user's own on the same trigger is left
 # alone. Unlike the install merge this sweeps *every* trigger rather than the
 # three it writes, so the invalid `agentStop` entries older task-inits left
 # behind come out too.
+#
+# Both `hooks` shapes are handled, as in the merge (#267): task-init's object
+# keyed by trigger, and the array kiro-cli's "universal" format rewrites it into,
+# whose entries carry the command at `.action.command`. Each keeps its shape.
 _la_strip_agent_hooks() {
   jq '
+    def is_radio: (.command // .action.command? // "") | startswith("radio ");
     def drop_radio(arr):
-      [ (arr // [])[] | select(((.command // "") | startswith("radio ")) | not) ];
+      [ (arr // [])[] | select(is_radio | not) ];
     ( if (.hooks | type) == "object"
       then .hooks = ( .hooks
                       | with_entries(.value = drop_radio(.value))
                       | with_entries(select((.value | length) > 0)) )
+      elif (.hooks | type) == "array"
+      then .hooks = drop_radio(.hooks)
       else . end )
-    | ( if (.hooks | type) == "object" and (.hooks | length) == 0
-        then del(.hooks) else . end )
+    | ( if (.hooks | type) == "object" or (.hooks | type) == "array"
+        then (if (.hooks | length) == 0 then del(.hooks) else . end)
+        else . end )
     ' "$1"
 }
 

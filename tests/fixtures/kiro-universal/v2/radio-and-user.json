@@ -1,0 +1,38 @@
+{
+  "name": "worker",
+  "description": "fixture",
+  "prompt": "fixture prompt",
+  "tools": [
+    "*"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "hooks": {
+    "agentSpawn": [
+      {
+        "command": "radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --repo $(git rev-parse --show-toplevel 2>/dev/null) --agent kiro --loadout ${TASK_FORCE_LOADOUT:-kiro-gh}"
+      }
+    ],
+    "userPromptSubmit": [
+      {
+        "command": "radio busy"
+      }
+    ],
+    "stop": [
+      {
+        "command": "radio ready"
+      },
+      {
+        "command": "./my-own-stop.sh"
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "./guard.sh",
+        "matcher": "execute_bash",
+        "timeout_ms": 5000
+      }
+    ]
+  }
+}

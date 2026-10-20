@@ -81,6 +81,10 @@ TASK_REMOVE="$REPO_ROOT_REAL/bin/task-remove"
 # `radio unregister` on stdin instead of hand-building JSON — see
 # tests/fixtures/hook-payloads/README.md for provenance and counts.
 HOOK_PAYLOADS="$REPO_ROOT_REAL/tests/fixtures/hook-payloads"
+# kiro agent configs rewritten by a real `kiro-cli agent upgrade` into the
+# "universal" format, whose `hooks` is an array (#267) — see
+# tests/fixtures/kiro-universal/README.md for how they were made.
+KIRO_UNIVERSAL="$REPO_ROOT_REAL/tests/fixtures/kiro-universal"
 
 # Build a PATH directory holding everything radio needs *except* jq, so the
 # jq-less fail-safe branches can be exercised (#172 for stop-hook, #192 for

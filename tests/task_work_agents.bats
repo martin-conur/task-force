@@ -414,6 +414,9 @@ _session_auto_submit() {
   assert_success
   assert_output --partial "the worker on its V3 engine and chat.enableAutoAgentUpgrade is"
   assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade false"
+  # No longer warned off `true`: task-init and task-remove handle the
+  # universal format it upgrades the configs into since #267.
+  refute_output --partial "cannot merge radio hooks"
   assert_stub_called zellij "kiro-cli chat --agent worker"
   # Both read from the repo root, so workspace-scoped settings count.
   run sort -u "$STUB_CALLS_DIR/kiro-cli.engine-cwd" "$STUB_CALLS_DIR/kiro-cli.upgrade-cwd"

@@ -350,6 +350,52 @@ JSON
   assert [ ! -e "$MAIN_REPO/.claude" ]
 }
 
+# kiro-cli's "universal" agent-config format (#267) stores `hooks` as an array
+# of {name, trigger, action: {command}}; the strip used to skip that shape and
+# leave every radio hook behind. Fixtures are real `kiro-cli agent upgrade`
+# output — tests/fixtures/kiro-universal/README.md.
+
+@test "an upgraded (universal-format) kiro agent config keeps the user's hooks, radio ones stripped" {
+  _init kiro-gh --owner acme --repo widgets --project 7
+  cp "$KIRO_UNIVERSAL/radio-and-user.json" "$MAIN_REPO/.kiro/agents/worker.json"
+
+  run "$TASK_REMOVE" --yes
+  assert_success
+  assert_output --partial "kept .kiro/agents/worker.json, radio hooks stripped"
+  run jq -r '.hooks | type' "$MAIN_REPO/.kiro/agents/worker.json"
+  assert_output "array"
+  run jq -r '[.hooks[] | .action.command] | join(",")' "$MAIN_REPO/.kiro/agents/worker.json"
+  assert_output "./guard.sh,./my-own-stop.sh"
+  # The user's entries are exactly as kiro-cli wrote them, and nothing outside
+  # `hooks` was touched.
+  run bash -c "diff <(jq -S '.hooks |= map(select(.action.command | startswith(\"radio \") | not))' '$KIRO_UNIVERSAL/radio-and-user.json') <(jq -S . '$MAIN_REPO/.kiro/agents/worker.json')"
+  assert_success
+}
+
+@test "an upgraded kiro agent config holding only radio hooks loses the hooks key, not the file" {
+  _init kiro-gh --owner acme --repo widgets --project 7
+  cp "$KIRO_UNIVERSAL/radio-only.json" "$MAIN_REPO/.kiro/agents/pm.json"
+
+  run "$TASK_REMOVE" --yes
+  assert_success
+  assert_output --partial "kept .kiro/agents/pm.json, radio hooks stripped"
+  run jq -e 'has("hooks")' "$MAIN_REPO/.kiro/agents/pm.json"
+  assert_failure
+  run bash -c "diff <(jq -S 'del(.hooks)' '$KIRO_UNIVERSAL/radio-only.json') <(jq -S . '$MAIN_REPO/.kiro/agents/pm.json')"
+  assert_success
+}
+
+@test "--dry-run names the universal-format strip and writes nothing" {
+  _init kiro-gh --owner acme --repo widgets --project 7
+  cp "$KIRO_UNIVERSAL/radio-and-user.json" "$MAIN_REPO/.kiro/agents/worker.json"
+
+  run "$TASK_REMOVE" --dry-run
+  assert_success
+  assert_output --partial "would keep .kiro/agents/worker.json, radio hooks stripped"
+  run cmp "$KIRO_UNIVERSAL/radio-and-user.json" "$MAIN_REPO/.kiro/agents/worker.json"
+  assert_success
+}
+
 @test "--purge deletes a customized kiro agent config rather than stripping its hooks" {
   _init kiro-gh --owner acme --repo widgets --project 7
   run jq '.prompt = "MY OWN PROMPT"' "$MAIN_REPO/.kiro/agents/worker.json"

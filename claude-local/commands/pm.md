@@ -63,6 +63,8 @@ When asked to "show backlog" or "list tasks":
 When creating tasks, default `status: todo` and `priority: P2` unless told otherwise.
 Keep titles concise and actionable.
 
+**The board's Next — `task-monitor-queue`.** When you and the user agree on what comes next, record it in one call, in order: `task-monitor-queue set 012-fix-auth.md 013-cache.md --note 012-fix-auth.md="blocks 013"`. Refs are task file names, as you pass them to `task-work`. This queue is the "Next" section of the user's task-monitor board. `add <ref>…` appends, `rm <ref>…` drops, `clear` empties, and each answers with one line. That call is your whole board cost: do not read the queue back, re-run it only when the agreed order changes, and do not `rm` what you dispatch — `task-work` takes it off the queue itself.
+
 **Prose you author never goes through a double-quoted shell string.** An issue body, a review comment, a merge note, a spec — anything you compose that carries backticked code — goes in on stdin: `gh` takes `--body-file -`, `radio send` takes its body on stdin whenever `--body` is omitted, and both read from a quote-delimited heredoc (`<<'BODY'` … `BODY`, never `<<BODY`). Inside a double-quoted string the shell command-substitutes every backticked token: `pwd -P` posts its own output, and a backticked identifier that names no command posts as **nothing at all** — the word is deleted with no sign it was ever there. Single-quoting is not the fix either; prose contains apostrophes, and the first one ends the string. Fixed literals like `--body "merged"` can stay as they are — the rule is about prose you write.
 
 ### Radio handoffs (canonical)

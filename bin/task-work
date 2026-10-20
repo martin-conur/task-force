@@ -217,6 +217,14 @@ printf 'BASE_BRANCH=%s\nSLUG=%s\n%s=%s\n' "$BASE_BRANCH" "$SLUG" "$INFO_KEY" "$T
 
 aw_tracker_post_worktree "$REPO_ROOT" "$SLUG" "$BRANCH" "$WORKTREE_DIR" "$TASK_REF"
 
+# A dispatched item is no longer next: take it off the PM's queue (#275), so
+# the PM never spends a call keeping the board's Next section honest. Refs are
+# compared by key, so a queued `267` matches the URL dispatched here. Best
+# effort: a queue that cannot be written never stops a launch.
+if [[ -n "$TASK_REF" ]]; then
+  "$AW_ROOT/bin/task-monitor-queue" rm --quiet --repo "$REPO_ROOT" "$TASK_REF" 2>/dev/null || true
+fi
+
 # Install the commit-msg guard before the worker gets a shell (#194). GitHub
 # honours a CI-skip marker anywhere in the head commit's message, so an agent
 # that merely *quotes* one while describing another commit silently gets zero

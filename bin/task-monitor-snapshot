@@ -374,9 +374,9 @@ _snapshot_repo() {
 
   # --- next: the PM's queue, else the tracker's fallback.
   #
-  # The queue file's format is owned by the `task-monitor next` command (#272
-  # sub-issue 3). Until that lands this reads the shape it is expected to keep:
-  # one ref per line, an optional note after a tab, `#` comments ignored.
+  # The queue file's format is owned by bin/task-monitor-queue (#275), which
+  # the PM writes it through: one ref per line, an optional note after a tab,
+  # `#` comments ignored.
   local queue="$cache/queue" next_source=none line note fallback fb_ok=1
   : > "$w/next.ndjson"
   if [[ -s "$queue" ]]; then

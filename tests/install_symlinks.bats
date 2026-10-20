@@ -38,6 +38,17 @@ teardown() {
   done
 }
 
+@test "install symlinks task-monitor-queue to the canonical root bin (#275)" {
+  local impl target
+  for impl in claude-gh kiro-local; do
+    bash "$REPO_ROOT_REAL/$impl/install.sh" >/dev/null
+    assert [ -L "$HOME/.local/bin/task-monitor-queue" ]
+    target=$(cd "$(dirname "$(readlink "$HOME/.local/bin/task-monitor-queue")")" && pwd -P)
+    assert_equal "$target" "$(cd "$REPO_ROOT_REAL/bin" && pwd -P)"
+    rm -f "$HOME/.local/bin/task-monitor-queue"
+  done
+}
+
 @test "kiro-gh install symlinks task-pm and radio into ~/.local/bin" {
   bash "$REPO_ROOT_REAL/kiro-gh/install.sh" >/dev/null
   assert [ -L "$HOME/.local/bin/task-pm" ]

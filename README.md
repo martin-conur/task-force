@@ -416,6 +416,20 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
 
 `--local` exists so a front end can refresh on every filesystem event without waiting on GitHub: it shadows `gh` with a function that fails, so every forge read falls back to the cache under `$TASK_FORCE_HOME/monitor/<repo>/`. The schema (`"schema": 1`) is documented in [`docs/task-monitor-schema.md`](docs/task-monitor-schema.md), with a full example beside it.
 
+### `task-monitor-queue` — the PM's queue
+
+**Next** is a short ordered list the PM writes when it and the user agree on what comes next (#275). Writing it is the PM's only board cost, so each call answers with one line and the PM never reads it back:
+
+```bash
+task-monitor-queue set 267 266 180 --note 267="kiro hooks first"   # replace, in order
+task-monitor-queue add 290                                         # append
+task-monitor-queue rm 266                                          # drop
+task-monitor-queue clear                                           # empty
+task-monitor-queue                                                 # show it
+```
+
+A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page URL, a task file name. Refs are compared by their last path segment, so `267`, `#267` and `…/issues/267` are one item. That is what lets `task-work` drop the ref it dispatches from the queue whatever form the PM queued it in, so a dispatched item never comes back as "next" after it lands. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears it. The file is `$TASK_FORCE_HOME/monitor/<repo>/queue`, one ref per line with an optional tab-separated note, and `task-monitor-queue` owns that format.
+
 ## `task-monitor` — the board, live
 
 `task-monitor` is the terminal front end over that JSON (Rust + ratatui, in [`monitor/`](monitor/)). Inside a repo it opens on that repo's view; outside one, or with `--all`, on the overview of every repo radio knows about.

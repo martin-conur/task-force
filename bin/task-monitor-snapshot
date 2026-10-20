@@ -455,7 +455,8 @@ _snapshot_repo() {
 
   # --- assemble.
   jq -n \
-    --arg name "$name" --arg root "$root" --arg impl "$impl" --arg tracker "$tracker" \
+    --arg name "$name" --arg root "$root" --arg worktree_base "$wtbase" \
+    --arg impl "$impl" --arg tracker "$tracker" \
     --arg agent "$agent" --arg now "$NOW" --arg fetched_at "$fetched_at" \
     --arg next_source "$next_source" --argjson next_limit "$NEXT_LIMIT" \
     --argjson forge_ok "$forge_ok" --argjson names "$names_json" \

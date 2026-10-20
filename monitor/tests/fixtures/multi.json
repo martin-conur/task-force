@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "generated_at": "2026-10-20T15:00:00Z",
+  "mode": "full",
+  "repos": [
+    {
+      "name": "task-force",
+      "root": "/home/you/src/task-force",
+      "worktree_base": "/home/you/src/task-force-worktrees",
+      "loadout": "claude-gh",
+      "tracker": "gh",
+      "agent": "claude",
+      "pm": {
+        "role": "pm-task-force", "state": "idle", "last_heartbeat": "2026-10-20T14:58:00Z",
+        "tab": "⏸️ pm-task-force", "tab_id": "0", "zellij_session": "task-force",
+        "agent": "claude", "alias_of": null, "unread": 1
+      },
+      "forge": { "available": true, "fetched_at": "2026-10-20T14:59:30Z", "stale": false },
+      "in_flight": [
+        {
+          "slug": "kiro-config", "ref": "https://github.com/o/task-force/issues/267",
+          "branch": "task/kiro-config", "base": "main",
+          "worktree": "/home/you/src/task-force-worktrees/kiro-config",
+          "label": "#267", "number": 267,
+          "url": "https://github.com/o/task-force/issues/267",
+          "title": "kiro upgraded agent-config breaks task-init/remove",
+          "description": "Teach the hook merge and strip the new array hook shape",
+          "item": { "ref": "267", "label": "#267", "number": 267, "title": "the issue title", "description": "the issue body", "url": "https://github.com/o/task-force/issues/267" },
+          "pr": {
+            "number": 270, "url": "https://github.com/o/task-force/pull/270",
+            "title": "kiro upgraded agent-config breaks task-init/remove", "state": "OPEN",
+            "is_draft": false, "head": "task/kiro-config",
+            "summary": "Teach the hook merge and strip the new array hook shape",
+            "merged_at": null, "merge_sha": null
+          },
+          "status": "re-review",
+          "last_intent": { "intent": "re-review-requested", "from": "worker-task-force-kiro-config", "to": "pm-task-force", "pr": 270, "at": "2026-10-20T14:46:00Z" },
+          "session": {
+            "role": "worker-task-force-kiro-config", "state": "busy", "last_heartbeat": "2026-10-20T14:46:00Z",
+            "tab": "▶️ kiro-config", "tab_id": "9", "zellij_session": "task-force", "agent": "claude"
+          },
+          "tab_id": "4",
+          "reviewers": [
+            { "pr": 270, "role": "reviewer-task-force-pr270", "session": { "role": "reviewer-task-force-pr270", "state": "busy", "last_heartbeat": "2026-10-20T14:55:00Z", "tab": "▶️ review-pr270", "tab_id": "8", "zellij_session": "task-force", "agent": "claude" } }
+          ]
+        },
+        {
+          "slug": "home-env", "ref": "https://github.com/o/task-force/issues/262",
+          "branch": "task/home-env", "base": "main",
+          "worktree": "/home/you/src/task-force-worktrees/home-env",
+          "label": "#262", "number": 262,
+          "url": "https://github.com/o/task-force/issues/262",
+          "title": "Launched tabs ignore TASK_FORCE_HOME",
+          "description": "A scratch-home probe registers in the real radio state",
+          "pr": null, "status": "implementing", "last_intent": null,
+          "session": {
+            "role": "worker-task-force-home-env", "state": "awaiting", "last_heartbeat": "2026-10-20T14:57:00Z",
+            "tab": "❓︎ home-env", "tab_id": "7", "zellij_session": "task-force", "agent": "claude"
+          },
+          "tab_id": null,
+          "reviewers": []
+        }
+      ],
+      "next": {
+        "source": "queue",
+        "items": [
+          { "ref": "180", "label": "#180", "number": 180, "title": "stale TAB_ID / ambiguous tab / .info sourcing", "description": null, "url": "https://github.com/o/task-force/issues/180", "note": "after #267" },
+          { "ref": "241", "label": "#241", "number": 241, "title": "task-done unregister undone one turn later", "description": "The session file comes back a turn after task-done removed it.", "url": "https://github.com/o/task-force/issues/241", "note": null }
+        ]
+      },
+      "done": {
+        "window_hours": 24, "min_items": 10,
+        "items": [
+          {
+            "ref": "266", "label": "#266", "number": 266,
+            "title": "task-remove hangs under bash 3.2",
+            "description": "Both whitespace checks use a grep helper instead of a bash pattern substitution that never finished on large UTF-8 files.",
+            "url": "https://github.com/o/task-force/pull/269",
+            "summary": "Both whitespace checks use a grep helper instead of a bash pattern substitution that never finished on large UTF-8 files.",
+            "body": "## Summary\nBoth whitespace checks use a grep helper instead of a bash pattern substitution that never finished on large UTF-8 files.\n\nCloses #266\n\n## What\nline one of the body\nline two of the body\nline three of the body\nline four of the body\nline five of the body\nline six of the body\nline seven of the body\nline eight of the body\nline nine of the body\nline ten of the body\nline eleven of the body\nTHE LAST LINE OF THE BODY",
+            "pr": { "number": 269, "url": "https://github.com/o/task-force/pull/269", "title": "task-remove hangs under bash 3.2", "state": "MERGED", "is_draft": false, "head": "task/task-remove-hang", "merged_at": "2026-10-20T13:00:00Z", "merge_sha": "1415b86f7b499bdbb7057fcdc771084ff8717fd3" },
+            "merged_at": "2026-10-20T13:00:00Z",
+            "merge_sha": "1415b86f7b499bdbb7057fcdc771084ff8717fd3"
+          }
+        ]
+      },
+      "attention": {
+        "active": true,
+        "signals": [
+          { "kind": "unread-inbox", "count": 1, "text": "✉ 1 unread" },
+          { "kind": "review-waiting-merge", "prs": [270], "text": "1 review waiting merge" }
+        ]
+      }
+    },
+    {
+      "name": "recommender-systems",
+      "root": "/home/you/src/recommender-systems",
+      "worktree_base": "/home/you/src/recommender-systems-worktrees",
+      "loadout": "claude-local", "tracker": "local", "agent": "claude",
+      "pm": { "role": "pm-recommender-systems", "state": "busy", "last_heartbeat": "2026-10-20T14:59:00Z", "tab": "▶️ pm-recommender-systems", "tab_id": "2", "zellij_session": "rec", "agent": "claude", "alias_of": null, "unread": 0 },
+      "forge": { "available": false, "fetched_at": null, "stale": false },
+      "in_flight": [
+        {
+          "slug": "rerank-sasrec-gate", "ref": "tasks/12-rerank.md", "branch": "task/rerank-sasrec-gate",
+          "worktree": "/home/you/src/recommender-systems-worktrees/rerank-sasrec-gate",
+          "label": "12", "number": 12, "url": null, "title": "Gate the SASRec rerank", "description": null,
+          "pr": null, "status": "implementing",
+          "session": { "role": "worker-recommender-systems-rerank-sasrec-gate", "state": "awaiting", "last_heartbeat": "2026-10-20T14:50:00Z", "tab": "❓︎ rerank-sasrec-gate", "tab_id": "3", "zellij_session": "rec", "agent": "claude" },
+          "tab_id": "3", "reviewers": []
+        }
+      ],
+      "next": { "source": "none", "items": [] },
+      "done": { "window_hours": 24, "min_items": 10, "items": [] },
+      "attention": { "active": true, "signals": [ { "kind": "worker-awaiting", "workers": [], "text": "❓ rerank-sasrec-gate is asking" } ] }
+    },
+    {
+      "name": "jira-repo",
+      "root": "/home/you/src/jira-repo",
+      "loadout": "kiro-jira", "tracker": "jira", "agent": "kiro",
+      "pm": { "role": "pm-jira-repo", "state": null, "last_heartbeat": null, "tab": null, "tab_id": null, "zellij_session": null, "agent": null, "alias_of": null, "unread": 0 },
+      "forge": { "available": true, "fetched_at": "2026-10-20T14:00:00Z", "stale": true },
+      "in_flight": [
+        {
+          "slug": "kiro-config2", "ref": "PROJ-42", "label": "PROJ-42", "number": null, "url": null,
+          "title": "PROJ-42 · kiro-config2", "description": null, "pr": null, "status": "implementing",
+          "session": null, "tab_id": null, "reviewers": []
+        }
+      ],
+      "next": { "source": "none", "items": [] },
+      "done": { "window_hours": 24, "min_items": 10, "items": [] },
+      "attention": { "active": false, "signals": [] }
+    },
+    {
+      "name": "other-repo",
+      "root": "/home/you/src/other-repo",
+      "loadout": "claude-gh", "tracker": "gh", "agent": "claude",
+      "pm": { "role": "pm-other-repo", "state": "idle", "last_heartbeat": "2026-10-20T10:00:00Z", "tab": "⏸️ pm-other-repo", "tab_id": "0", "zellij_session": "other", "agent": "claude", "alias_of": null, "unread": 0 },
+      "forge": { "available": true, "fetched_at": "2026-10-20T14:59:30Z", "stale": false },
+      "in_flight": [],
+      "next": { "source": "tracker", "items": [] },
+      "done": { "window_hours": 24, "min_items": 10, "items": [] },
+      "attention": { "active": false, "signals": [] }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "task-monitor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Real-time terminal view of task-force's in-flight, next and done work (#272)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "task-monitor"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+notify = "8.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+unicode-width = "0.2"
+
+[profile.release]
+strip = true

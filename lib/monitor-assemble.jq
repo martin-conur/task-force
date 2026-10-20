@@ -152,6 +152,10 @@ def status($pr; $last_review; $has_reviewer):
 | {
     name: $name,
     root: $root,
+    # Where task-work puts this repo's worktrees and their `.<slug>.info`
+    # sidecars, so the front end can watch for a new one without re-deriving
+    # task-work's path rule.
+    worktree_base: $worktree_base,
     loadout: ($impl | nonempty),
     tracker: ($tracker | nonempty),
     agent: ($agent | nonempty),

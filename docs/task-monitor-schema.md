@@ -3,7 +3,7 @@
 `task-monitor-snapshot --json` prints one JSON document describing what is in
 flight, next and done in a repo, plus the attention signals that say whether the
 repo needs you (#273, epic #272). It is the contract between the bash collector
-and the ratatui front end. A full example, taken from this repo, is in
+and the ratatui front end (`monitor/`, the `task-monitor` binary). A full example, taken from this repo, is in
 [`task-monitor-schema.example.json`](task-monitor-schema.example.json).
 
 Every value is read deterministically: from radio's on-disk state, task-work's
@@ -46,6 +46,7 @@ ignore fields it does not know.
 |---|---|---|
 | `name` | string | the main repo's name, sanitized to radio's role charset (`task-force`) |
 | `root` | path | the main checkout |
+| `worktree_base` | path | where task-work puts this repo's worktrees and their `.<slug>.info` sidecars. The front end watches it for a new sidecar, so it never re-derives task-work's path rule |
 | `loadout` | string \| null | `claude-gh` …, from the repo's one workflow doc, else from its PM session's `LOADOUT=` |
 | `tracker`, `agent` | string \| null | the loadout's two halves |
 | `pm` | object | the PM session (see below) |

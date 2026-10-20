@@ -88,7 +88,8 @@
         "active": true,
         "signals": [
           { "kind": "unread-inbox", "count": 1, "text": "✉ 1 unread" },
-          { "kind": "review-waiting-merge", "prs": [270], "text": "1 review waiting merge" }
+          { "kind": "review-waiting-merge", "prs": [270], "text": "1 review waiting merge" },
+          { "kind": "worker-awaiting", "workers": [ { "role": "worker-task-force-home-env", "slug": "home-env", "last_heartbeat": "2026-10-20T14:57:00Z" } ], "text": "❓ home-env is asking" }
         ]
       }
     },
@@ -97,7 +98,7 @@
       "root": "/home/you/src/recommender-systems",
       "worktree_base": "/home/you/src/recommender-systems-worktrees",
       "loadout": "claude-local", "tracker": "local", "agent": "claude",
-      "pm": { "role": "pm-recommender-systems", "state": "busy", "last_heartbeat": "2026-10-20T14:59:00Z", "tab": "▶️ pm-recommender-systems", "tab_id": "2", "zellij_session": "rec", "agent": "claude", "alias_of": null, "unread": 0 },
+      "pm": { "role": "pm-recommender-systems", "state": "busy", "last_heartbeat": "2026-10-20T14:59:00Z", "tab": "▶️ pm-recommender-systems", "tab_id": "2", "zellij_session": "rec", "agent": "kiro", "alias_of": null, "unread": 0 },
       "forge": { "available": false, "fetched_at": null, "stale": false },
       "in_flight": [
         {
@@ -111,7 +112,7 @@
       ],
       "next": { "source": "none", "items": [] },
       "done": { "window_hours": 24, "min_items": 10, "items": [] },
-      "attention": { "active": true, "signals": [ { "kind": "worker-awaiting", "workers": [], "text": "❓ rerank-sasrec-gate is asking" } ] }
+      "attention": { "active": true, "signals": [ { "kind": "worker-awaiting", "workers": [ { "role": "worker-recommender-systems-rerank-sasrec-gate", "slug": "rerank-sasrec-gate", "last_heartbeat": "2026-10-20T14:50:00Z" } ], "text": "❓ rerank-sasrec-gate is asking" } ] }
     },
     {
       "name": "jira-repo",

@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{rows, App, Row, View};
+use crate::app::{pm_needs_you, rows, worker_needs_you, App, OvRow, Row, View};
 use crate::snapshot::{DoneItem, InFlight, NextItem, Repo};
 
 /// How long a flash message stays in the footer.
@@ -38,8 +38,19 @@ pub fn draw(f: &mut Frame, app: &mut App, now: DateTime<Utc>) {
 
     let (title, keys) = match (&app.view, app.detail.is_some()) {
         (View::Overview, _) => (
-            Line::from(Span::styled(" task-monitor · all repos", bold())),
-            " ↑↓ move  ⏎ open repo  t jump to PM tab  a back  q quit",
+            Line::from(Span::styled(
+                if app.needs_you {
+                    " task-monitor · all repos · needs you"
+                } else {
+                    " task-monitor · all repos"
+                },
+                bold(),
+            )),
+            if app.needs_you {
+                " ↑↓ move  ⏎ open repo  t jump to tab  ! every agent  a back  q quit"
+            } else {
+                " ↑↓ move  ⏎ open repo  t jump to tab  ! needs you  a back  q quit"
+            },
         ),
         (View::Repo(_), detail) => (
             repo_title(app.current_repo()),
@@ -182,51 +193,23 @@ fn overview(f: &mut Frame, app: &App, area: Rect) {
         .max()
         .unwrap_or(0);
     let mut lines = Vec::new();
-    for (i, repo) in repos.iter().enumerate() {
+    for (i, row) in app.overview_rows().into_iter().enumerate() {
         let selected = i == app.overview_selected;
-        let (dot, dot_style) = if repo.attention.active {
-            ("●", Style::default().fg(Color::Yellow))
-        } else {
-            ("○", dim())
-        };
-        let name = repo.name.as_deref().unwrap_or("?");
-        let signals: Vec<&str> = repo
-            .attention
-            .signals
-            .iter()
-            .filter_map(|s| s.text.as_deref())
-            .collect();
-        let mut left = vec![
-            Span::raw(if selected { "▸" } else { " " }),
-            Span::styled(format!("{dot} "), dot_style),
-            Span::styled(
-                format!("{name:<name_w$}"),
-                if selected { bold() } else { Style::default() },
-            ),
-            Span::raw("  "),
-            Span::raw(signals.join(" · ")),
-        ];
-        if signals.is_empty() {
-            left.pop();
-        }
-        let n = repo.in_flight.len();
-        let mut right = vec![Span::raw(if n == 0 {
-            "idle".to_string()
-        } else {
-            format!("{n} in flight")
-        })];
-        // Rows name their zellij session: `t` cannot cross one (#272).
-        if let Some(session) = repo_session(repo) {
-            right.push(Span::styled(format!(" · zellij {session}"), dim()));
-        }
-        right.push(Span::raw(" "));
-        lines.push(fit(Line::from(left), Line::from(right), w));
+        let repo = &repos[row.repo()];
+        lines.push(match row {
+            OvRow::Repo(_) => repo_line(repo, selected, name_w, w),
+            OvRow::Pm(_) => pm_line(repo, selected, w),
+            OvRow::Worker(_, j) => worker_line(repo, &repo.in_flight[j], selected, w),
+            OvRow::Reviewer(_, j, k) => reviewer_line(repo, &repo.in_flight[j], k, selected, w),
+        });
     }
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            " no repos: no radio session names one, and this is not a repo",
-            dim(),
-        )));
+        let msg = if app.needs_you && !repos.is_empty() {
+            " nothing needs you · ! shows every agent"
+        } else {
+            " no repos: no radio session names one, and this is not a repo"
+        };
+        lines.push(Line::from(Span::styled(msg, dim())));
     }
     let offset = scroll_to(
         app.overview_selected,
@@ -234,6 +217,213 @@ fn overview(f: &mut Frame, app: &App, area: Rect) {
         area.height as usize,
     );
     f.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
+}
+
+fn repo_line(repo: &Repo, selected: bool, name_w: usize, w: usize) -> Line<'static> {
+    let (dot, dot_style) = if repo.attention.active {
+        ("●", Style::default().fg(Color::Yellow))
+    } else {
+        ("○", dim())
+    };
+    let name = repo.name.as_deref().unwrap_or("?");
+    let signals: Vec<&str> = repo
+        .attention
+        .signals
+        .iter()
+        .filter_map(|s| s.text.as_deref())
+        .collect();
+    let mut left = vec![
+        Span::raw(if selected { "▸" } else { " " }),
+        Span::styled(format!("{dot} "), dot_style),
+        Span::styled(format!("{name:<name_w$}"), title_style(selected)),
+        Span::raw("  "),
+        Span::raw(signals.join(" · ")),
+    ];
+    if signals.is_empty() {
+        left.pop();
+    }
+    let n = repo.in_flight.len();
+    let mut right = vec![Span::raw(if n == 0 {
+        "idle".to_string()
+    } else {
+        format!("{n} in flight")
+    })];
+    // Rows name their zellij session: `t` cannot cross one (#272).
+    if let Some(session) = repo_session(repo) {
+        right.push(Span::styled(format!(" · zellij {session}"), dim()));
+    }
+    right.push(Span::raw(" "));
+    fit(Line::from(left), Line::from(right), w)
+}
+
+/// Column widths of an agent row: label, agent, state icon, state words.
+const LABEL_W: usize = 10;
+const AGENT_W: usize = 7;
+const ICON_W: usize = 2;
+const STATE_W: usize = 15;
+
+/// One agent row: `▸    PM       claude  ⏸  idle            ✉ 1 unread   ← you`.
+/// Only the title is cut on a narrow terminal; `← you` always shows.
+#[allow(clippy::too_many_arguments)]
+fn agent_line(
+    selected: bool,
+    label: &str,
+    agent: &str,
+    state: Option<&str>,
+    words: &str,
+    words_style: Style,
+    title: Span<'static>,
+    you: bool,
+    w: usize,
+) -> Line<'static> {
+    let icon_style = match state {
+        Some("awaiting") => Style::default().fg(Color::Yellow),
+        _ => dim(),
+    };
+    let left = Line::from(vec![
+        Span::styled(if selected { "▸    " } else { "     " }, bold()),
+        Span::styled(pad(label, LABEL_W), title_style(selected)),
+        Span::raw(" "),
+        Span::styled(pad(agent, AGENT_W), dim()),
+        Span::raw(" "),
+        Span::styled(pad(state_icon(state), ICON_W), icon_style),
+        Span::raw(" "),
+        Span::styled(pad(words, STATE_W), words_style),
+        Span::raw(" "),
+        title,
+    ]);
+    let right = if you {
+        Line::from(vec![
+            Span::styled(
+                "← you",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+    } else {
+        Line::default()
+    };
+    fit(left, right, w)
+}
+
+fn pm_line(repo: &Repo, selected: bool, w: usize) -> Line<'static> {
+    let pm = &repo.pm;
+    let agent = pm.agent.as_deref().or(repo.agent.as_deref()).unwrap_or("?");
+    let words = match (&pm.alias_of, pm.state.as_deref()) {
+        (Some(primary), _) => format!("via {primary}"),
+        (None, None) => "no session".to_string(),
+        (None, Some(state)) => state.to_string(),
+    };
+    // What the PM owes you, in the signals' own words.
+    let owed: Vec<&str> = repo
+        .attention
+        .signals
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.kind.as_deref(),
+                Some("unread-inbox") | Some("review-waiting-merge")
+            )
+        })
+        .filter_map(|s| s.text.as_deref())
+        .collect();
+    agent_line(
+        selected,
+        "PM",
+        agent,
+        pm.state.as_deref(),
+        &words,
+        dim(),
+        Span::styled(owed.join(" · "), Style::default().fg(Color::Yellow)),
+        pm_needs_you(repo),
+        w,
+    )
+}
+
+fn worker_line(repo: &Repo, item: &InFlight, selected: bool, w: usize) -> Line<'static> {
+    let session = item.session.as_ref();
+    let agent = session
+        .and_then(|s| s.agent.as_deref())
+        .or(repo.agent.as_deref())
+        .unwrap_or("?");
+    let you = worker_needs_you(repo, item);
+    let (words, style) = if you {
+        ("waiting on you", Style::default().fg(Color::Yellow))
+    } else {
+        (
+            status_words(item.status.as_deref().unwrap_or("")),
+            Style::default().fg(Color::Cyan),
+        )
+    };
+    let label = item
+        .label
+        .as_deref()
+        .or(item.slug.as_deref())
+        .unwrap_or("?");
+    agent_line(
+        selected,
+        label,
+        agent,
+        session.and_then(|s| s.state.as_deref()),
+        words,
+        style,
+        Span::styled(
+            item.title.clone().unwrap_or_default(),
+            title_style(selected),
+        ),
+        you,
+        w,
+    )
+}
+
+fn reviewer_line(
+    repo: &Repo,
+    item: &InFlight,
+    k: usize,
+    selected: bool,
+    w: usize,
+) -> Line<'static> {
+    let rev = &item.reviewers[k];
+    let session = rev.session.as_ref();
+    let agent = session
+        .and_then(|s| s.agent.as_deref())
+        .or(repo.agent.as_deref())
+        .unwrap_or("?");
+    let state = session.and_then(|s| s.state.as_deref());
+    let words = match state {
+        Some("busy") => "reviewing",
+        Some(other) => other,
+        None => "no session",
+    };
+    let pr = rev
+        .pr
+        .or_else(|| item.pr.as_ref().and_then(|p| p.number))
+        .map(|n| format!("PR #{n}"))
+        .unwrap_or_default();
+    agent_line(
+        selected,
+        "  ↳ review",
+        agent,
+        state,
+        words,
+        dim(),
+        Span::styled(pr, dim()),
+        false,
+        w,
+    )
+}
+
+/// `s` cut or padded to `w` display columns.
+fn pad(s: &str, w: usize) -> String {
+    let mut out = if s.width() > w {
+        ellipsize(s, w.saturating_sub(1))
+    } else {
+        s.to_string()
+    };
+    out.push_str(&" ".repeat(w.saturating_sub(out.width())));
+    out
 }
 
 fn repo_session(repo: &Repo) -> Option<&str> {
@@ -734,7 +924,7 @@ fn scroll_to(start: usize, end: usize, height: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{App, Key};
+    use crate::app::{App, Key, OvRow};
     use crate::snapshot::parse;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -871,7 +1061,7 @@ mod tests {
     #[test]
     fn overview_lights_repos_with_signals_and_names_their_session() {
         let mut a = app(MULTI, false);
-        let s = render(&mut a, 110, 12);
+        let s = render(&mut a, 120, 20);
         assert!(s[0].starts_with(" task-monitor · all repos"));
         let tf = line_with(&s, "task-force ");
         assert!(tf.starts_with("▸● task-force"), "{tf}");
@@ -884,6 +1074,131 @@ mod tests {
         assert!(other.ends_with("idle · zellij other"), "{other}");
         // No PM session and no worker session: no zellij session to name.
         assert!(line_with(&s, "jira-repo").ends_with("1 in flight"));
+        assert!(screen(&s).contains("! needs you"));
+    }
+
+    /// The overview's lines, from the first repo row on, cut at `w`.
+    fn overview_lines(a: &mut App, w: u16) -> Vec<String> {
+        render(a, w, 24)
+            .into_iter()
+            .skip(2)
+            .take_while(|l| !l.starts_with('─'))
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn overview_lists_every_agent_under_its_repo_and_marks_who_needs_you() {
+        let mut a = app(MULTI, false);
+        let s = overview_lines(&mut a, 120);
+        let you = |l: &str| l.ends_with("← you");
+        let rows: Vec<(&str, bool)> = s
+            .iter()
+            .map(|l| {
+                (
+                    l.split_whitespace()
+                        .nth(if l.starts_with('▸') { 1 } else { 0 })
+                        .unwrap_or(""),
+                    you(l),
+                )
+            })
+            .collect();
+        assert_eq!(s.len(), 13, "{}", screen(&s));
+        // The PM owes unread mail and a review: it, not the repo, is marked,
+        // and the row says why.
+        let pm = &s[1];
+        assert!(pm.starts_with("     PM         claude  ⏸  idle"), "{pm}");
+        assert!(
+            pm.contains("✉ 1 unread · 1 review waiting merge") && you(pm),
+            "{pm}"
+        );
+        assert!(!you(&s[0]), "the repo row is not the one marked: {}", s[0]);
+        // A busy worker: agent, icon, status words and title, unmarked.
+        let w = line_with(&s, "#267");
+        assert!(
+            w.starts_with("     #267       claude  ▶  re-review       kiro upgraded"),
+            "{w}"
+        );
+        assert!(!you(w), "{w}");
+        // Its reviewer nests under it.
+        assert!(
+            s[3].starts_with("       ↳ review claude  ▶  reviewing       PR #270"),
+            "{}",
+            s[3]
+        );
+        // The asking worker is marked, in this repo and the next.
+        let asking = line_with(&s, "#262");
+        assert!(
+            asking.contains("❓ waiting on you  Launched tabs") && you(asking),
+            "{asking}"
+        );
+        let rec = line_with(&s, "Gate the SASRec");
+        assert!(
+            rec.starts_with("     12         claude  ❓ waiting on you") && you(rec),
+            "{rec}"
+        );
+        // A kiro PM beside a claude worker, and a repo with no sessions.
+        assert!(
+            s[6].starts_with("     PM         kiro    ▶  busy"),
+            "{}",
+            s[6]
+        );
+        assert!(!you(&s[6]), "{}", s[6]);
+        assert!(
+            s[9].starts_with("     PM         kiro    ·  no session"),
+            "{}",
+            s[9]
+        );
+        assert!(line_with(&s, "PROJ-42 ").starts_with("     PROJ-42    kiro    ·  implementing"));
+        let marked: Vec<&str> = rows.iter().filter(|r| r.1).map(|r| r.0).collect();
+        assert_eq!(marked, vec!["PM", "#262", "12"]);
+    }
+
+    #[test]
+    fn bang_filters_the_overview_to_what_needs_you() {
+        let mut a = app(MULTI, false);
+        a.key(Key::Char('!'), now());
+        let s = render(&mut a, 120, 24);
+        assert!(
+            s[0].starts_with(" task-monitor · all repos · needs you"),
+            "{}",
+            s[0]
+        );
+        assert!(screen(&s).contains("! every agent"));
+        let s = overview_lines(&mut a, 120);
+        assert_eq!(s.len(), 5, "{}", screen(&s));
+        assert!(
+            s[0].starts_with("▸● task-force"),
+            "repo rows stay, for context"
+        );
+        assert!(s[1].contains("PM") && s[2].contains("#262") && s[4].contains("Gate the SASRec"));
+        assert!(s[3].starts_with(" ● recommender-systems"));
+        assert!(s[1..]
+            .iter()
+            .filter(|l| !l.contains('●'))
+            .all(|l| l.ends_with("← you")));
+        // Nothing needs you: say so instead of an empty screen.
+        let mut snap = parse(MULTI).unwrap();
+        for r in &mut snap.repos {
+            r.attention.signals.clear();
+        }
+        a.offer(Instant::now(), crate::refresh::Mode::Local, snap, now());
+        assert!(
+            screen(&render(&mut a, 120, 24)).contains("nothing needs you · ! shows every agent")
+        );
+    }
+
+    #[test]
+    fn narrow_overviews_cut_titles_and_keep_the_mark() {
+        let mut a = app(MULTI, false);
+        let s = render(&mut a, 60, 24);
+        assert!(s.iter().all(|l| l.width() <= 60), "{}", screen(&s));
+        let asking = line_with(&s, "#262");
+        assert!(
+            asking.ends_with("← you") && asking.contains('…'),
+            "{asking}"
+        );
+        assert!(line_with(&s, "#267").ends_with('…'));
     }
 
     #[test]
@@ -908,7 +1223,7 @@ mod tests {
     fn a_stale_forge_is_marked_with_its_age() {
         let mut a = app(MULTI, true);
         a.key(Key::Char('a'), now());
-        a.overview_selected = 2;
+        crate::app::tests::go_to(&mut a, OvRow::Repo(2));
         a.key(Key::Enter, now());
         let s = render(&mut a, 100, 20);
         assert!(s[0].starts_with(" jira-repo · no PM"), "{}", s[0]);

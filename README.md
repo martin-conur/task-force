@@ -444,9 +444,26 @@ A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page U
  ↑↓ move  ⏎ expand  o open PR/issue  t jump to tab  a all repos  q quit
 ```
 
+The overview lists every agent under its repo, so one screen shows who is doing what across projects and who is waiting on you:
+
+```
+ task-monitor · all repos                                            12:04 · live
+─────────────────────────────────────────────────────────────────────────────────
+▸● task-force           ✉ 1 unread · ❓ home-env is asking  2 in flight · zellij task-force
+     PM         claude  ⏸  idle            ✉ 1 unread                        ← you
+     #267       claude  ▶  re-review       kiro upgraded agent-config breaks…
+       ↳ review claude  ▶  reviewing       PR #270
+     #262       claude  ❓ waiting on you  Launched tabs ignore TASK_FORCE_HOME ← you
+ ○ other-repo                                              idle · zellij other
+     PM         kiro    ⏸  idle
+ ↑↓ move  ⏎ open repo  t jump to tab  ! needs you  a back  q quit
+```
+
+Each agent line gives its agent (`claude` / `kiro`), its state icon (`▶` busy, `⏸` idle, `❓` asking) and its status, and a reviewer nests under the item whose PR it reviews. `← you` marks the agent behind each attention signal rather than just the repo: the PM for unread mail or a review waiting on merge, the asking worker for `awaiting`. A kiro worker never shows `❓` ([#278](#no-awaiting-state-on-kiro)). `!` keeps only the marked agents, under their repo's row. `t` on an agent line goes to that agent's tab, `⏎` opens the repo view on that agent's item, and a narrow terminal cuts the title rather than wrapping or dropping `← you`.
+
 - **Real time without waiting on GitHub.** A change under `$TASK_FORCE_HOME/radio` (sessions, mailboxes), `$TASK_FORCE_HOME/monitor` (the PM queue that `task-monitor-queue` writes, the forge cache) or a repo's worktree base (a `.<slug>.info` sidecar appearing or going) triggers a `--local` snapshot, debounced. Forge state comes from a full snapshot every 45 seconds (`--poll SECS`, 30-600).
 - **Never blank.** A snapshot that fails or times out leaves the last good one on screen; the header says `stale <age>` and the footer says why. `forge <age>` means disk state is current but PR state is from the last full run.
-- **Keys.** `↑↓` move, `⏎` expand a done item to its full PR body (scrollable) or enter a repo from the overview, `o` open the PR or issue, `t` jump to the item's zellij tab (the worker's; the PM's for a queued or done item, or for an overview row), `a` toggle the overview, `q` quit.
+- **Keys.** `↑↓` move, `⏎` expand a done item to its full PR body (scrollable) or enter a repo from the overview, `o` open the PR or issue, `t` jump to the item's zellij tab (the worker's; the PM's for a queued or done item; on the overview, the selected agent's, and the PM's for a repo row), `!` on the overview show only the agents that need you, `a` toggle the overview, `q` quit.
 - **`t` stays in this zellij session.** Each overview row names its repo's zellij session; `zellij action` cannot switch sessions, so a tab elsewhere is named, not attempted. Within the session, `t` goes to the recorded `TAB_ID` only while that tab still bears the item's name, the check `task-done` makes before it closes a tab (#260).
 - **No task-force logic in Rust.** Every word comes from the snapshot; status words are a lookup of its `status` field.
 

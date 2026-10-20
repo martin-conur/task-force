@@ -7,7 +7,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 
 use crate::refresh::Mode;
-use crate::snapshot::{Repo, Snapshot};
+use crate::snapshot::{InFlight, Repo, Snapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -67,6 +67,78 @@ pub fn rows(repo: &Repo) -> Vec<Row> {
         .collect()
 }
 
+/// A row of the overview: a repo, then its agents under it. Indices are
+/// into `repos`, a repo's `in_flight` and an item's `reviewers`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OvRow {
+    Repo(usize),
+    Pm(usize),
+    Worker(usize, usize),
+    Reviewer(usize, usize, usize),
+}
+
+impl OvRow {
+    pub fn repo(self) -> usize {
+        match self {
+            OvRow::Repo(r) | OvRow::Pm(r) | OvRow::Worker(r, _) | OvRow::Reviewer(r, _, _) => r,
+        }
+    }
+}
+
+fn has_signal(repo: &Repo, kind: &str) -> bool {
+    repo.attention
+        .signals
+        .iter()
+        .any(|s| s.kind.as_deref() == Some(kind))
+}
+
+/// The PM is the agent behind unread mail and a review waiting on merge.
+pub fn pm_needs_you(repo: &Repo) -> bool {
+    has_signal(repo, "unread-inbox") || has_signal(repo, "review-waiting-merge")
+}
+
+/// A worker needs you when the `worker-awaiting` signal names it. The
+/// signal, not the session's `STATE=`, decides: it has already dropped an
+/// `awaiting` a crashed tab left behind.
+pub fn worker_needs_you(repo: &Repo, item: &InFlight) -> bool {
+    let role = item.session.as_ref().and_then(|s| s.role.as_deref());
+    repo.attention
+        .signals
+        .iter()
+        .filter(|s| s.kind.as_deref() == Some("worker-awaiting"))
+        .flat_map(|s| &s.workers)
+        .any(|w| {
+            (w.role.is_some() && w.role.as_deref() == role)
+                || (w.slug.is_some() && w.slug == item.slug)
+        })
+}
+
+/// Every overview row, in screen order. `needs_you` keeps only the agents
+/// that need you, under their repo's row, and drops repos with none.
+pub fn overview_rows(repos: &[Repo], needs_you: bool) -> Vec<OvRow> {
+    let mut out = Vec::new();
+    for (r, repo) in repos.iter().enumerate() {
+        let mut agents = Vec::new();
+        if !needs_you || pm_needs_you(repo) {
+            agents.push(OvRow::Pm(r));
+        }
+        for (i, item) in repo.in_flight.iter().enumerate() {
+            if !needs_you || worker_needs_you(repo, item) {
+                agents.push(OvRow::Worker(r, i));
+            }
+            if !needs_you {
+                agents.extend((0..item.reviewers.len()).map(|k| OvRow::Reviewer(r, i, k)));
+            }
+        }
+        if needs_you && agents.is_empty() {
+            continue;
+        }
+        out.push(OvRow::Repo(r));
+        out.extend(agents);
+    }
+    out
+}
+
 /// What the screen shows for freshness. The snapshot itself is never dropped
 /// for a failure: the last good one stays up, marked stale.
 #[derive(Debug, Clone, Default)]
@@ -91,6 +163,10 @@ pub struct App {
     /// Selection identity, kept across refreshes that reorder the lists.
     selected_key: Option<String>,
     pub overview_selected: usize,
+    /// Overview selection identity, as `selected_key` is the repo view's.
+    overview_key: Option<String>,
+    /// `!`: the overview shows only the agents that need you.
+    pub needs_you: bool,
     /// The expanded item's scroll offset, when one is expanded.
     pub detail: Option<u16>,
     pub flash: Option<(DateTime<Utc>, String)>,
@@ -114,6 +190,8 @@ impl App {
             selected: 0,
             selected_key: None,
             overview_selected: 0,
+            overview_key: None,
+            needs_you: false,
             detail: None,
             flash: None,
         }
@@ -190,6 +268,55 @@ impl App {
         }
     }
 
+    pub fn overview_rows(&self) -> Vec<OvRow> {
+        overview_rows(self.repos(), self.needs_you)
+    }
+
+    pub fn selected_overview_row(&self) -> Option<OvRow> {
+        self.overview_rows().get(self.overview_selected).copied()
+    }
+
+    fn overview_row_key(&self, row: OvRow) -> String {
+        let repos = self.repos();
+        let name = repos[row.repo()].name.as_deref().unwrap_or("");
+        let slug = |i: usize| repos[row.repo()].in_flight[i].slug.as_deref().unwrap_or("");
+        match row {
+            OvRow::Repo(_) => format!("r:{name}"),
+            OvRow::Pm(_) => format!("p:{name}"),
+            OvRow::Worker(_, i) => format!("w:{name}:{}", slug(i)),
+            OvRow::Reviewer(_, i, k) => format!(
+                "v:{name}:{}:{}",
+                slug(i),
+                repos[row.repo()].in_flight[i].reviewers[k]
+                    .role
+                    .as_deref()
+                    .unwrap_or("")
+            ),
+        }
+    }
+
+    fn remember_overview_selection(&mut self) {
+        self.overview_key = self
+            .selected_overview_row()
+            .map(|row| self.overview_row_key(row));
+    }
+
+    /// Select the overview row `key` names, if it is on screen.
+    fn select_overview(&mut self, key: &str) -> bool {
+        let rows = self.overview_rows();
+        match rows
+            .iter()
+            .position(|&row| self.overview_row_key(row) == key)
+        {
+            Some(i) => {
+                self.overview_selected = i;
+                self.overview_key = Some(key.to_string());
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn selected_row(&self) -> Option<Row> {
         self.current_repo()
             .and_then(|r| rows(r).get(self.selected).copied())
@@ -222,8 +349,15 @@ impl App {
     /// After a refresh, follow the selected item to its new position, or
     /// stay at the same index when it is gone.
     fn reselect(&mut self) {
-        let n_repos = self.repos().len();
-        self.overview_selected = self.overview_selected.min(n_repos.saturating_sub(1));
+        if !self
+            .overview_key
+            .clone()
+            .is_some_and(|k| self.select_overview(&k))
+        {
+            let n = self.overview_rows().len();
+            self.overview_selected = self.overview_selected.min(n.saturating_sub(1));
+            self.remember_overview_selection();
+        }
         let Some(repo) = self.current_repo() else {
             return;
         };
@@ -276,21 +410,31 @@ impl App {
     }
 
     fn overview_key(&mut self, key: Key, now: DateTime<Utc>) -> Option<Action> {
-        let n = self.repos().len();
+        let n = self.overview_rows().len();
         match key {
             Key::Up | Key::Char('k') => {
-                self.overview_selected = self.overview_selected.saturating_sub(1)
+                self.overview_selected = self.overview_selected.saturating_sub(1);
+                self.remember_overview_selection();
             }
             Key::Down | Key::Char('j') => {
-                self.overview_selected = (self.overview_selected + 1).min(n.saturating_sub(1))
+                self.overview_selected = (self.overview_selected + 1).min(n.saturating_sub(1));
+                self.remember_overview_selection();
             }
             Key::Enter => {
-                if let Some(name) = self
-                    .repos()
-                    .get(self.overview_selected)
-                    .and_then(|r| r.name.clone())
-                {
-                    self.enter_repo(name);
+                let row = self.selected_overview_row()?;
+                let repo = &self.repos()[row.repo()];
+                let name = repo.name.clone()?;
+                // An agent row opens its repo on that agent's item.
+                let item = match row {
+                    OvRow::Worker(_, i) | OvRow::Reviewer(_, i, _) => Some(i),
+                    _ => None,
+                };
+                let key = item.map(|i| Self::row_key(repo, Row::InFlight(i)));
+                self.enter_repo(name);
+                if let (Some(key), Some(i)) = (key, item) {
+                    self.selected = i;
+                    self.selected_key = Some(key);
+                    self.reselect();
                 }
             }
             Key::Char('a') | Key::Esc => {
@@ -298,16 +442,41 @@ impl App {
                     self.enter_repo(name);
                 }
             }
+            Key::Char('!') => {
+                // Stay on the same row when it is still shown, else on its
+                // repo, else at the top.
+                let row = self.overview_key.clone();
+                let repo = self
+                    .selected_overview_row()
+                    .and_then(|r| self.repos()[r.repo()].name.clone())
+                    .map(|name| format!("r:{name}"));
+                self.needs_you = !self.needs_you;
+                let kept = row.is_some_and(|k| self.select_overview(&k))
+                    || repo.is_some_and(|k| self.select_overview(&k));
+                if !kept {
+                    self.overview_selected = 0;
+                    self.remember_overview_selection();
+                }
+            }
             Key::Char('t') => {
-                let repo = self.repos().get(self.overview_selected)?;
-                return Some(pm_tab(repo).unwrap_or_else(|| {
-                    // No PM session: say so rather than doing nothing.
-                    Action::GotoTab {
-                        tab_id: None,
-                        name: String::new(),
-                        session: None,
+                let row = self.selected_overview_row()?;
+                let repo = &self.repos()[row.repo()];
+                return Some(match row {
+                    OvRow::Repo(_) | OvRow::Pm(_) => pm_tab(repo).unwrap_or_else(no_pm),
+                    OvRow::Worker(_, i) => worker_tab(&repo.in_flight[i]),
+                    OvRow::Reviewer(_, i, k) => {
+                        let item = &repo.in_flight[i];
+                        let rev = &item.reviewers[k];
+                        let session = rev.session.as_ref();
+                        let pr = rev.pr.or_else(|| item.pr.as_ref().and_then(|p| p.number));
+                        Action::GotoTab {
+                            tab_id: session.and_then(|s| s.tab_id.clone()),
+                            // task-reviewer's tab slug.
+                            name: pr.map(|n| format!("review-pr{n}")).unwrap_or_default(),
+                            session: session.and_then(|s| s.zellij_session.clone()),
+                        }
                     }
-                }));
+                });
             }
             Key::Char('o') => self.flash(now, "o opens an item's PR or issue: ⏎ into a repo first"),
             _ => {}
@@ -345,15 +514,11 @@ impl App {
                 if let View::Repo(name) = &self.view {
                     self.last_repo = Some(name.clone());
                 }
-                if let Some(i) = self.last_repo.as_ref().and_then(|name| {
-                    self.repos()
-                        .iter()
-                        .position(|r| r.name.as_ref() == Some(name))
-                }) {
-                    self.overview_selected = i;
-                }
                 self.view = View::Overview;
                 self.detail = None;
+                if let Some(name) = self.last_repo.clone() {
+                    self.select_overview(&format!("r:{name}"));
+                }
             }
             Key::Char('o') => {
                 let url = self.selected_url();
@@ -365,25 +530,9 @@ impl App {
             Key::Char('t') => {
                 let (repo, row) = (self.current_repo()?, self.selected_row());
                 return Some(match row {
-                    Some(Row::InFlight(i)) => {
-                        let item = &repo.in_flight[i];
-                        let session = item.session.as_ref();
-                        Action::GotoTab {
-                            // The sidecar's id first, as task-done reads it.
-                            tab_id: item
-                                .tab_id
-                                .clone()
-                                .or_else(|| session.and_then(|s| s.tab_id.clone())),
-                            name: item.slug.clone().unwrap_or_default(),
-                            session: session.and_then(|s| s.zellij_session.clone()),
-                        }
-                    }
+                    Some(Row::InFlight(i)) => worker_tab(&repo.in_flight[i]),
                     // Queued and merged items have no worker; their tab is the PM's.
-                    _ => pm_tab(repo).unwrap_or(Action::GotoTab {
-                        tab_id: None,
-                        name: String::new(),
-                        session: None,
-                    }),
+                    _ => pm_tab(repo).unwrap_or_else(no_pm),
                 });
             }
             _ => {}
@@ -413,6 +562,28 @@ impl App {
     }
 }
 
+fn worker_tab(item: &InFlight) -> Action {
+    let session = item.session.as_ref();
+    Action::GotoTab {
+        // The sidecar's id first, as task-done reads it.
+        tab_id: item
+            .tab_id
+            .clone()
+            .or_else(|| session.and_then(|s| s.tab_id.clone())),
+        name: item.slug.clone().unwrap_or_default(),
+        session: session.and_then(|s| s.zellij_session.clone()),
+    }
+}
+
+/// No PM session: say so rather than doing nothing.
+fn no_pm() -> Action {
+    Action::GotoTab {
+        tab_id: None,
+        name: String::new(),
+        session: None,
+    }
+}
+
 fn pm_tab(repo: &Repo) -> Option<Action> {
     let role = repo.pm.role.clone()?;
     Some(Action::GotoTab {
@@ -423,7 +594,7 @@ fn pm_tab(repo: &Repo) -> Option<Action> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::snapshot::parse;
 
@@ -550,15 +721,31 @@ mod tests {
         assert_eq!(app.selected, 1, "the selection survives the round trip");
     }
 
+    /// Select an overview row, by moving to it as the user would.
+    pub(crate) fn go_to(app: &mut App, row: OvRow) {
+        let i = app
+            .overview_rows()
+            .iter()
+            .position(|&r| r == row)
+            .unwrap_or_else(|| panic!("{row:?} is not on screen"));
+        while app.overview_selected > i {
+            app.key(Key::Up, now());
+        }
+        while app.overview_selected < i {
+            app.key(Key::Down, now());
+        }
+    }
+
     #[test]
     fn enter_on_an_overview_row_opens_that_repo() {
         let mut app = app_with(MULTI, false);
-        app.key(Key::Down, now());
+        go_to(&mut app, OvRow::Repo(1));
         app.key(Key::Enter, now());
         assert_eq!(app.view, View::Repo("recommender-systems".into()));
         assert_eq!(app.selected, 0);
-        // t on an overview row is the PM's tab.
+        // t on a repo row is the PM's tab.
         app.key(Key::Char('a'), now());
+        assert_eq!(app.selected_overview_row(), Some(OvRow::Repo(1)));
         assert_eq!(
             app.key(Key::Char('t'), now()),
             Some(Action::GotoTab {
@@ -567,6 +754,188 @@ mod tests {
                 session: Some("rec".into())
             })
         );
+    }
+
+    #[test]
+    fn the_overview_lists_each_repos_agents_under_it() {
+        let app = app_with(MULTI, false);
+        use OvRow::*;
+        assert_eq!(
+            app.overview_rows(),
+            vec![
+                Repo(0),
+                Pm(0),
+                Worker(0, 0),
+                Reviewer(0, 0, 0),
+                Worker(0, 1),
+                Repo(1),
+                Pm(1),
+                Worker(1, 0),
+                Repo(2),
+                Pm(2),
+                Worker(2, 0),
+                Repo(3),
+                Pm(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_agent_behind_each_signal_is_the_one_that_needs_you() {
+        let app = app_with(MULTI, false);
+        let repos = app.repos();
+        // Unread mail and a review waiting merge: the PM.
+        assert!(pm_needs_you(&repos[0]));
+        // An awaiting worker: that worker, and not the PM or its siblings.
+        assert!(!pm_needs_you(&repos[1]));
+        assert!(worker_needs_you(&repos[1], &repos[1].in_flight[0]));
+        assert!(worker_needs_you(&repos[0], &repos[0].in_flight[1]));
+        assert!(!worker_needs_you(&repos[0], &repos[0].in_flight[0]));
+        assert!(!pm_needs_you(&repos[2]) && !pm_needs_you(&repos[3]));
+        // Each PM signal marks it on its own.
+        for kind in ["unread-inbox", "review-waiting-merge"] {
+            let mut repo = repos[0].clone();
+            repo.attention
+                .signals
+                .retain(|s| s.kind.as_deref() == Some(kind));
+            assert!(pm_needs_you(&repo), "{kind}");
+        }
+    }
+
+    #[test]
+    fn the_signal_not_the_session_state_marks_a_worker() {
+        // `awaiting` with no signal is what a crashed tab leaves behind.
+        let mut snap = parse(MULTI).unwrap();
+        snap.repos[0]
+            .attention
+            .signals
+            .retain(|s| s.kind.as_deref() != Some("worker-awaiting"));
+        assert!(!worker_needs_you(
+            &snap.repos[0],
+            &snap.repos[0].in_flight[1]
+        ));
+        // By role alone, or by slug alone, the signal still finds it.
+        let rec = &mut snap.repos[1];
+        rec.attention.signals[0].workers[0].slug = None;
+        assert!(worker_needs_you(rec, &rec.in_flight[0]));
+        rec.attention.signals[0].workers[0].slug = Some("rerank-sasrec-gate".into());
+        let rec = &mut snap.repos[1];
+        rec.attention.signals[0].workers[0].role = None;
+        assert!(worker_needs_you(rec, &rec.in_flight[0]));
+        rec.attention.signals[0].workers[0].slug = Some("someone-else".into());
+        assert!(!worker_needs_you(rec, &rec.in_flight[0]));
+    }
+
+    #[test]
+    fn bang_keeps_only_what_needs_you_under_its_repo_and_toggles_back() {
+        let mut app = app_with(MULTI, false);
+        go_to(&mut app, OvRow::Worker(1, 0));
+        app.key(Key::Char('!'), now());
+        assert!(app.needs_you);
+        use OvRow::*;
+        assert_eq!(
+            app.overview_rows(),
+            vec![Repo(0), Pm(0), Worker(0, 1), Repo(1), Worker(1, 0)]
+        );
+        assert_eq!(
+            app.selected_overview_row(),
+            Some(Worker(1, 0)),
+            "the selected agent stays selected"
+        );
+        app.key(Key::Char('!'), now());
+        assert!(!app.needs_you);
+        assert_eq!(app.selected_overview_row(), Some(Worker(1, 0)));
+        // An agent the filter hides falls back to its repo's row.
+        go_to(&mut app, Reviewer(0, 0, 0));
+        app.key(Key::Char('!'), now());
+        assert_eq!(app.selected_overview_row(), Some(Repo(0)));
+        // A repo with nothing for you is dropped altogether.
+        app.key(Key::Char('!'), now());
+        go_to(&mut app, Pm(3));
+        app.key(Key::Char('!'), now());
+        assert_eq!(app.selected_overview_row(), Some(Repo(0)));
+    }
+
+    #[test]
+    fn t_on_an_agent_row_targets_that_agents_tab() {
+        let mut app = app_with(MULTI, false);
+        let pm = Some(Action::GotoTab {
+            tab_id: Some("0".into()),
+            name: "pm-task-force".into(),
+            session: Some("task-force".into()),
+        });
+        assert_eq!(app.key(Key::Char('t'), now()), pm, "the repo row: its PM");
+        go_to(&mut app, OvRow::Pm(0));
+        assert_eq!(app.key(Key::Char('t'), now()), pm);
+        // A worker: the sidecar's id and the slug, as in the repo view.
+        go_to(&mut app, OvRow::Worker(0, 0));
+        assert_eq!(
+            app.key(Key::Char('t'), now()),
+            Some(Action::GotoTab {
+                tab_id: Some("4".into()),
+                name: "kiro-config".into(),
+                session: Some("task-force".into())
+            })
+        );
+        // A reviewer: its session's id and task-reviewer's tab slug.
+        go_to(&mut app, OvRow::Reviewer(0, 0, 0));
+        assert_eq!(
+            app.key(Key::Char('t'), now()),
+            Some(Action::GotoTab {
+                tab_id: Some("8".into()),
+                name: "review-pr270".into(),
+                session: Some("task-force".into())
+            })
+        );
+        // Another repo's worker names its own zellij session.
+        go_to(&mut app, OvRow::Worker(1, 0));
+        assert_eq!(
+            app.key(Key::Char('t'), now()),
+            Some(Action::GotoTab {
+                tab_id: Some("3".into()),
+                name: "rerank-sasrec-gate".into(),
+                session: Some("rec".into())
+            })
+        );
+        // No session at all: an empty target, which goto_tab explains.
+        go_to(&mut app, OvRow::Pm(2));
+        assert_eq!(
+            app.key(Key::Char('t'), now()),
+            Some(Action::GotoTab {
+                tab_id: None,
+                name: "pm-jira-repo".into(),
+                session: None
+            })
+        );
+    }
+
+    #[test]
+    fn enter_on_an_agent_row_opens_its_repo_on_that_item() {
+        let mut app = app_with(MULTI, false);
+        go_to(&mut app, OvRow::Worker(0, 1));
+        app.key(Key::Enter, now());
+        assert_eq!(app.view, View::Repo("task-force".into()));
+        assert_eq!(app.selected_row(), Some(Row::InFlight(1)));
+        app.key(Key::Char('a'), now());
+        go_to(&mut app, OvRow::Reviewer(0, 0, 0));
+        app.key(Key::Enter, now());
+        assert_eq!(app.selected_row(), Some(Row::InFlight(0)));
+        // The PM row opens the repo at the top.
+        app.key(Key::Char('a'), now());
+        go_to(&mut app, OvRow::Pm(1));
+        app.key(Key::Enter, now());
+        assert_eq!(app.view, View::Repo("recommender-systems".into()));
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_selected_agent_when_repos_reorder() {
+        let mut app = app_with(MULTI, false);
+        go_to(&mut app, OvRow::Worker(1, 0));
+        let mut snap = parse(MULTI).unwrap();
+        snap.repos.reverse();
+        app.offer(Instant::now(), Mode::Local, snap, now());
+        assert_eq!(app.selected_overview_row(), Some(OvRow::Worker(2, 0)));
     }
 
     #[test]

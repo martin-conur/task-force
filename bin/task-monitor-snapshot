@@ -154,9 +154,13 @@ _messages_ndjson() {
   # ties, which ids cannot (see msg_order in lib/monitor-assemble.jq).
   # No log yet is no order yet, not an error: awk exits 2 on a missing file,
   # which pipefail would make fatal.
-  { [[ -f "$TF_HOME/radio/log" ]] && awk '
-    match($0, / send id=[^ ]+/) { print substr($0, RSTART + 9, RLENGTH - 9) "\t" NR }
-  ' "$TF_HOME/radio/log" || true; } | jq -Rsc '
+  {
+    if [[ -f "$TF_HOME/radio/log" ]]; then
+      awk '
+        match($0, / send id=[^ ]+/) { print substr($0, RSTART + 9, RLENGTH - 9) "\t" NR }
+      ' "$TF_HOME/radio/log"
+    fi
+  } | jq -Rsc '
     split("\n") | map(select(. != "") | split("\t")) | map({key: .[0], value: (.[1] | tonumber)}) | from_entries
   ' > "$WORK/logseq.json"
   find "${dirs[@]}" -type f -name '*.md' -exec awk '

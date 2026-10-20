@@ -161,7 +161,7 @@ def status($pr; $last_review; $has_reviewer):
     # `available`: the forge has answered for this repo at least once. A repo
     # with no GitHub remote never has, and would otherwise read as permanently
     # stale; `stale` is only meaningful for a repo whose forge does answer.
-    forge: {available: ($fetched_at | nonempty) != null,
+    forge: {available: (($fetched_at | nonempty) != null),
             fetched_at: ($fetched_at | nonempty),
             stale: (($fetched_at | nonempty) != null and $forge_ok != 1)},
     in_flight: $in_flight,

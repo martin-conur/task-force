@@ -298,7 +298,8 @@ or summarise any of it.
   the last 10, whichever is more.
 - **Attention** fires on exactly three signals: an unread PM inbox, a finished
   review on a still-open PR that the PM has not answered, and a worker in
-  `awaiting`. The `awaiting` signal is claude-only for now.
+  `awaiting`. The `awaiting` signal is claude-only: kiro-cli (checked on
+  2.32.0) has no hook that fires while it waits on the user (#278).
 
 ```bash
 task-monitor-snapshot --json            # this repo

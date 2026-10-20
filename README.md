@@ -412,7 +412,7 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
 
 **In flight** is every worktree whose `.<slug>.info` sidecar exists — not every fresh heartbeat, so a resumed or roleless worker still shows — with its session state, its PR and a status word (`implementing`, `pr-open`, `under-review`, `changes-requested`, `re-review`, `waiting-merge`, `merged`) derived from the latest review intent. **Next** is the PM's queue, written with [`task-monitor-queue`](#task-monitor-queue--the-pms-queue), else the tracker's backlog. **Done** is the merged PRs that delivered an item in the last 24 hours, or the last 10, whichever is more; merged PRs are fetched once and cached for good.
 
-**Attention** fires on exactly three signals and nothing else: an unread PM inbox (`--also` aliases count toward the primary), a finished review on a still-open PR the PM has not answered, and a worker in `awaiting`. The third is claude-only for now: only the claude loadouts wire `radio awaiting`.
+**Attention** fires on exactly three signals and nothing else: an unread PM inbox (`--also` aliases count toward the primary), a finished review on a still-open PR the PM has not answered, and a worker in `awaiting`. The third is claude-only: only the claude loadouts wire `radio awaiting`, and kiro-cli has no hook to wire it to (see [no awaiting state on kiro](#no-awaiting-state-on-kiro)).
 
 `--local` exists so a front end can refresh on every filesystem event without waiting on GitHub: it shadows `gh` with a function that fails, so every forge read falls back to the cache under `$TASK_FORCE_HOME/monitor/<repo>/`. The schema (`"schema": 1`) is documented in [`docs/task-monitor-schema.md`](docs/task-monitor-schema.md), with a full example beside it.
 
@@ -721,6 +721,7 @@ kiro-cli actually looks:
 | `userPromptSubmit` | `radio busy` | State flip only. Not `prompt-hook` — that is a deliberate hold, not a limitation (#221). |
 | `stop` | `radio ready` | State flip back to idle, once per turn. No block-and-drain: whether kiro honours Stop-hook block JSON is a separate contract from stdout injection and is untested (#221). |
 | — | *(no session-end trigger)* | Unchanged: nothing unregisters on tab close except `task-done`. `radio orphans` is the cleanup (#98). |
+| — | *(no waiting-on-user trigger)* | No `radio awaiting`, so a kiro tab never shows `❓`. See [below](#no-awaiting-state-on-kiro) (#278). |
 
 **kiro does inject hook stdout into the model's context.** This README asserted the
 opposite for months, citing an issue that was about something else entirely. The
@@ -744,6 +745,44 @@ register report — and the other two are open questions rather than dead ends:
   `--auto` or `--auto-submit`, #206), so a wake that lands is acted on instead of sitting
   in the prompt box for a human Enter. It does not touch kiro's permission model — that
   is still `-a/--trust-all`.
+
+#### No awaiting state on kiro
+
+On claude, `radio awaiting` paints the tab `❓` and trips the monitor's
+`worker-awaiting` signal. Three hooks call it: `PermissionRequest`, and a
+`PreToolUse` matcher on each of `AskUserQuestion` and `ExitPlanMode`. kiro-cli
+offers none of the three, so the kiro loadouts don't wire `radio awaiting` at
+all (#278). Checked against kiro-cli 2.32.0:
+
+- **No trigger.** An agent config's `hooks` field accepts exactly `agentSpawn`,
+  `userPromptSubmit`, `preToolUse`, `postToolUse` and `stop`. There is no
+  permission or notification trigger.
+- **No tool to match.** kiro has no ask-the-user tool, so a question is plain
+  prose that ends the turn. Its one confirm-before-proceeding tool,
+  `switch_to_execution` (the "Ready to exit [plan] agent" prompt), belongs to
+  kiro's built-in `kiro_planner` agent. No task-force kiro agent lists it in
+  `tools`, and inside `kiro_planner` none of radio's hooks run, so a
+  `preToolUse` matcher on it would never fire for a task-force role.
+- **No payload field.** A hook receives `hook_event_name`, `cwd`, `session_id`,
+  `tool_name`, `tool_input`, `tool_response` and `assistant_response`. Nothing
+  says a tool is waiting for approval, so `preToolUse` can't tell an approval
+  prompt from a tool that is about to run.
+
+So a kiro worker that is waiting on you shows one of the states it already has.
+A question asked in prose ends the turn, so `stop` marks it `idle` (`⏸️`). A
+tool-approval prompt comes mid-turn, so the tab should stay `busy` (`▶️`). That
+one is unverified: whether kiro fires `stop` before an approval prompt could not
+be observed, because the live probe hit the account's monthly usage limit before
+the model replied. Either way, neither trips `worker-awaiting`. A worker launched
+with `--trust-all` never sees an approval prompt, which leaves only the question
+case.
+
+No file is a substitute either. The `sessions/cli/` log the live kiro sessions on
+this machine write holds only finished prompts, replies and tool results. kiro's
+V3 engine does keep an `awaiting_approval` status on a tool call in its own
+session files, but whether that is written while the prompt is still up is
+unverified, and reading it would mean polling files instead of running a hook.
+Re-check when kiro-cli adds a trigger.
 
 Re-deriving what kiro can now support — prompt-hook, the Stop drain, and whether
 #190's "declare kiro best-effort" decision still holds — is tracked in **#221**.

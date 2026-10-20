@@ -47,6 +47,11 @@ ln -sf "$SCRIPT_DIR/../bin/task-monitor-snapshot" ~/.local/bin/task-monitor-snap
 echo "  ✓ Script: task-monitor-snapshot (canonical)"; sleep 0.05
 ln -sf "$SCRIPT_DIR/../bin/task-monitor-queue" ~/.local/bin/task-monitor-queue
 echo "  ✓ Script: task-monitor-queue (canonical)"; sleep 0.05
+# task-monitor is the one compiled command (#277): built here when cargo is on
+# PATH, skipped with one line when it is not.
+# shellcheck source=lib/monitor-install.sh
+source "$SCRIPT_DIR/../lib/monitor-install.sh"
+aw_install_monitor "$SCRIPT_DIR/.."
 # endregion:install-shared-symlinks
 ln -sf "$SCRIPT_DIR/../bin/task-reviewer" ~/.local/bin/task-reviewer
 echo "  ✓ Script: task-reviewer (canonical + kiro routing)"; sleep 0.05

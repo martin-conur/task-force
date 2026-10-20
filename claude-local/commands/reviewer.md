@@ -45,6 +45,7 @@ $ARGUMENTS
      --limit 1 --json databaseId --jq 'length'   # 0 => no run for this commit; not green
    ```
 4. Cross-check the diff against the spec (if any). Note any deliverables the task called for that are missing, partial, or implemented differently than specified — these are first-class findings, not nits.
+   A PR body that does not open with `## Summary` — two or three plain sentences, written for the user rather than a reviewer, saying what changed and why — is a **nit**: ask for it in this review, but it never blocks on its own.
 5. Run the `code-review` skill on the diff. The skill orchestrates sub-agents and produces correctness findings.
 6. Compose a **single PR comment** with sections:
    - **Spec compliance** (omit if diff-only) — did the PR deliver what the task asked for? List anything missing or off-spec.

@@ -12,7 +12,7 @@
       "pm": {
         "role": "pm-task-force",
         "state": "idle",
-        "since": "2026-10-18T20:49:28Z",
+        "last_heartbeat": "2026-10-18T20:49:28Z",
         "tab": "⏸️ pm-task-force",
         "tab_id": "0",
         "zellij_session": "task-force",
@@ -21,6 +21,7 @@
         "unread": 1
       },
       "forge": {
+        "available": true,
         "fetched_at": "2026-10-20T14:33:14Z",
         "stale": false
       },
@@ -50,7 +51,7 @@
           "session": {
             "role": "worker-task-force-monitor-snapshot",
             "state": "busy",
-            "since": "2026-10-20T14:11:57Z",
+            "last_heartbeat": "2026-10-20T14:11:57Z",
             "tab": "▶️ monitor-snapshot",
             "tab_id": "1",
             "zellij_session": "task-force",
@@ -132,7 +133,7 @@
               {
                 "role": "worker-task-force-pr-summary-section",
                 "slug": "pr-summary-section",
-                "since": "2026-10-20T14:02:11Z"
+                "last_heartbeat": "2026-10-20T14:02:11Z"
               }
             ],
             "text": "❓ pr-summary-section is asking"

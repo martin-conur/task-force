@@ -34,7 +34,7 @@ case "$1 $2" in
       *"--state open"*)   _serve pr-open.json ;;
       *"--state merged"*) _serve pr-merged.json ;;
     esac ;;
-  "project item-list") _serve project.json ;;
+  "api graphql") _serve project.json ;;
 esac
 exit 1
 STUB
@@ -84,10 +84,11 @@ sidecar() {
 }
 
 # session <role> <state> [extra KEY=VALUE lines...]
+# The heartbeat is a minute old unless $HB says otherwise.
 session() {
-  local role="$1" state="$2"; shift 2
-  { printf 'ROLE=%s\nTAB=%s\nTAB_ID=4\nZELLIJ_SESSION=zs\nREPO=%s\nREPO_NAME=%s\nSTATE=%s\nLAST_HEARTBEAT=2026-10-20T10:00:00Z\nAGENT=claude\nLOADOUT=claude-gh\n' \
-      "$role" "$role" "$MAIN_REPO" "$NAME" "$state"
+  local role="$1" state="$2" hb="${HB:-$(ago 60)}"; shift 2
+  { printf 'ROLE=%s\nTAB=%s\nTAB_ID=4\nZELLIJ_SESSION=zs\nREPO=%s\nREPO_NAME=%s\nSTATE=%s\nLAST_HEARTBEAT=%s\nAGENT=claude\nLOADOUT=claude-gh\n' \
+      "$role" "$role" "$MAIN_REPO" "$NAME" "$state" "$hb"
     local l; for l in "$@"; do printf '%s\n' "$l"; done; } > "$SESS/$role.info"
 }
 
@@ -172,10 +173,10 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
 
 @test "in flight: the worker session's STATE and heartbeat are joined" {
   sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
-  session "worker-$NAME-issue-5" awaiting
+  HB=2026-10-20T10:00:00Z session "worker-$NAME-issue-5" awaiting
   snap
   assert_equal "$(q '.in_flight[0].session.state')" awaiting
-  assert_equal "$(q '.in_flight[0].session.since')" 2026-10-20T10:00:00Z
+  assert_equal "$(q '.in_flight[0].session.last_heartbeat')" 2026-10-20T10:00:00Z
 }
 
 @test "in flight gh: issue title and the first prose paragraph of its body" {
@@ -293,31 +294,81 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.next.items[0].title')" "Eight"
 }
 
-@test "next gh fallback: project items in none of the three statuses, minus in flight and other repos" {
+# project_page <compact-items-json> [hasNextPage]
+# One page of the GraphQL answer aw_tracker_next_fallback asks for, built from
+# compact items: {status, prio, type, number, title, body, repo, state, subs,
+# archived}. The project's Priority options are p0, p1, p2, in that order.
+project_page() {
+  jq -c --argjson more "${2:-false}" '{data: {repositoryOwner: {projectV2: {
+    priority: {options: [{id: "p0"}, {id: "p1"}, {id: "p2"}]},
+    items: {pageInfo: {hasNextPage: $more, endCursor: "c"}, nodes: map({
+      isArchived: (.archived // false),
+      status: (if .status then {name: .status} else null end),
+      priority: (if .prio then {optionId: .prio} else null end),
+      content: (if .type == "DraftIssue" then {__typename: "DraftIssue"} else
+        {__typename: "Issue", number, title: (.title // "t\(.number)"), body: (.body // ""),
+         url: "https://github.com/acme/widgets/issues/\(.number)", state: (.state // "OPEN"),
+         repository: {nameWithOwner: (.repo // "acme/widgets")},
+         subIssuesSummary: {total: (.subs // 0)}} end)})}}}}}' <<<"$1"
+}
+
+@test "next gh fallback: project issues in none of the three statuses, minus in flight and other repos" {
   sidecar issue-2 GH_URL https://github.com/acme/widgets/issues/2
-  jq -n '{items: [
-    {status: "Backlog",     content: {type: "Issue", number: 1, title: "one",   body: "B1.", url: "https://github.com/acme/widgets/issues/1", repository: "acme/widgets"}},
-    {status: "In progress", content: {type: "Issue", number: 3, title: "three", body: "",    url: "https://github.com/acme/widgets/issues/3", repository: "acme/widgets"}},
-    {status: null,          content: {type: "Issue", number: 2, title: "two",   body: "",    url: "https://github.com/acme/widgets/issues/2", repository: "acme/widgets"}},
-    {status: "Ready",       content: {type: "Issue", number: 4, title: "four",  body: "",    url: "https://github.com/acme/widgets/issues/4", repository: "acme/other"}},
-    {status: "done",        content: {type: "Issue", number: 5, title: "five",  body: "",    url: "https://github.com/acme/widgets/issues/5", repository: "acme/widgets"}},
-    {status: "Ready",       content: {type: "DraftIssue", title: "draft", body: ""}},
-    {status: "Ready",       content: {type: "Issue", number: 6, title: "six",   body: "",    url: "https://github.com/acme/widgets/issues/6", repository: "acme/widgets"}}
-  ]}' > "$GH_FIX/project.json"
+  project_page '[
+    {"status": "Backlog",     "number": 1, "body": "B1."},
+    {"status": "In progress", "number": 3},
+    {"status": null,          "number": 2},
+    {"status": "Ready",       "number": 4, "repo": "acme/other"},
+    {"status": "done",        "number": 5},
+    {"status": "Ready",       "type": "DraftIssue"},
+    {"status": "Ready",       "number": 6}
+  ]' > "$GH_FIX/project.json"
   snap
   assert_equal "$(q .next.source)" tracker
   assert_equal "$(q '[.next.items[].label] | join(" ")')" "#1 #6"
   assert_equal "$(q '.next.items[0].description')" "B1."
-  run grep -F "project item-list 7 --owner acme" "$STUB_CALLS_DIR/gh.calls"
+  run grep -F -- "-f owner=acme -F number=7" "$STUB_CALLS_DIR/gh.calls"
   assert_success
+}
+
+@test "next gh fallback: epics with sub-issues, closed issues and archived items are left out" {
+  project_page '[
+    {"status": "Backlog", "number": 1, "subs": 3},
+    {"status": "Backlog", "number": 2, "state": "CLOSED"},
+    {"status": "Backlog", "number": 3, "archived": true},
+    {"status": "Backlog", "number": 4}
+  ]' > "$GH_FIX/project.json"
+  snap
+  assert_equal "$(q '[.next.items[].label] | join(" ")')" "#4"
+}
+
+@test "next gh fallback: ordered by the Priority field's option order, then API order" {
+  project_page '[
+    {"status": "Backlog", "number": 1, "prio": "p2"},
+    {"status": "Backlog", "number": 2},
+    {"status": "Backlog", "number": 3, "prio": "p0"},
+    {"status": "Backlog", "number": 4, "prio": "p2"}
+  ]' > "$GH_FIX/project.json"
+  # A second page, as `gh api graphql --paginate` prints it: one response after another.
+  project_page '[{"status": "Backlog", "number": 5, "prio": "p1"}]' >> "$GH_FIX/project.json"
+  snap
+  assert_equal "$(q '[.next.items[].label] | join(" ")')" "#3 #5 #1 #4 #2"
+}
+
+@test "next gh fallback: an unknown project is a failed ask, so the last answer is kept" {
+  project_page '[{"status": "Backlog", "number": 4}]' > "$GH_FIX/project.json"
+  snap
+  echo '{"data": {"repositoryOwner": {"projectV2": null}}}' > "$GH_FIX/project.json"
+  snap
+  assert_equal "$(q '[.next.items[].label] | join(" ")')" "#4"
 }
 
 @test "next gh fallback: draft items are left out even when the doc names no repo" {
   sed -i.bak '/\*\*Repo\*\*/d' "$MAIN_REPO/.claude/gh-workflow.md"
-  jq -n '{items: [
-    {status: "Ready", content: {type: "DraftIssue", title: "draft", body: ""}},
-    {status: "Ready", content: {type: "Issue", number: 6, title: "six", body: "", url: "https://github.com/acme/widgets/issues/6", repository: "acme/widgets"}}
-  ]}' > "$GH_FIX/project.json"
+  project_page '[
+    {"status": "Ready", "type": "DraftIssue"},
+    {"status": "Ready", "number": 6}
+  ]' > "$GH_FIX/project.json"
   snap
   assert_equal "$(q '[.next.items[].label] | join(" ")')" "#6"
 }
@@ -416,7 +467,9 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   local other; other=$(basename "$OTHER_REPO" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
   session "pm-$NAME" idle
   printf 'ROLE=pm-%s\nALIAS=pm-%s\nREPO=%s\n' "$other" "$NAME" "$OTHER_REPO" > "$SESS/pm-$other.info"
-  msg "pm-$other" inbox 1 "worker-$other-a" review-requested 3
+  # What radio's alias hop does with a worker's `--to pm`: it lands in the
+  # primary's inbox. The alias owns none.
+  msg "pm-$NAME" inbox 1 "worker-$other-a" review-requested 3
   snap --all
   assert_equal "$(jq -r --arg n "$NAME" '.repos[] | select(.name == $n) | .pm.unread' <<<"$output")" 1
   assert_equal "$(jq -r --arg n "$other" '.repos[] | select(.name == $n) | [.pm.alias_of, .pm.unread, .attention.active] | join(",")' <<<"$output")" "pm-$NAME,0,false"
@@ -456,6 +509,33 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   snap
   assert_equal "$(q '.attention.signals | map(.kind) | join(",")')" worker-awaiting
   assert_equal "$(q '.attention.signals[0].text')" "❓ issue-5 is asking"
+}
+
+@test "attention: an awaiting worker whose heartbeat is over an hour old does not light the repo" {
+  HB=$(ago 3700) session "worker-$NAME-issue-5" awaiting
+  snap
+  assert_equal "$(q .attention.active)" false
+  # The session itself still shows, so the front end can show it as gone quiet.
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  snap
+  assert_equal "$(q '.in_flight[0].session.state')" awaiting
+}
+
+@test "attention: two messages in the same second are ordered by the radio log, not by id" {
+  pr_fixture 9 task/issue-5 "Closes #5" > "$BATS_TEST_TMPDIR/p9"
+  open_prs "$BATS_TEST_TMPDIR/p9"
+  # Sent in this order within one second: the review, then the PM's answer. By
+  # id they sort the other way round (from-pm-… < from-reviewer-…), which
+  # would leave the review looking unanswered.
+  local rev="20261020-100001-from-reviewer-$NAME-pr9-zq" pm="20261020-100001-from-pm-$NAME-a1"
+  mkdir -p "$MBOX/pm-$NAME/processed" "$MBOX/worker-$NAME-issue-5/processed"
+  printf -- '---\nid: %s\nfrom: reviewer-%s-pr9\nto: pm-%s\nintent: review-complete-clean\npr: 9\ncreated_at: 2026-10-20T10:00:01Z\n---\n' \
+    "$rev" "$NAME" "$NAME" > "$MBOX/pm-$NAME/processed/$rev.md"
+  printf -- '---\nid: %s\nfrom: pm-%s\nto: worker-%s-issue-5\nintent: changes-requested\npr: 9\ncreated_at: 2026-10-20T10:00:01Z\n---\n' \
+    "$pm" "$NAME" "$NAME" > "$MBOX/worker-$NAME-issue-5/processed/$pm.md"
+  printf '2026-10-20T10:00:01Z send id=%s from=x to=y intent=z\n' "$rev" "$pm" > "$TASK_FORCE_HOME/radio/log"
+  snap
+  assert_equal "$(q .attention.active)" false
 }
 
 @test "attention: nothing but the three signals lights a repo" {
@@ -519,6 +599,18 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.forge.stale')" true
 }
 
+@test "a repo whose forge has never answered is unavailable, not stale" {
+  rm -f "$GH_FIX"/*.json
+  snap
+  assert_success
+  assert_equal "$(q '[.forge.available, .forge.stale] | map(tostring) | join(",")')" "false,false"
+  echo '[]' > "$GH_FIX/pr-open.json"
+  snap
+  assert_equal "$(q '[.forge.available, .forge.stale] | map(tostring) | join(",")')" "true,false"
+  snap --local
+  assert_equal "$(q '[.forge.available, .forge.stale] | map(tostring) | join(",")')" "true,true"
+}
+
 @test "--all adds every repo a radio session names, resolving a worktree to its main repo" {
   OTHER_REPO=$(mktemp -d)
   git -C "$OTHER_REPO" init -q -b main
@@ -526,7 +618,7 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   mkdir -p "$OTHER_REPO-worktrees"
   git -C "$OTHER_REPO" worktree add -q "$OTHER_REPO-worktrees/w" -b task/w
   local other; other=$(basename "$OTHER_REPO" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-  printf 'ROLE=worker-%s-w\nREPO=%s\nREPO_NAME=%s\nSTATE=awaiting\n' "$other" "$OTHER_REPO-worktrees/w" "$other" \
+  printf 'ROLE=worker-%s-w\nREPO=%s\nREPO_NAME=%s\nSTATE=awaiting\nLAST_HEARTBEAT=%s\n' "$other" "$OTHER_REPO-worktrees/w" "$other" "$(ago 60)" \
     > "$SESS/worker-$other-w.info"
   snap
   assert_equal "$(jq '.repos | length' <<<"$output")" 1

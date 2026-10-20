@@ -126,10 +126,57 @@ aw_tracker_pr_item() {
 }
 
 # Open project items in none of the three configured statuses (in progress / in
-# review / done), in the order `gh project item-list` returns them. Read from the
-# workflow doc rather than added as new settings (#272): the doc already names
-# the project and all three statuses. Compared case-insensitively, since the
-# template says `In Progress` and GitHub's own default column is `In progress`.
+# review / done), read from the workflow doc rather than added as new settings
+# (#272): the doc already names the project and all three statuses. Compared
+# case-insensitively, since the template says `In Progress` and GitHub's own
+# default column is `In progress`.
+#
+# Also left out: closed and archived items, drafts, other repos' issues, and any
+# issue that has sub-issues — an epic is tracked through its children, and is
+# never itself the next thing to pick up.
+#
+# Order: by the project's Priority field when it has one, in the field's own
+# option order (P0 before P1), and otherwise in the order the API returns items.
+# That is NOT the board's order: Projects v2 exposes no view ordering here, and
+# the API order is roughly the order items were added.
+#
+# One GraphQL query, paginated, rather than `gh project item-list`: item-list
+# carries neither sub-issue counts nor issue state, and asking per item would
+# cost a call each.
+# shellcheck disable=SC2016  # GraphQL variables, not shell expansions
+_AW_GH_PROJECT_QUERY='
+query($owner: String!, $number: Int!, $endCursor: String) {
+  repositoryOwner(login: $owner) {
+    ... on ProjectV2Owner {
+      projectV2(number: $number) {
+        priority: field(name: "Priority") {
+          ... on ProjectV2SingleSelectField { options { id } }
+        }
+        items(first: 100, after: $endCursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            isArchived
+            status: fieldValueByName(name: "Status") {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+            }
+            priority: fieldValueByName(name: "Priority") {
+              ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+            }
+            content {
+              __typename
+              ... on Issue {
+                number title body url state
+                repository { nameWithOwner }
+                subIssuesSummary { total }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}'
+
 aw_tracker_next_fallback() {
   local root="$1" doc="$2" limit="${3:-10}" owner repo project statuses json item desc
   owner=$(tf_tracker_value "$doc" gh owner)
@@ -139,14 +186,25 @@ aw_tracker_next_fallback() {
   # shellcheck disable=SC2016  # the backticks are literal markdown, not expansions
   statuses=$(sed -n -E 's/^- \*\*Status when (starting work|in review|done)\*\*: `([^`]*)`.*/\2/p' "$doc" 2>/dev/null \
     | jq -Rsc 'split("\n") | map(ascii_downcase | select(. != ""))')
-  json=$(cd "$root" 2>/dev/null && gh project item-list "$project" --owner "$owner" --format json --limit 200 2>/dev/null) || return 1
+  # --paginate prints one response per page; jq -s below takes the stream whole.
+  json=$(cd "$root" 2>/dev/null && gh api graphql --paginate -f query="$_AW_GH_PROJECT_QUERY" \
+    -f owner="$owner" -F number="$project" 2>/dev/null) || return 1
   [[ -n "$json" ]] || return 1
-  printf '%s' "$json" | jq -c --arg repo "${repo:+$owner/$repo}" --argjson skip "$statuses" --argjson limit "$limit" '
-    [ .items[]
-      | select(.content.type == "Issue")
-      | select($repo == "" or .content.repository == $repo)
-      | select(((.status // "") | ascii_downcase) as $s | ($skip | index($s)) | not)
-    ][:$limit][]
+  # An unknown project makes jq error out, and bin/task-monitor-snapshot runs
+  # with pipefail, so that reaches the caller as a failed ask, not "nothing".
+  printf '%s' "$json" | jq -sc --arg repo "${repo:+$owner/$repo}" --argjson skip "$statuses" --argjson limit "$limit" '
+    [.[] | .data.repositoryOwner.projectV2 | select(. != null)] as $pages
+    | if ($pages | length) == 0 then error("no such project") else . end
+    | ([$pages[0].priority.options[]?.id]) as $prio
+    | [ $pages[] | .items.nodes[]
+        | select(.isArchived | not)
+        | select(.content.__typename == "Issue" and .content.state == "OPEN")
+        | select($repo == "" or .content.repository.nameWithOwner == $repo)
+        | select((.content.subIssuesSummary.total // 0) == 0)
+        | select(((.status.name // "") | ascii_downcase) as $s | ($skip | index($s)) | not) ]
+    | to_entries
+    | sort_by([(.value.priority.optionId as $o | ($prio | index($o)) // ($prio | length)), .key])
+    | [.[].value][:$limit][]
     | .content
     | {ref: (.number | tostring), label: ("#" + (.number | tostring)), number: .number,
        title: .title, body: (.body // ""), url: .url}' \

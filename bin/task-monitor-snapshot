@@ -150,6 +150,15 @@ _messages_ndjson() {
     [[ -d "$d" ]] && dirs+=("$d")
   done
   [[ ${#dirs[@]} -gt 0 ]] || return 0
+  # Send order, from the radio log: {id: line number}. It breaks created_at
+  # ties, which ids cannot (see msg_order in lib/monitor-assemble.jq).
+  # No log yet is no order yet, not an error: awk exits 2 on a missing file,
+  # which pipefail would make fatal.
+  { [[ -f "$TF_HOME/radio/log" ]] && awk '
+    match($0, / send id=[^ ]+/) { print substr($0, RSTART + 9, RLENGTH - 9) "\t" NR }
+  ' "$TF_HOME/radio/log" || true; } | jq -Rsc '
+    split("\n") | map(select(. != "") | split("\t")) | map({key: .[0], value: (.[1] | tonumber)}) | from_entries
+  ' > "$WORK/logseq.json"
   find "${dirs[@]}" -type f -name '*.md' -exec awk '
     function flush() {
       if (fname != "" && !printed) {
@@ -168,9 +177,9 @@ _messages_ndjson() {
     index($0, "pr: ") == 1         { pr = substr($0, 5) }
     index($0, "created_at: ") == 1 { created = substr($0, 13) }
     END { flush() }
-  ' {} + | jq -Rc --arg dl "$DEAD_LETTER_DIR/" '
+  ' {} + | jq -Rc --arg dl "$DEAD_LETTER_DIR/" --slurpfile seq "$WORK/logseq.json" '
     split("\t") as $f | ($f[0] | split("/")) as $p
-    | {id: $f[1], from: $f[2], to: $f[3], intent: $f[4],
+    | {id: $f[1], from: $f[2], to: $f[3], intent: $f[4], seq: $seq[0][$f[1]],
        pr: (if $f[5] == "" then null else $f[5] end), created_at: $f[6],
        box: (if ($f[0] | startswith($dl)) then "dead-letter" else $p[-2] end),
        mailbox: (if ($f[0] | startswith($dl)) then $p[-2] else $p[-3] end)}'
@@ -443,7 +452,7 @@ _snapshot_repo() {
   # --- assemble.
   jq -n \
     --arg name "$name" --arg root "$root" --arg impl "$impl" --arg tracker "$tracker" \
-    --arg agent "$agent" --arg fetched_at "$fetched_at" \
+    --arg agent "$agent" --arg now "$NOW" --arg fetched_at "$fetched_at" \
     --arg next_source "$next_source" --argjson next_limit "$NEXT_LIMIT" \
     --argjson forge_ok "$forge_ok" --argjson names "$names_json" \
     --argjson open_prs "$open_prs" --argjson merged "$merged_index" \

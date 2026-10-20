@@ -27,10 +27,23 @@ def among($set): . as $x | $set | index([$x]) != null;
 def session_obj($S; $role):
   $S[$role] as $s
   | if $s == null then null else
-      {role: $role, state: ($s.STATE | nonempty), since: ($s.LAST_HEARTBEAT | nonempty),
+      {role: $role, state: ($s.STATE | nonempty), last_heartbeat: ($s.LAST_HEARTBEAT | nonempty),
        tab: ($s.TAB | nonempty), tab_id: ($s.TAB_ID | nonempty),
        zellij_session: ($s.ZELLIJ_SESSION | nonempty), agent: ($s.AGENT | nonempty)}
     end;
+
+# Message order. created_at has one-second resolution, and a radio id does NOT
+# break the tie: after the timestamp it carries the sender and a random suffix,
+# so two messages sent in the same second sort by chance. `seq` is the message's
+# position among the radio log's `send id=` lines, which radio appends in send
+# order; a message the log no longer holds (it keeps its last ~512KB) sorts
+# after any that it does in that second, then by id.
+def msg_order: [.created_at, (.seq // 1e18), .id];
+
+# A heartbeat older than `radio orphans`' threshold (1h) means the tab is gone:
+# a crashed tab leaves STATE=awaiting behind forever (bin/radio, cmd_send).
+def fresh($now): (. // "") as $hb
+  | $hb != "" and (($now | fromdateiso8601) - ($hb | fromdateiso8601) < 3600);
 
 def status($pr; $last_review; $has_reviewer):
   if $pr == null then "implementing"
@@ -53,7 +66,7 @@ def status($pr; $last_review; $has_reviewer):
 | def mine: role_of($name) and ([. as $role | $longer[] as $l | $role | role_of($l)] | any | not);
 
 [$messages[] | select(((.from // "") | mine) or ((.to // "") | mine))]
-  | sort_by([.created_at, .id]) as $msgs
+  | sort_by(msg_order) as $msgs
 
 # Is PR <n> (a string) still open? Only the forge can say. With no answer yet —
 # a repo whose first full run has not happened — nothing counts as open: every
@@ -108,19 +121,24 @@ def status($pr; $last_review; $has_reviewer):
 
 # --- attention: exactly three signals (#272). Nothing else lights a repo.
 | ($S[$pm_role].ALIAS | nonempty) as $alias_of
-| ([$S | to_entries[] | select(.value.ALIAS == $pm_role) | .key]) as $aliases
+# An alias owns no inbox: radio's alias hop delivers its mail into the
+# primary's, and `register-alias` folds in anything that queued before. So the
+# primary's own inbox already holds the alias's mail, and the alias repo
+# reports 0 with alias_of set — that is the whole of "--also counts toward the
+# primary".
 | (if $alias_of != null then 0 else
-     [$messages[] | select(.box == "inbox") | select(.mailbox == $pm_role or (.mailbox | among($aliases)))] | length
+     [$messages[] | select(.box == "inbox" and .mailbox == $pm_role)] | length
    end) as $unread
 | ([$msgs[] | select(.pr != null) | select(.intent | among(decision_intents))]
    | group_by(.pr)
-   | map(sort_by([.created_at, .id]) | last)
+   | map(sort_by(msg_order) | last)
    | map(select(.intent | startswith("review-complete-")) | .pr)
    | map(select(pr_open(.)))) as $waiting_prs
 | ([$S | to_entries[]
     | select(.key | startswith("worker-")) | select(.key | mine)
-    | select(.value.STATE == "awaiting")
-    | {role: .key, slug: (.key | ltrimstr("worker-" + $name + "-")), since: (.value.LAST_HEARTBEAT | nonempty)}]) as $awaiting
+    | select(.value.STATE == "awaiting" and (.value.LAST_HEARTBEAT | fresh($now)))
+    | {role: .key, slug: (.key | ltrimstr("worker-" + $name + "-")),
+       last_heartbeat: (.value.LAST_HEARTBEAT | nonempty)}]) as $awaiting
 | ( (if $unread > 0 then [{kind: "unread-inbox", count: $unread, text: "✉ \($unread) unread"}] else [] end)
   + (if ($waiting_prs | length) > 0 then
        [{kind: "review-waiting-merge", prs: ($waiting_prs | map(tonumber? // .)),
@@ -137,11 +155,15 @@ def status($pr; $last_review; $has_reviewer):
     loadout: ($impl | nonempty),
     tracker: ($tracker | nonempty),
     agent: ($agent | nonempty),
-    pm: ((session_obj($S; $pm_role) // {role: $pm_role, state: null, since: null, tab: null,
+    pm: ((session_obj($S; $pm_role) // {role: $pm_role, state: null, last_heartbeat: null, tab: null,
                                        tab_id: null, zellij_session: null, agent: null})
          + {alias_of: $alias_of, unread: $unread}),
-    forge: {fetched_at: ($fetched_at | nonempty),
-            stale: ($forge_ok != 1)},
+    # `available`: the forge has answered for this repo at least once. A repo
+    # with no GitHub remote never has, and would otherwise read as permanently
+    # stale; `stale` is only meaningful for a repo whose forge does answer.
+    forge: {available: ($fetched_at | nonempty) != null,
+            fetched_at: ($fetched_at | nonempty),
+            stale: (($fetched_at | nonempty) != null and $forge_ok != 1)},
     in_flight: $in_flight,
     next: {source: (if ($next_items | length) == 0 then "none" else $next_source end), items: $next_items},
     done: {window_hours: 24, min_items: 10, items: $done_items},

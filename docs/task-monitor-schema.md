@@ -49,7 +49,7 @@ ignore fields it does not know.
 | `loadout` | string \| null | `claude-gh` …, from the repo's one workflow doc, else from its PM session's `LOADOUT=` |
 | `tracker`, `agent` | string \| null | the loadout's two halves |
 | `pm` | object | the PM session (see below) |
-| `forge` | object | `fetched_at`: the last time the forge answered, or null. `stale`: true when this run did not hear from the forge (always under `--local`) and shows the last result instead |
+| `forge` | object | `available`: the forge has answered for this repo at least once. A repo with no GitHub remote never has, so it reports `false` rather than a permanent `stale`; its PR-derived fields are simply empty. `fetched_at`: the last time the forge answered, or null. `stale`: the forge is available, but this run did not hear from it (always so under `--local`), so PR state shows the last result |
 | `in_flight` | array | one entry per worktree sidecar |
 | `next` | object | `source` (`queue` \| `tracker` \| `none`) and `items` |
 | `done` | object | `window_hours` (24), `min_items` (10) and `items` |
@@ -57,15 +57,18 @@ ignore fields it does not know.
 
 ### `pm`
 
-`role`, `state` (`idle` \| `busy` \| `awaiting` \| null), `since` (the session's
-`LAST_HEARTBEAT`, which every state change rewrites), `tab`, `tab_id`,
+`role`, `state` (`idle` \| `busy` \| `awaiting` \| null), `last_heartbeat` (the
+session's `LAST_HEARTBEAT`: radio rewrites it on every state change and every
+register, so it is when the session was last heard from, not when it entered
+its current state), `tab`, `tab_id`,
 `zellij_session`, `agent`: all from `radio/sessions/pm-<name>.info`, null when
 there is no session. Then:
 
 - `alias_of`: the primary PM's role when this repo's PM is a `task-pm --also`
   alias, else null.
-- `unread`: messages in the PM's `inbox/`. An alias's inbox counts toward its
-  primary, so an aliased repo reports `0`.
+- `unread`: messages in the PM's `inbox/`. An alias owns no inbox: radio
+  delivers mail sent to it into the primary's inbox. So an aliased repo reports
+  `0` with `alias_of` set, and its unread mail is counted on the primary repo.
 
 ### Item fields
 
@@ -108,7 +111,7 @@ The item fields above, plus:
 | `pr` | `{number, url, title, state, is_draft, head, summary, merged_at, merge_sha}`, found by the `task/<slug>` head branch on every tracker, else null. If no PR has that head, the PR the worker named in its own radio messages is used |
 | `status` | see below |
 | `last_intent` | the latest radio message to or from this worker, or about its PR: `{intent, from, to, pr, at}` |
-| `session` | the worker's radio session: `{role, state, since, tab, tab_id, zellij_session, agent}`, or null |
+| `session` | the worker's radio session: `{role, state, last_heartbeat, tab, tab_id, zellij_session, agent}`, or null |
 | `reviewers` | `[{pr, role, session}]` |
 
 `status` comes from the PR's state plus the latest review intent exchanged about
@@ -134,10 +137,14 @@ that PR:
   tab-separated note and `#` comments. The command that writes this file is
   #272's sub-issue 3, which owns the format.
 - `source: "tracker"`: the queue is empty, so the tracker's fallback is used.
-  - **gh**: open project items whose status is none of the three in the workflow
-    doc (starting work, in review, done), compared case-insensitively. They are
-    limited to this repo's issues, in the order `gh project item-list` returns,
-    top 10.
+  - **gh**: open issues on the configured project whose status is none of the
+    three in the workflow doc (starting work, in review, done), compared
+    case-insensitively. Limited to this repo's issues, top 10. Archived items,
+    drafts, closed issues and issues that have sub-issues (an epic is tracked
+    through its children) are left out. They are ordered by the project's
+    `Priority` field when it has one, in its option order, and otherwise in API
+    order. API order is roughly the order items were added, not the board's
+    order, which the API does not expose.
   - **local**: the `tasks/` backlog by numeric id, skipping `in-progress` and
     `done`.
   - **jira / notion**: there is no fallback, so the source is `none`.
@@ -168,7 +175,7 @@ Exactly three signals. Nothing else lights a repo.
 |---|---|---|
 | `unread-inbox` | the PM's inbox is not empty. `--also` alias inboxes count toward the primary | `count` |
 | `review-waiting-merge` | the latest decision about a PR is a `review-complete-clean` or `review-complete-with-findings`, with no later `changes-requested` or `approved-and-merged`, and the forge lists the PR as open | `prs` |
-| `worker-awaiting` | a worker session of the repo is in `awaiting`, the state behind the tab's `❓` | `workers: [{role, slug, since}]` |
+| `worker-awaiting` | a worker session of the repo is in `awaiting`, the state behind the tab's `❓`, with a heartbeat younger than an hour (`radio orphans`' threshold: a crashed tab leaves `awaiting` behind forever) | `workers: [{role, slug, last_heartbeat}]` |
 
 Each signal has a `text` in words, such as `✉ 2 unread`, `1 review waiting
 merge` or `❓ issue-5 is asking`. `active` is true when there is any signal.
@@ -177,8 +184,11 @@ A PR counts as open only when the forge says so. A repo with no full run yet
 therefore shows no `review-waiting-merge`, rather than lighting up for every
 review its mailboxes remember. The review timeline is rebuilt from message
 frontmatter (`intent:`, `pr:`) in every mailbox, `processed/` and `dead-letter/`
-included. The radio log cannot be used for this, because its `send` lines carry
-no `pr=`.
+included. The radio log cannot be the source, because its `send` lines carry no
+`pr=`. It does break ties, though. `created_at` has one-second resolution, and a
+radio id cannot order two messages from the same second: after the timestamp it
+holds the sender and a random suffix. So messages sort by `created_at`, then by
+their position among the log's `send id=` lines, then by id.
 
 `worker-awaiting` is claude-only for now. Only the claude loadouts wire
 `radio awaiting`, and #272's sub-issue 6 looks into a kiro equivalent.
@@ -209,7 +219,7 @@ loadout.
 |---|---|---|
 | `aw_tracker_item_describe <ref> <slug> <root>` | `ref · slug` | gh (`gh issue view`), local (the task file), jira (a browse URL shortened to its key) |
 | `aw_tracker_pr_item <head> <body>` | the `task/<slug>` head branch | gh (`Closes #N` first), jira (the key in upper case) |
-| `aw_tracker_next_fallback <root> <doc> <limit>` | nothing | gh (project items), local (`tasks/`) |
+| `aw_tracker_next_fallback <root> <doc> <limit>` | nothing | gh (project items, one paginated GraphQL query), local (`tasks/`) |
 
 A hook that reaches the forge returns non-zero when the forge does not answer.
 That is how the collector tells "nothing to show" from "could not ask". On the

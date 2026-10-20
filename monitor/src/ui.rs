@@ -248,7 +248,7 @@ fn repo_line(repo: &Repo, selected: bool, name_w: usize, w: usize) -> Line<'stat
     } else {
         format!("{n} in flight")
     })];
-    // Rows name their zellij session: `t` cannot cross one (#272).
+    // Rows name their zellij session: `t` there switches the client (#287).
     if let Some(session) = repo_session(repo) {
         right.push(Span::styled(format!(" · zellij {session}"), dim()));
     }

@@ -309,9 +309,13 @@ good snapshot stays up, marked `stale`. Keys: `↑↓` move, `⏎` expand (a don
 item's full PR body, scrollable) or enter a repo, `o` open the PR or issue, `t`
 jump to the item's tab (the worker's, or the PM's for a queued or done item; on
 the overview, the selected agent's), `!` show only the agents that need you,
-`a` toggle the overview, `q` quit. `t` stays inside the monitor's own zellij
-session, and goes to a tab only while the tab at the recorded id still bears the
-item's name, the check `task-done` makes before closing one (#260). It holds no
+`a` toggle the overview, `q` quit. `t` goes to a tab only while the tab at the
+recorded id still bears the item's name, the check `task-done` makes before
+closing one (#260). A tab in another zellij session is checked the same way,
+then reached with `zellij action switch-session <session> --tab-position`: the
+client moves and the monitor keeps running in its own session, so come back
+through zellij's session manager. A failed check switches nothing and says why
+(#287). It holds no
 task-force logic: every value is a snapshot field. A loadout's
 `install.sh` builds and links it when `cargo` is on PATH, and skips it with one
 line when not (#277). Its Next section is the queue the

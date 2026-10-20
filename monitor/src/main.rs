@@ -36,6 +36,10 @@ its attention light and marks the agent that needs you with `← you`.
 Keys: ↑↓ move  ⏎ expand / enter repo  o open PR/issue  t jump to tab
       ! overview: only what needs you  a all repos  q quit
 
+t on an agent in another zellij session switches this client to that session
+and tab; task-monitor keeps running in its own session, so come back through
+zellij's session manager.
+
 Local changes (radio mail, worker state, worktree sidecars) refresh at once
 from disk; forge state refreshes every --poll seconds. The data comes from
 task-monitor-snapshot ($TASK_MONITOR_SNAPSHOT overrides which one).

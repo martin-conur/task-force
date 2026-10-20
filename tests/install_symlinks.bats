@@ -182,7 +182,7 @@ resolve_link() {
     assert_success
     assert_output --partial "✓ Binary: task-monitor"
     assert_equal "$(cat "$FAKE_HOME/cargo.args")" \
-      "build --release --quiet --message-format=json-render-diagnostics --manifest-path $REPO_ROOT_REAL/monitor/Cargo.toml"
+      "build --release --locked --quiet --message-format=json-render-diagnostics --manifest-path $REPO_ROOT_REAL/monitor/Cargo.toml"
     assert [ -L "$HOME/.local/bin/task-monitor" ]
     assert_equal "$(readlink "$HOME/.local/bin/task-monitor")" "$REPO_ROOT_REAL/bin/radio"
     refute_output --partial "TASK_MONITOR_SNAPSHOT"
@@ -209,7 +209,7 @@ resolve_link() {
   stub_cargo fail
   run bash "$REPO_ROOT_REAL/claude-gh/install.sh"
   assert_success
-  assert_output --partial "task-monitor build failed; not linked. Retry with: cargo build --release --manifest-path"
+  assert_output --partial "task-monitor build failed; not linked. Retry with: cargo build --release --locked --manifest-path"
   assert [ ! -L "$HOME/.local/bin/task-monitor" ]
   # The rest of the install ran past it.
   assert [ -L "$HOME/.local/bin/task-monitor-snapshot" ]

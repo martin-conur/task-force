@@ -5,8 +5,9 @@
 # Exports:
 #   aw_install_monitor <task-force-root>
 #
-# With `cargo` on PATH it runs `cargo build --release` on <root>/monitor and
-# links the binary into ~/.local/bin/task-monitor. Without cargo it prints one
+# With `cargo` on PATH it runs `cargo build --release --locked` on <root>/monitor
+# (the committed Cargo.lock, as CI builds it) and links the binary into
+# ~/.local/bin/task-monitor. Without cargo it prints one
 # line saying how to get the monitor and links nothing. A failed build warns
 # and links nothing. Neither case fails the install: the bash commands
 # (task-monitor-snapshot included) are what the rest of task-force runs on, and
@@ -29,11 +30,11 @@ aw_install_monitor() {
     return 0
   fi
   echo "  … Building task-monitor (cargo build --release; the first build takes a minute or two)"
-  binary=$(cargo build --release --quiet --message-format=json-render-diagnostics \
+  binary=$(cargo build --release --locked --quiet --message-format=json-render-diagnostics \
       --manifest-path "$manifest" \
     | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1) || binary=""
   if [[ -z "$binary" || ! -x "$binary" ]]; then
-    echo "  ! task-monitor build failed; not linked. Retry with: cargo build --release --manifest-path $manifest" >&2
+    echo "  ! task-monitor build failed; not linked. Retry with: cargo build --release --locked --manifest-path $manifest" >&2
     return 0
   fi
   ln -sf "$binary" ~/.local/bin/task-monitor

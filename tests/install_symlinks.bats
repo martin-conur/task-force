@@ -11,6 +11,41 @@ load helpers/common
 setup() {
   FAKE_HOME=$(mktemp -d)
   export HOME="$FAKE_HOME"
+  # Every installer builds task-monitor when cargo is on PATH (#277). A stub
+  # stands in for it so no test here runs a real release build; see
+  # stub_cargo for what it reports.
+  STUB_BIN="$FAKE_HOME/stub-bin"
+  mkdir -p "$STUB_BIN"
+  stub_cargo "$REPO_ROOT_REAL/bin/radio"
+  export PATH="$STUB_BIN:$PATH"
+}
+
+# Write a fake `cargo` that logs its argv to $FAKE_HOME/cargo.args and answers
+# the way `cargo build --message-format=json-render-diagnostics` does: one
+# compiler-artifact line naming $1 as the built executable. The default points
+# at an executable already in the checkout, so the build is never faked into
+# the real monitor/target. With $1 = "fail" it prints nothing and exits 101.
+stub_cargo() {
+  local exe="$1"
+  if [[ "$exe" == fail ]]; then
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/cargo.args"\necho "error: could not compile" >&2\nexit 101\n' \
+      "$FAKE_HOME" > "$STUB_BIN/cargo"
+  else
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/cargo.args"\necho '"'"'{"reason":"compiler-artifact","executable":"%s","fresh":true}'"'"'\necho '"'"'{"reason":"build-finished","success":true}'"'"'\n' \
+      "$FAKE_HOME" "$exe" > "$STUB_BIN/cargo"
+  fi
+  chmod +x "$STUB_BIN/cargo"
+}
+
+# $PATH minus every directory holding a `cargo`, the stub's included.
+path_without_cargo() {
+  local dir out=""
+  local IFS=:
+  for dir in $PATH; do
+    [[ -x "$dir/cargo" ]] && continue
+    out="${out:+$out:}$dir"
+  done
+  printf '%s' "$out"
 }
 
 teardown() {
@@ -135,4 +170,70 @@ resolve_link() {
         ;;
     esac
   done
+}
+
+# task-monitor (#277). The stanza is drift-guarded, so one loadout per agent
+# proves all seven, as for task-monitor-snapshot above.
+@test "install builds task-monitor with cargo and links the executable cargo reports (#277)" {
+  local impl
+  for impl in claude-gh kiro-local; do
+    rm -rf "$HOME/.local/bin" "$FAKE_HOME/cargo.args"
+    run bash "$REPO_ROOT_REAL/$impl/install.sh"
+    assert_success
+    assert_output --partial "✓ Binary: task-monitor"
+    assert_equal "$(cat "$FAKE_HOME/cargo.args")" \
+      "build --release --quiet --message-format=json-render-diagnostics --manifest-path $REPO_ROOT_REAL/monitor/Cargo.toml"
+    assert [ -L "$HOME/.local/bin/task-monitor" ]
+    assert_equal "$(readlink "$HOME/.local/bin/task-monitor")" "$REPO_ROOT_REAL/bin/radio"
+    refute_output --partial "TASK_MONITOR_SNAPSHOT"
+  done
+}
+
+@test "install without cargo skips task-monitor in one line and still links the bash commands (#277)" {
+  local impl
+  for impl in claude-gh kiro-local; do
+    rm -rf "$HOME/.local/bin"
+    PATH=$(path_without_cargo) run bash "$REPO_ROOT_REAL/$impl/install.sh"
+    assert_success
+    assert_equal "$(grep -c 'task-monitor (' <<<"$output" | tr -d ' ')" "1"
+    assert_line --partial "Skipped: task-monitor (no cargo on PATH; install Rust >= 1.88 from https://rustup.rs"
+    assert [ ! -e "$HOME/.local/bin/task-monitor" ]
+    assert [ ! -L "$HOME/.local/bin/task-monitor" ]
+    assert [ ! -e "$FAKE_HOME/cargo.args" ]
+    assert [ -L "$HOME/.local/bin/task-monitor-snapshot" ]
+    assert [ -L "$HOME/.local/bin/task-monitor-queue" ]
+  done
+}
+
+@test "a failed task-monitor build warns, links nothing and does not fail the install (#277)" {
+  stub_cargo fail
+  run bash "$REPO_ROOT_REAL/claude-gh/install.sh"
+  assert_success
+  assert_output --partial "task-monitor build failed; not linked. Retry with: cargo build --release --manifest-path"
+  assert [ ! -L "$HOME/.local/bin/task-monitor" ]
+  # The rest of the install ran past it.
+  assert [ -L "$HOME/.local/bin/task-monitor-snapshot" ]
+  assert [ -L "$HOME/.local/bin/task-reviewer" ]
+  assert_output --partial "Done. Next steps:"
+}
+
+@test "a cargo-reported executable that is not there is a failed build, not a dangling link (#277)" {
+  stub_cargo "$FAKE_HOME/nowhere/task-monitor"
+  run bash "$REPO_ROOT_REAL/claude-gh/install.sh"
+  assert_success
+  assert_output --partial "task-monitor build failed"
+  assert [ ! -L "$HOME/.local/bin/task-monitor" ]
+}
+
+@test "task-monitor built outside the checkout is linked with a TASK_MONITOR_SNAPSHOT hint (#277)" {
+  # A CARGO_TARGET_DIR elsewhere: the binary can no longer find
+  # bin/task-monitor-snapshot beside its canonical path.
+  mkdir -p "$FAKE_HOME/target/release"
+  printf '#!/bin/sh\n' > "$FAKE_HOME/target/release/task-monitor"
+  chmod +x "$FAKE_HOME/target/release/task-monitor"
+  stub_cargo "$FAKE_HOME/target/release/task-monitor"
+  run bash "$REPO_ROOT_REAL/claude-gh/install.sh"
+  assert_success
+  assert_equal "$(readlink "$HOME/.local/bin/task-monitor")" "$FAKE_HOME/target/release/task-monitor"
+  assert_output --partial "export TASK_MONITOR_SNAPSHOT=$REPO_ROOT_REAL/bin/task-monitor-snapshot"
 }

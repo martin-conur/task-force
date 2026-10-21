@@ -368,3 +368,137 @@ zellij_close_calls() {
   run cat "$TASK_FORCE_HOME/radio/log"
   assert_output --partial "tab-close: id 7 unverified (no-jq)"
 }
+
+# ---------------------------------------------------------------------------
+# A worktree that vanished before task-done ran (#271)
+#
+# `gh pr merge --delete-branch` (gh 2.101) deletes the local branch and, when a
+# worktree has it checked out, the worktree too. The worker then drains
+# `approved-and-merged` from a cwd that no longer exists, and every git call in
+# task-done used to fail there — leaving the tab, the radio session and the
+# mailbox behind. These live here rather than in task_done.bats because what
+# they have to prove is precisely the tab / session / mailbox cleanup.
+# ---------------------------------------------------------------------------
+
+# Do what gh does: remove the worktree and its branch from the main checkout,
+# while the test's own cwd is still inside the worktree.
+vanish_worktree() {
+  git -C "$MAIN_REPO" worktree remove --force "$WORKTREE_BASE/$SLUG"
+  git -C "$MAIN_REPO" branch -D -q "task/$SLUG"
+}
+
+# Seed every piece of state a live worker leaves behind.
+seed_live_worker_state() {
+  export ZELLIJ=fake-session
+  export TASK_FORCE_ROLE="$1"
+  write_info_tab_id 7
+  seed_tabs "1:pm" "7:$SLUG"
+  mkdir -p "$TASK_FORCE_HOME/radio/sessions" "$TASK_FORCE_HOME/radio/mailbox/$1/inbox"
+  printf 'ROLE=%s\nTAB_ID=7\n' "$1" > "$TASK_FORCE_HOME/radio/sessions/$1.info"
+  printf 'approved-and-merged\n' > "$TASK_FORCE_HOME/radio/mailbox/$1/inbox/msg.md"
+}
+
+# mktemp names the fixture repo `tmp.XXXX`, and radio rejects a role with a dot
+# in it — so would the mailbox sweep — which would leave a role-derived test
+# unable to prove the session and mailbox went. Rebuild the fixture under a
+# dot-free name for the tests whose role embeds $REPO_NAME.
+use_dotless_repo() {
+  git -C "$MAIN_REPO" worktree remove --force "$WORKTREE_BASE/$SLUG"
+  rm -rf "$WORKTREE_BASE"
+  local renamed="${MAIN_REPO%/*}/$(basename "$MAIN_REPO" | tr . -)"
+  mv "$MAIN_REPO" "$renamed"
+  MAIN_REPO="$renamed"
+  REPO_NAME=$(basename "$MAIN_REPO")
+  WORKTREE_BASE="${MAIN_REPO}/../${REPO_NAME}-worktrees"
+  git -C "$MAIN_REPO" branch -D -q "task/$SLUG"
+  setup_worktree "$SLUG"
+}
+
+assert_leftovers_cleaned() {
+  local role="$1"
+  assert_stub_called zellij "action close-tab-by-id 7"
+  assert [ ! -f "$TASK_FORCE_HOME/radio/sessions/$role.info" ]
+  assert [ ! -d "$TASK_FORCE_HOME/radio/mailbox/$role" ]
+  assert [ ! -f "$WORKTREE_BASE/.$SLUG.info" ]
+}
+
+@test "task-done run from a vanished worktree cwd still cleans up tab, session, mailbox and sidecar (#271)" {
+  seed_live_worker_state "$ROLE"
+  vanish_worktree
+  [[ ! -d "$PWD" ]]
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "This worktree no longer exists"
+  assert_output --partial "Local branch 'task/$SLUG' is already gone"
+  refute_output --partial "not in a git repo"
+  assert_leftovers_cleaned "$ROLE"
+}
+
+@test "a vanished worktree whose registration git still holds is pruned (#271)" {
+  # rm -rf rather than `git worktree remove`: the registration survives it.
+  seed_live_worker_state "$ROLE"
+  rm -rf "${WORKTREE_BASE:?}/$SLUG"
+  run git -C "$MAIN_REPO" worktree list --porcelain
+  assert_output --partial "/$SLUG"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  run git -C "$MAIN_REPO" worktree list --porcelain
+  refute_output --partial "/$SLUG"
+  # The branch survived an rm -rf, so the normal safe delete applies to it.
+  run git -C "$MAIN_REPO" show-ref --verify --quiet "refs/heads/task/$SLUG"
+  assert_failure
+}
+
+@test "from the main checkout, a worker role whose worktree vanished is cleaned up (#271)" {
+  # An agent harness resets a shell whose cwd is gone, so the worker may be
+  # dropped back into the main checkout before it ever runs task-done.
+  use_dotless_repo
+  local role="worker-$REPO_NAME-$SLUG"
+  seed_live_worker_state "$role"
+  vanish_worktree
+  cd "$MAIN_REPO"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_success
+  assert_output --partial "This worktree no longer exists"
+  refute_output --partial "you're in the main repo"
+  assert_leftovers_cleaned "$role"
+}
+
+@test "from the main checkout, a worker role whose worktree still exists is refused as before (#271)" {
+  local role="worker-$REPO_NAME-$SLUG"
+  seed_live_worker_state "$role"
+  cd "$MAIN_REPO"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_failure
+  assert_output --partial "you're in the main repo"
+  assert [ -d "$WORKTREE_BASE/$SLUG" ]
+  run zellij_close_calls
+  assert_output ""
+}
+
+@test "from the main checkout, a role naming a worktree that never existed is refused (#271)" {
+  # No sidecar and no registration: nothing says this was ever a worktree, so
+  # there is nothing of ours to clean up.
+  local role="worker-$REPO_NAME-never-was"
+  export TASK_FORCE_ROLE="$role"
+  cd "$MAIN_REPO"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_failure
+  assert_output --partial "you're in the main repo"
+}
+
+@test "a vanished cwd outside any <repo>-worktrees directory is refused, not guessed at (#271)" {
+  local gone
+  gone=$(mktemp -d)
+  cd "$gone"
+  rmdir "$gone"
+
+  run env AW_IMPL=claude-gh "$TASK_DONE" --remove-worktree --force
+  assert_failure
+  assert_output --partial "no longer exists, and it is not a task-work worktree"
+}

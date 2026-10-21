@@ -108,7 +108,10 @@ Workflow:
       "cleanup"): bump status to `done` in the task file's frontmatter
       (same sed pattern), regenerate the board, commit with a message like
       `<Task title>: mark done`, then run `task-done --remove-worktree` to
-      clean up the worktree and close this tab.
+      clean up the worktree and close this tab. If your worktree is already
+      gone (a merge with `--delete-branch` removes it), run
+      `task-done --remove-worktree` anyway — from the vanished directory, or
+      from the main checkout — and it cleans up what is left (#271).
 
 Always run tests after changes. If tests fail, fix before committing.
 Stay focused on the spec — don't add features beyond what's specified.

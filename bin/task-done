@@ -32,6 +32,31 @@ source "$AW_ROOT/lib/detect-impl.sh"
 source "$AW_ROOT/lib/zellij-tab.sh"
 
 aw_parse_impl_flag "$@" || exit 1
+
+# A worktree removed out from under its worker (#271). `gh pr merge
+# --delete-branch` (gh 2.101) deletes the local branch too, and when a worktree
+# has that branch checked out gh removes the worktree with it — so the worker
+# drains `approved-and-merged` sitting in a directory that no longer exists.
+# Every git call below fails there, and the cleanup that matters most (tab,
+# radio session, mailbox, sidecar) never ran. The path itself still says
+# everything: task-work puts a worktree at <parent>/<repo>-worktrees/<slug>
+# and the main checkout at <parent>/<repo>. So step into the main checkout
+# and clean up what is left, rather than refusing.
+VANISHED_WT=""
+if [[ ! -d "$PWD" ]]; then
+  _gone="$PWD"
+  _wt_base=$(dirname "$_gone")
+  _wt_base_name=${_wt_base##*/}
+  _main_guess="$(dirname "$_wt_base")/${_wt_base_name%-worktrees}"
+  if [[ "$_wt_base_name" == ?*-worktrees ]] && cd "$_main_guess" 2>/dev/null \
+     && git rev-parse --git-dir >/dev/null 2>&1; then
+    VANISHED_WT="$_gone"
+  else
+    echo "Error: the current directory $_gone no longer exists, and it is not a task-work worktree (<repo>-worktrees/<slug>) whose main checkout could be found."
+    exit 1
+  fi
+fi
+
 # task-done runs from a worktree where the workflow doc lives in the MAIN
 # worktree, not the current (task) worktree. Fall back to inspecting the main
 # worktree if auto-detection from $PWD yields zero matches.
@@ -103,17 +128,39 @@ done
 WORKTREE_DIR=$(pwd)
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo"; exit 1; }
 
-# Check we're actually in a worktree (not the main repo)
 MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/worktree //')
-if [[ "$REPO_ROOT" == "$MAIN_WORKTREE" ]]; then
-  echo "Error: you're in the main repo, not a worktree. cd into a worktree first."
-  exit 1
-fi
-
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-SLUG="${BRANCH#task/}"
 REPO_NAME=$(basename "$MAIN_WORKTREE")
 WORKTREE_BASE="${MAIN_WORKTREE}/../${REPO_NAME}-worktrees"
+
+# Check we're actually in a worktree (not the main repo). One exception (#271):
+# a worker whose worktree vanished may have been dropped back into the main
+# checkout — an agent harness resets a shell whose cwd is gone — so if this
+# session's own role names a worktree that no longer exists but left its
+# sidecar or registration behind, clean that one up from here.
+if [[ -z "$VANISHED_WT" && "$REPO_ROOT" == "$MAIN_WORKTREE" ]]; then
+  _role_slug=""
+  case "${TASK_FORCE_ROLE:-}" in
+    worker-"$REPO_NAME"-?*) _role_slug=${TASK_FORCE_ROLE#worker-"$REPO_NAME"-} ;;
+    reviewer-"$REPO_NAME"-pr?*) _role_slug=review-${TASK_FORCE_ROLE#reviewer-"$REPO_NAME"-} ;;
+  esac
+  if [[ -n "$_role_slug" && ! -d "$WORKTREE_BASE/$_role_slug" ]] \
+     && { [[ -f "$WORKTREE_BASE/.$_role_slug.info" ]] \
+          || grep -q "^worktree .*/${REPO_NAME}-worktrees/${_role_slug}\$" <<<"$(git worktree list --porcelain)"; }; then
+    VANISHED_WT="$WORKTREE_BASE/$_role_slug"
+  else
+    echo "Error: you're in the main repo, not a worktree. cd into a worktree first."
+    exit 1
+  fi
+fi
+
+if [[ -n "$VANISHED_WT" ]]; then
+  WORKTREE_DIR="$VANISHED_WT"
+  SLUG="${VANISHED_WT##*/}"
+  BRANCH="task/${SLUG}"
+else
+  BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  SLUG="${BRANCH#task/}"
+fi
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 
 # Load base branch written by task-work; fall back to "main"
@@ -131,8 +178,18 @@ echo "Branch:   $BRANCH"
 echo "Base:     $BASE_BRANCH"
 echo ""
 
+if [[ -n "$VANISHED_WT" ]]; then
+  # Nothing to diff or summarise: the files are gone, and so (usually) is the
+  # local branch. Say why, so a reader does not take the missing summary for a
+  # task-done bug.
+  echo "⚠ This worktree no longer exists — most likely a 'gh pr merge --delete-branch' removed it"
+  echo "  along with the local branch (#271). Cleaning up what is left: radio session, mailbox,"
+  echo "  sidecar, worktree registration, tab."
+  echo ""
+fi
+
 # Check for uncommitted changes
-if ! git diff --quiet || ! git diff --cached --quiet; then
+if [[ -z "$VANISHED_WT" ]] && { ! git diff --quiet || ! git diff --cached --quiet; }; then
   echo "⚠ Uncommitted changes detected:"
   git status --short
   echo ""
@@ -143,13 +200,15 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 # Show summary
-COMMIT_COUNT=$(git rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "?")
-echo "Commits ahead of ${BASE_BRANCH}: $COMMIT_COUNT"
-DIFF_STAT=$(git diff --shortstat "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
-[[ -n "$DIFF_STAT" ]] && echo "Changes: $DIFF_STAT"
-echo ""
+if [[ -z "$VANISHED_WT" ]]; then
+  COMMIT_COUNT=$(git rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "?")
+  echo "Commits ahead of ${BASE_BRANCH}: $COMMIT_COUNT"
+  DIFF_STAT=$(git diff --shortstat "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
+  [[ -n "$DIFF_STAT" ]] && echo "Changes: $DIFF_STAT"
+  echo ""
+fi
 
-if [[ "$REMOVE_ONLY" != true ]]; then
+if [[ "$REMOVE_ONLY" != true && -z "$VANISHED_WT" ]]; then
   # Show existing PR URL, or print the creation command. Every tracker shells
   # out to `gh` here — the PR lives on the forge whatever the spec is tracked
   # in — so only the --title differs, and only on jira.
@@ -235,16 +294,22 @@ esac
 cd "$MAIN_WORKTREE"
 
 # Remove worktree
-echo "Removing worktree..."
-# Deinit any submodules first — git refuses to remove a worktree containing them.
-if [[ -f "$WORKTREE_DIR/.gitmodules" ]]; then
-  git -C "$WORKTREE_DIR" submodule deinit --all --force >/dev/null 2>&1 || true
-fi
-git worktree remove "$WORKTREE_DIR" --force || {
-  echo "Warning: removal failed, falling back to rm + prune"
-  rm -rf "$WORKTREE_DIR"
+if [[ -n "$VANISHED_WT" ]]; then
+  # Already gone from disk; drop git's registration of it, if any is left.
+  echo "Pruning the vanished worktree's registration..."
   git worktree prune
-}
+else
+  echo "Removing worktree..."
+  # Deinit any submodules first — git refuses to remove a worktree containing them.
+  if [[ -f "$WORKTREE_DIR/.gitmodules" ]]; then
+    git -C "$WORKTREE_DIR" submodule deinit --all --force >/dev/null 2>&1 || true
+  fi
+  git worktree remove "$WORKTREE_DIR" --force || {
+    echo "Warning: removal failed, falling back to rm + prune"
+    rm -rf "$WORKTREE_DIR"
+    git worktree prune
+  }
+fi
 
 # Clean up info file
 [[ -f "$INFO_FILE" ]] && rm -f "$INFO_FILE"
@@ -263,7 +328,10 @@ aw_tracker_post_cleanup "$MAIN_WORKTREE" "$SLUG" "$IMPL" || true
 # `task-reviewer <N>` re-dispatch isn't blocked by the per-PR branch
 # guard (#148). Worker branches keep the safe-delete `-d` so unmerged
 # work isn't silently dropped.
-if [[ -n "${PR_NUMBER:-}" ]]; then
+if ! git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  # Whoever removed the worktree took the branch with it (#271).
+  echo "Done. Local branch '$BRANCH' is already gone."
+elif [[ -n "${PR_NUMBER:-}" ]]; then
   if git branch -D "$BRANCH" 2>/dev/null; then
     echo "Done. Deleted reviewer branch '$BRANCH' (-D, scaffold-only)."
   else

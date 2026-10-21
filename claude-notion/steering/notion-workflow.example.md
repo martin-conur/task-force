@@ -101,6 +101,13 @@ task-work spike-idea --no-launch
 - `--force` — skip all confirmation prompts
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
+If the worktree is already gone — a `gh pr merge --delete-branch` removes it along
+with the local branch (#271) — `task-done` still cleans up what is left: radio
+session, mailbox, sidecar, git's worktree registration and the tab. Run it from the
+vanished directory, or from the main checkout in the worker's own tab (it reads the
+worktree from `$TASK_FORCE_ROLE`). The PM keeps it from happening at all by deleting
+only the remote branch after a merge: `git push origin --delete task/<slug>`.
+
 `task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
 
 A machine restart (or a killed zellij server) takes out every tab on the box and

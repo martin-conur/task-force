@@ -36,6 +36,102 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Notion ID flags (#225) — the jira --site / --key / --board shape
+# ---------------------------------------------------------------------------
+
+_ids() { grep -E '^- \*\*(Tasks|Projects|Board page)\*\*' "$TARGET_DIR/.kiro/steering/notion-workflow.md"; }
+
+@test "all ID flags: fills Tasks / Projects / Board page (#225)" {
+  run "$KIRO_TASK_INIT" --tasks collection://abc123 --projects collection://def456 --board 8a1b2c3d-e4f5
+  assert_success
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  assert_line '- **Board page**: `8a1b2c3d-e4f5`'
+}
+
+@test "a bare data-source id gets its collection:// prefix (#225)" {
+  run "$KIRO_TASK_INIT" --tasks abc123 --projects def456
+  assert_success
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  refute_output --partial 'collection://collection://'
+}
+
+@test "--board only: the other two IDs keep their placeholders (#225)" {
+  run "$KIRO_TASK_INIT" --board 8a1b2c3d-e4f5
+  assert_success
+  run _ids
+  assert_line '- **Tasks**: `collection://<YOUR_TASKS_DATA_SOURCE_ID>`'
+  assert_line '- **Projects**: `collection://<YOUR_PROJECTS_DATA_SOURCE_ID>`'
+  assert_line '- **Board page**: `8a1b2c3d-e4f5`'
+}
+
+@test "--force preserves filled-in IDs when no flags are passed (#225)" {
+  run "$KIRO_TASK_INIT" --tasks abc123 --projects def456 --board 8a1b2c3d-e4f5
+  assert_success
+  run "$KIRO_TASK_INIT" --force
+  assert_success
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  assert_line '- **Board page**: `8a1b2c3d-e4f5`'
+}
+
+@test "a flag beats the value preserved from the existing doc (#225)" {
+  run "$KIRO_TASK_INIT" --tasks abc123 --projects def456 --board 8a1b2c3d-e4f5
+  assert_success
+  run "$KIRO_TASK_INIT" --force --board ffff0000
+  assert_success
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  assert_line '- **Board page**: `ffff0000`'
+}
+
+@test "TTY: a flag suppresses that field's prompt; the rest still prompt (#225)" {
+  require_pty
+  # Two spare blank lines: if a flagged field prompted anyway, it would eat
+  # `board77` and this fails on the IDs instead of hanging on an unanswered read.
+  run pty_run "cd '$TARGET_DIR' && '$KIRO_TASK_INIT' --tasks abc123 --projects def456" $'board77\n\n\n'
+  assert_success
+  refute_output --partial "Notion tasks data source"
+  refute_output --partial "Notion projects data source"
+  assert_output --partial "Notion board page ID"
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  assert_line '- **Board page**: `board77`'
+}
+
+@test "TTY, no flags: prompts for all three IDs and renders the answers (#225)" {
+  require_pty
+  run pty_run "cd '$TARGET_DIR' && '$KIRO_TASK_INIT'" $'abc123\ndef456\nboard77\n'
+  assert_success
+  assert_output --partial "Notion tasks data source"
+  assert_output --partial "Notion projects data source"
+  assert_output --partial "Notion board page ID"
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  assert_line '- **Board page**: `board77`'
+}
+
+@test "TTY: a blank answer keeps the preserved ID (#225)" {
+  require_pty
+  run "$KIRO_TASK_INIT" --tasks abc123 --projects def456 --board 8a1b2c3d-e4f5
+  assert_success
+  run pty_run "cd '$TARGET_DIR' && '$KIRO_TASK_INIT' --force" $'\n\n\n'
+  assert_success
+  assert_output --partial "Notion tasks data source [collection://abc123]"
+  run _ids
+  assert_line '- **Tasks**: `collection://abc123`'
+  assert_line '- **Projects**: `collection://def456`'
+  assert_line '- **Board page**: `8a1b2c3d-e4f5`'
+}
+
+# ---------------------------------------------------------------------------
 # Post-install guidance
 # ---------------------------------------------------------------------------
 

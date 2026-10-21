@@ -297,7 +297,7 @@ The non-zero exit is the **third** instance of the same describe-but-signal rule
 
 **Settings carry across a `set assistant`, and cannot across a `set tracker`.** claude and kiro render the same template shape per tracker, so `owner` / `repo` / `project` move over cleanly on a `gh` repo. Different *trackers* share no fields at all, so there is nothing to carry and `task-init` prompts for the new ones exactly as on a first install. That asymmetry is correct rather than a gap.
 
-**One real gap, on notion.** Carry-over works by handing `task-init` the old values as flags, and the notion loadouts have no settings flags at all — only `--force` / `--restore` / `--workflow` / `--commands` / `--hooks` / `--help-ids`. So `task-config show` *reads* the Notion IDs out of a notion workflow doc and prints them, but a `claude-notion ↔ kiro-notion` switch cannot carry them, and you have to paste them into the new doc yourself. That is the worst tracker for it: the IDs are opaque strings that cannot be derived from a URL, which is why `task-init claude-notion --help-ids` exists. **#225** adds the flags; once it lands, notion carry-over works through this same code path with no change to `task-config`. Run `task-config show` before switching a notion repo and keep the output, or copy the three bullets out of the old doc first.
+**Notion carries too (#225).** Carry-over works by handing `task-init` the old values as flags, so the notion loadouts take `--tasks` / `--projects` / `--board`, the same shape as jira's `--site` / `--key` / `--board`. A `claude-notion ↔ kiro-notion` switch reads the three IDs out of the old doc and passes them forward, so you never re-paste them. That matters most on notion: the IDs are opaque strings that cannot be derived from a URL, which is why `task-init claude-notion --help-ids` exists. `--tasks` and `--projects` take the data-source URL `task-config show` prints (`collection://<id>`) or the bare id, and `task-init` adds the prefix.
 
 `kiro-jira` is refused by name, because the assistant × tracker grid has exactly one hole (#92):
 
@@ -510,8 +510,8 @@ claude mcp add --transport http notion https://mcp.notion.com/mcp
 ```bash
 ./install.sh claude-notion
 cd ~/my-project
-task-init claude-notion
-# Edit .claude/notion-workflow.md and drop in your Notion database IDs
+task-init claude-notion --tasks <id> --projects <id> --board <id>
+# or run it bare and paste the IDs at the prompt (task-init claude-notion --help-ids)
 ```
 
 Spawn workers with `task-work <notion-url>`. Same `/pm`, `/planner`, `/worker` roles as `claude-jira`.
@@ -592,8 +592,8 @@ Spawn workers with `task-work tasks/NNN-slug.md`. The slug (filename minus the `
 ```bash
 ./install.sh kiro-notion
 cd ~/my-project
-task-init kiro-notion
-# Edit .kiro/steering/notion-workflow.md with your Notion database IDs
+task-init kiro-notion --tasks <id> --projects <id> --board <id>
+# or run it bare and paste the IDs at the prompt (task-init kiro-notion --help-ids)
 ```
 
 Agents are bound to Kiro shortcuts:

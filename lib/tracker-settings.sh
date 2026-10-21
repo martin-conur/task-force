@@ -19,6 +19,8 @@
 #   tf_tracker_init_flags <doc> <tracker>   -> task-init flag tokens, one per line
 #   tf_preserve_gh <doc>                    -> fills OWNER / REPO / PROJECT
 #   tf_preserve_jira <doc>                  -> fills SITE / KEY / BOARD
+#   tf_preserve_notion <doc>                -> fills TASKS / PROJECTS / BOARD
+#   tf_notion_collection <value>            -> value with its collection:// prefix
 
 _TF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/preserve-placeholders.sh
@@ -54,15 +56,16 @@ board|{BOARD}|--board|^- \*\*Board name\*\*: `([^`]+)`.*
 EOF
       ;;
     notion)
-      # Notion's IDs are not flag-driven: they cannot be derived from a URL and
-      # only an active Notion MCP session can discover them (`task-init
-      # claude-notion --help-ids`). So they are readable — `show` prints them —
-      # but there is no flag for task-config to hand forward, which is why a
-      # claude-notion ↔ kiro-notion switch leaves them for you to re-paste.
+      # Notion's IDs cannot be derived from a URL — only an active Notion MCP
+      # session can discover them (`task-init claude-notion --help-ids`, #9) —
+      # which is exactly why they must not have to be re-pasted on a switch.
+      # The flag value is what the bullet's code span holds, `collection://`
+      # prefix included, so the value `show` prints is the value the flag takes
+      # (#225). task-init adds the prefix when a hand-typed value omits it.
       cat <<'EOF'
-tasks|collection://<YOUR_TASKS_DATA_SOURCE_ID>||^- \*\*Tasks\*\*: `([^`]+)`.*
-projects|collection://<YOUR_PROJECTS_DATA_SOURCE_ID>||^- \*\*Projects\*\*: `([^`]+)`.*
-board|<YOUR_BOARD_PAGE_ID>||^- \*\*Board page\*\*: `([^`]+)`.*
+tasks|collection://<YOUR_TASKS_DATA_SOURCE_ID>|--tasks|^- \*\*Tasks\*\*: `([^`]+)`.*
+projects|collection://<YOUR_PROJECTS_DATA_SOURCE_ID>|--projects|^- \*\*Projects\*\*: `([^`]+)`.*
+board|<YOUR_BOARD_PAGE_ID>|--board|^- \*\*Board page\*\*: `([^`]+)`.*
 EOF
       ;;
     local)
@@ -170,4 +173,37 @@ tf_preserve_jira() {
     if [[ -n "$v" ]]; then BOARD="$v"; fi
   fi
   return 0
+}
+
+# tf_preserve_notion <existing-workflow-doc>
+# The Notion counterpart: TASKS / PROJECTS / BOARD (#225). Before #225 the
+# notion task-init rendered the raw template, so even a same-loadout `--force`
+# re-run put the placeholders back over the IDs the user had pasted in.
+tf_preserve_notion() {
+  local existing="$1" v
+  [[ -f "$existing" ]] || return 0
+  if [[ "${TASKS_VIA_FLAG:-false}" == false && -z "${TASKS:-}" ]]; then
+    v=$(tf_tracker_value "$existing" notion tasks)
+    if [[ -n "$v" ]]; then TASKS="$v"; fi
+  fi
+  if [[ "${PROJECTS_VIA_FLAG:-false}" == false && -z "${PROJECTS:-}" ]]; then
+    v=$(tf_tracker_value "$existing" notion projects)
+    if [[ -n "$v" ]]; then PROJECTS="$v"; fi
+  fi
+  if [[ "${BOARD_VIA_FLAG:-false}" == false && -z "${BOARD:-}" ]]; then
+    v=$(tf_tracker_value "$existing" notion board)
+    if [[ -n "$v" ]]; then BOARD="$v"; fi
+  fi
+  return 0
+}
+
+# tf_notion_collection <value>
+# The tasks / projects bullets hold a data-source URL, `collection://<id>`. The
+# Notion MCP prints it that way, but a user pasting at the prompt or passing
+# `--tasks` by hand may give the bare id; either form renders the same bullet.
+# Empty stays empty, so "not set" is never turned into a bare prefix.
+tf_notion_collection() {
+  local v="$1"
+  [[ -z "$v" || "$v" == collection://* ]] || v="collection://$v"
+  printf '%s' "$v"
 }

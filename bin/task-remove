@@ -133,6 +133,10 @@ aw_collect_matches "$REPO_ROOT" "$PIN" || exit 1
 # strip-before-a-PR use case means shipping every artifact you meant to take out.
 aw_require_configured "$REPO_ROOT" "$PIN" || exit 1
 MATCHES=(${AW_MATCHES[@]+"${AW_MATCHES[@]}"})
+# Every loadout this run takes out, so the engine knows which artifacts a pair of
+# them shares and walks those once rather than per loadout (#293).
+# shellcheck disable=SC2034  # read by the sourced engine, not by this file
+LA_REMOVING="${MATCHES[*]-}"
 
 if ((${#MATCHES[@]} == 0)); then
   {
@@ -241,6 +245,14 @@ fi
 
 WALK_TEXT=""
 _walk apply
+# The active-assistant choice (#293) is local git config, not a file, so no walk
+# reaches it. With no loadout left it names an assistant that is not installed;
+# take it out with them. A pinned run that leaves one loadout behind keeps it —
+# it is harmless there and right again the moment the other is re-added.
+if [[ -z "$(aw_detect_matches "$REPO_ROOT")" && -n "$(aw_active_assistant "$REPO_ROOT")" ]]; then
+  git -C "$REPO_ROOT" config --unset "$AW_ACTIVE_ASSISTANT_KEY" || true
+  printf '  cleared the active assistant (git config %s)\n' "$AW_ACTIVE_ASSISTANT_KEY"
+fi
 if [[ "$preview" != true ]]; then
   _footer_untouched
   _purge_hint

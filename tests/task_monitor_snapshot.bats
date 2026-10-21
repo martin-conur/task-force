@@ -156,6 +156,19 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q .attention.active)" false
 }
 
+@test "a repo with both assistants installed reports the active one's loadout (#293)" {
+  mkdir -p "$MAIN_REPO/.kiro/steering"
+  cp "$MAIN_REPO/.claude/gh-workflow.md" "$MAIN_REPO/.kiro/steering/gh-workflow.md"
+  git -C "$MAIN_REPO" config task-force.assistant kiro
+  snap --local --json
+  assert_success
+  assert_equal "$(q .loadout)" kiro-gh
+  assert_equal "$(q .agent)" kiro
+  git -C "$MAIN_REPO" config task-force.assistant claude
+  snap --local --json
+  assert_equal "$(q .loadout)" claude-gh
+}
+
 @test "worktree_base names the directory holding the repo's sidecars" {
   # The front end watches it for a new .<slug>.info, so it must be the
   # directory task-work writes them to, not a path the reader re-derives.

@@ -92,6 +92,10 @@ Options:
                       The role stays unregistered until something does.
       --force         Proceed even though a session still looks live for this
                       role. Read the refusal first — it says what looks alive.
+      --agent <agent> Relaunch on this assistant (claude or kiro). Without it,
+                      a repo with both installed relaunches the worker on the
+                      assistant task-work recorded for it, not the repo's
+                      active one (#293).
       --impl <name>   Pin the loadout instead of detecting it.
   -h, --help          Show this help.
 
@@ -104,9 +108,11 @@ EOF
 }
 
 # ---------------- impl resolution ----------------
+ORIG_ARGS=("$@")
 aw_parse_impl_flag "$@" || exit 1
+aw_parse_agent_flag || exit 1
 
-if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
+if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL" "$AW_PARSED_AGENT"); then
   # aw_detect_impl already said why. Still honour an explicit help request so
   # `task-recreate-worker --help` works outside a configured repo.
   for arg in ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}; do
@@ -277,6 +283,23 @@ WT_COMMON=$(_common_dir_of "$WORKTREE_DIR") || _refuse_no_worktree "could not re
 MAIN_COMMON=$(_common_dir_of "$MAIN_WORKTREE") || { echo "Error: could not read git metadata for $MAIN_WORKTREE" >&2; exit 1; }
 if [[ "$WT_COMMON" != "$MAIN_COMMON" ]]; then
   _refuse_no_worktree "'$WORKTREE_DIR' belongs to a different repository."
+fi
+
+# The assistant task-work recorded for this worker (#293). In a repo with both
+# installed it can differ from the active one — the worker was launched with
+# --agent, or the repo was flipped with `task-config use` since — and the worker
+# being recovered is the one that died, not a fresh one on today's assistant.
+# Only when nothing was pinned, and only when that assistant's loadout is still
+# installed: a sidecar written before a `task-config set assistant` names a
+# loadout that is gone, and the repo's own answer wins then. Re-exec rather than
+# re-source, so every module-dependent value above is computed once, by one path.
+if [[ -z "$AW_PARSED_IMPL" && -z "${AW_IMPL:-}" && -z "$AW_PARSED_AGENT" && -f "$INFO_FILE" ]]; then
+  _recorded_agent=$(awk 'index($0, "AGENT=") == 1 { print substr($0, 7); exit }' "$INFO_FILE")
+  if [[ -n "$_recorded_agent" && "$_recorded_agent" != "$AGENT" ]] \
+     && (cd "$MAIN_WORKTREE" && aw_detect_impl "" "$_recorded_agent") >/dev/null 2>&1; then
+    echo "Relaunching on $_recorded_agent, the assistant task-work recorded for '$SLUG'."
+    exec "$0" --agent "$_recorded_agent" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+  fi
 fi
 
 # A detached HEAD has no branch to open a PR from, and every downstream command

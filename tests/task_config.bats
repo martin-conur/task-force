@@ -168,15 +168,17 @@ _tree_sum() {
 }
 
 @test "show: two loadouts names both matches instead of just refusing" {
+  # Two trackers: two assistants on ONE tracker is the dual state (#293), which
+  # tests/dual_assistant.bats covers.
   _init claude-gh --owner acme --repo widgets --project 7
-  _init kiro-gh --owner acme --repo widgets --project 7
+  _init kiro-local
   run "$TASK_CONFIG" show
   assert_failure
   assert_output --partial "Ambiguous: 2 loadouts"
   assert_output --partial "loadout   : claude-gh"
-  assert_output --partial "loadout   : kiro-gh"
+  assert_output --partial "loadout   : kiro-local"
   assert_output --partial ".claude/gh-workflow.md"
-  assert_output --partial ".kiro/steering/gh-workflow.md"
+  assert_output --partial ".kiro/steering/local-workflow.md"
   assert_output --partial "--impl"
 }
 
@@ -617,13 +619,13 @@ JSON
 
 @test "set: an ambiguous repo asks for --impl rather than guessing" {
   _init claude-gh --owner acme --repo widgets --project 7
-  _init kiro-gh --owner acme --repo widgets --project 7
+  _init kiro-local
   run "$TASK_CONFIG" set assistant kiro --yes
   assert_failure
   assert_output --partial "2 loadouts"
   assert_output --partial "--impl"
   assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
-  assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+  assert [ -f "$MAIN_REPO/.kiro/steering/local-workflow.md" ]
 }
 
 @test "set: --impl picks which loadout to replace in an ambiguous repo" {

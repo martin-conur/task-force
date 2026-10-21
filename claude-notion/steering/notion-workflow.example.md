@@ -85,6 +85,7 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 - `--auto-submit` — radio auto-submit: an incoming wake submits itself instead of waiting in the prompt box for an Enter. **The default** on every launch, `--plan` included, since nobody types in a worker's tab (#254); the flag only makes a launch line explicit
 - `--no-auto-submit` — keep the Enter gate on radio wakes. Use it for a worker you mean to step into and steer by hand: a wake would otherwise submit whatever is half-typed in its box
 - `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254)
+- `--agent <claude|kiro>` — launch this one worker on the other installed assistant, leaving the repo's active one alone (#293). Both loadouts must be installed (`task-config add assistant`, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too, and `task-recreate-worker` without it relaunches on the assistant `task-work` recorded for that worker
 - `--no-launch` — open the worktree tab but do NOT start Claude (lets you type the command yourself)
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
@@ -212,6 +213,30 @@ template shape per tracker — and cannot across a `set tracker`, because differ
 trackers share no fields at all, so `task-init` prompts for the new ones exactly
 as on a first install. `kiro-jira` is refused by name: the assistant × tracker
 grid has exactly one hole (#92).
+
+**Both assistants, one active (#293).** claude's files live under `.claude/` and
+kiro's under `.kiro/`, so the two loadouts on one tracker can be installed side by
+side and committed once. Which one runs is then a local choice, not a commit:
+
+```bash
+task-config add assistant kiro   # install the other one beside this, settings carried
+task-config use kiro             # the active assistant: local git config, no tracked file
+task-config sync                 # make the two docs' tracker settings agree again
+```
+
+`add` keeps the assistant you are on active, so nothing changes until you `use`
+the other. The choice lives in `git config task-force.assistant`, which linked
+worktrees share. Detection reads `--impl` > `$AW_IMPL` > a launcher's `--agent` >
+the active assistant > a single match, and the active assistant only resolves two
+loadouts on **one** tracker: two trackers stay refused. With both installed and
+none active, every dispatcher refuses and names `task-config use`. `show` marks the
+active loadout and flags **drift**, a tracker setting the two workflow docs disagree
+on. `sync` resolves it: the active assistant's doc wins, or `--from <assistant>`
+picks the other one, and only the other doc is re-rendered. On a dual repo,
+`set assistant A` keeps A and removes the other, `set loadout` on another tracker
+replaces both, and `set tracker` is refused with the two steps that do it.
+`task-remove` removes both and clears the setting. jira cannot be dual until a
+kiro-jira loadout exists (#92).
 
 On **this** loadout the carried settings are the three Notion database IDs:
 `task-init` takes them as `--tasks` / `--projects` / `--board` (#225), so a

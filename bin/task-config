@@ -22,12 +22,36 @@ Usage: task-config [show]
        task-config set assistant <claude|kiro>          [--dry-run] [--yes]
        task-config set tracker   <gh|jira|notion|local> [--dry-run] [--yes]
        task-config set loadout   <name>                 [--dry-run] [--yes]
+       task-config add assistant <claude|kiro>          [--dry-run] [--yes]
+       task-config use <claude|kiro>                    [--dry-run]
+       task-config sync [--from <claude|kiro>]          [--dry-run] [--yes]
 
 show (the default)
   Print which loadout this repo is on, its assistant and tracker axes, the
   tracker's settings, and the paths that carry them. Zero loadouts and two-or-
   more loadouts are *described*, not refused: this is the command you reach for
-  when a repo is in a confusing state. Both exit non-zero.
+  when a repo is in a confusing state. Both exit non-zero. A repo with both
+  assistants installed on one tracker is described too, with the active one
+  marked; it exits non-zero while none is active or the two workflow docs
+  disagree on the tracker settings.
+
+add assistant
+  Install the other assistant's loadout beside this one, on the same tracker,
+  carrying the tracker settings over without prompting. Both sets of files are
+  committed once; after that a switch is `use`, which changes no tracked file.
+  The assistant you are on now becomes the active one, so nothing changes until
+  you say so. jira cannot be dual until a kiro-jira loadout exists (#92).
+
+use
+  Pick the active assistant in a repo with both installed. It is written to the
+  repo's local git config (task-force.assistant), never to a tracked file, and
+  every dispatcher reads it: --impl > $AW_IMPL > the launchers' --agent > the
+  active assistant > a single match. Linked worktrees share it.
+
+sync
+  Make the two workflow docs carry the same tracker settings again. The active
+  assistant's doc wins; --from names the other one instead. Only the inactive
+  doc is re-rendered (its task-init --force --workflow, handed the settings).
 
 set
   Switch one axis (or both) without stranding the old loadout's artifacts:
@@ -48,6 +72,7 @@ Options
   --yes       Skip the confirmation prompt (implied when stdin is not a TTY).
   --impl N    Treat the repo as being on loadout N instead of detecting it.
               The way out of an ambiguous repo: pick the one to remove.
+  --from A    sync only: copy assistant A's settings rather than the active one's.
   -h, --help  This.
 
 Examples
@@ -55,6 +80,9 @@ Examples
   task-config set assistant kiro
   task-config set tracker local --dry-run
   task-config set loadout claude-notion --yes
+  task-config add assistant kiro
+  task-config use kiro
+  task-config sync --from claude
 EOF
   exit 0
 }
@@ -85,6 +113,7 @@ SUBCMD=""
 AXIS=""
 VALUE=""
 PINNED_IMPL=""
+FROM_AGENT=""
 
 ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -95,6 +124,9 @@ while [[ $# -gt 0 ]]; do
     --impl)     [[ $# -ge 2 ]] || { echo "Error: --impl requires a value" >&2; exit 1; }
                 PINNED_IMPL="$2"; shift 2 ;;
     --impl=*)   PINNED_IMPL="${1#--impl=}"; shift ;;
+    --from)     [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
+                FROM_AGENT="$2"; shift 2 ;;
+    --from=*)   FROM_AGENT="${1#--from=}"; shift ;;
     -*)         echo "Error: unknown option: $1" >&2; exit 1 ;;
     *)          ARGS+=("$1"); shift ;;
   esac
@@ -136,7 +168,7 @@ _rel() { printf '%s' "${1#"$REPO_ROOT"/}"; }
 # several, so an ambiguous repo reads as "here are two of these" rather than as
 # a different kind of output.
 _show_one() {
-  local loadout="$1" doc tracker settings line first=true
+  local loadout="$1" note="${2:-}" doc tracker settings line first=true
   doc=$(la_workflow_doc "$REPO_ROOT" "$loadout")
   tracker=$(la_tracker "$loadout")
 
@@ -164,7 +196,7 @@ _show_one() {
   # job is telling you what is configured (#227). `show` still never refuses and
   # still mutates nothing; it just stops asserting something untrue.
   if [[ -f "$doc" ]]; then
-    printf '  loadout   : %s\n' "$loadout"
+    printf '  loadout   : %s%s\n' "$loadout" "${note:+  ($note)}"
   else
     # shellcheck disable=SC2016  # $AW_IMPL names the env var to the reader; it must not expand
     printf '  loadout   : %s  (NOT configured here — pinned via --impl / $AW_IMPL)\n' "$loadout"
@@ -201,6 +233,75 @@ _show_one() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# both assistants on one tracker (#293)
+# ---------------------------------------------------------------------------
+
+_active() { aw_active_assistant "$REPO_ROOT"; }
+
+# The tracker MATCHES share when they are a dual pair, else fail.
+_dual_tracker() {
+  ((${#MATCHES[@]} >= 2)) || return 1
+  aw_dual_tracker "${MATCHES[@]}"
+}
+
+# _drift_report <loadout>... — print every tracker setting the workflow docs
+# disagree on, and fail when there is one. The ids are written into both docs,
+# and an edit by hand to one of them leaves the two assistants pointed at
+# different boards; nothing else would ever notice.
+_drift_report() {
+  local tracker field m v line drift=false
+  tracker=$(la_tracker "$1")
+  for field in $(tf_tracker_fields "$tracker"); do
+    local seen="" differ=false
+    line=""
+    for m in "$@"; do
+      v=$(tf_tracker_value "$(la_workflow_doc "$REPO_ROOT" "$m")" "$tracker" "$field")
+      [[ -n "$v" ]] || v="unset"
+      line+="  $m=$v"
+      if [[ -z "$seen" ]]; then seen="$v"; elif [[ "$v" != "$seen" ]]; then differ=true; fi
+    done
+    if [[ "$differ" == true ]]; then
+      if [[ "$drift" == false ]]; then
+        printf 'Drift: the workflow docs disagree on the %s settings:\n' "$tracker"
+        drift=true
+      fi
+      printf '  %-9s:%s\n' "$field" "$line"
+    fi
+  done
+  if [[ "$drift" == true ]]; then
+    printf 'Resolve with: task-config sync   (the active assistant'\''s doc wins;\n'
+    printf '              --from <assistant> to copy the other one instead)\n'
+    return 1
+  fi
+  return 0
+}
+
+_show_dual() {
+  local tracker="$1" active m rc=0
+  active=$(_active)
+  printf 'Dual: %s are installed on %s.\n' \
+    "$(printf '%s\n' "${MATCHES[@]}" | sed 's/-.*//' | paste -sd'+' - | sed 's/+/ and /g')" "$tracker"
+  if [[ -n "$active" ]] && _in_list "$active-$tracker" "${MATCHES[@]}"; then
+    printf 'active    : %s  (git config %s — local, not committed)\n\n' "$active" "$AW_ACTIVE_ASSISTANT_KEY"
+  else
+    if [[ -n "$active" ]]; then
+      printf 'active    : %s — not installed here, so none is active\n' "$active"
+    else
+      printf 'active    : none\n'
+    fi
+    printf 'Every task-force dispatcher refuses until you pick one:\n'
+    printf '  task-config use <%s>\n\n' "$(printf '%s\n' "${MATCHES[@]}" | sed 's/-.*//' | paste -sd'|' -)"
+    rc=1
+  fi
+  for m in "${MATCHES[@]}"; do
+    if [[ "$(la_assistant "$m")" == "$active" ]]; then _show_one "$m" active; else _show_one "$m"; fi
+    printf '\n'
+  done
+  _drift_report "${MATCHES[@]}" || rc=1
+  return "$rc"
+}
+
 cmd_show() {
   _collect_matches
   case "${#MATCHES[@]}" in
@@ -212,6 +313,13 @@ cmd_show() {
       return 1 ;;
     1)
       _show_one "${MATCHES[0]}"
+      # A stale choice from a dual past is harmless — a single match never reads
+      # it — but say so, or `use` looks like it did nothing.
+      local stale
+      stale=$(_active)
+      if [[ -n "$stale" && "$stale" != "$(la_assistant "${MATCHES[0]}")" ]]; then
+        printf '  active    : %s (git config %s) — not installed here, ignored\n' "$stale" "$AW_ACTIVE_ASSISTANT_KEY"
+      fi
       # Describe-but-signal — the rule show's other two non-clean states already
       # follow: never refuse to print, always signal with a non-zero exit so a
       # script can branch (#219). A pinned loadout whose workflow doc is not there
@@ -225,6 +333,11 @@ cmd_show() {
       [[ -f "$shown_doc" ]] || return 1
       return 0 ;;
     *)
+      local dual
+      if dual=$(_dual_tracker); then
+        _show_dual "$dual"
+        return
+      fi
       # aw_detect_impl refuses outright here, and so every dispatcher does.
       # `show` is the one command that has to describe the state instead, and
       # name every match — otherwise the only way to find the second one is to
@@ -238,6 +351,8 @@ cmd_show() {
       done
       printf 'Pick one, then remove the other:\n'
       printf '  task-config set loadout <name> --impl <the-one-to-replace>\n'
+      printf 'Both assistants can share one tracker (task-config add assistant);\n'
+      printf 'two trackers cannot.\n'
       return 1 ;;
   esac
 }
@@ -251,6 +366,93 @@ _in_list() {
   local x
   for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done
   return 1
+}
+
+# _require_target_init <target> — print <target>'s task-init, or explain why
+# there is none and exit. This is what refuses kiro-jira: the 2×4 assistant ×
+# tracker grid has exactly one hole (#92), and the only honest way to know is to
+# look.
+_require_target_init() {
+  local target="$1" target_init="$AW_ROOT/$1/bin/task-init"
+  if [[ ! -x "$target_init" ]]; then
+    local t_assistant t_tracker
+    t_assistant=$(la_assistant "$target")
+    t_tracker=$(la_tracker "$target")
+    echo "Error: there is no '$target' loadout." >&2
+    if _in_list "$t_assistant" "${ASSISTANTS[@]}" && _in_list "$t_tracker" "${TRACKERS[@]}"; then
+      echo "       The assistant × tracker grid has one hole: $t_tracker is not" >&2
+      echo "       available on $t_assistant (#92). Everything else exists." >&2
+    fi
+    echo "       Available: $(aw_impl_list)" >&2
+    exit 1
+  fi
+  printf '%s\n' "$target_init"
+}
+
+# _carry <from-loadout> <to-tracker> — fill CARRY with the task-init flags that
+# carry <from-loadout>'s tracker settings, and CARRIED_DESC with what they say.
+# Settings carry only when the tracker is unchanged — see the asymmetry note in
+# the usage text and in lib/tracker-settings.sh.
+CARRY=()
+CARRIED_DESC=""
+_carry() {
+  local from="$1" to_tracker="$2" tracker doc tok
+  tracker=$(la_tracker "$from")
+  doc=$(la_workflow_doc "$REPO_ROOT" "$from")
+  CARRY=()
+  CARRIED_DESC="nothing to carry"
+  if [[ "$to_tracker" == "$tracker" ]]; then
+    while IFS= read -r tok; do
+      [[ -n "$tok" ]] && CARRY+=("$tok")
+    done < <(tf_tracker_init_flags "$doc" "$tracker")
+    if ((${#CARRY[@]})); then
+      CARRIED_DESC=$(tf_tracker_extract "$doc" "$tracker" | tr '\n' ' ')
+      CARRIED_DESC="${CARRIED_DESC% }"
+    elif [[ -n "$(tf_tracker_fields "$tracker")" ]]; then
+      CARRIED_DESC="nothing filled in on the old doc"
+    fi
+  else
+    CARRIED_DESC="nothing — $tracker and $to_tracker share no settings; task-init will ask"
+  fi
+}
+
+# Preview the plan when it is a preview — a --dry-run, or the moment before a
+# confirmation prompt. On a confirmed or --yes run la_remove narrates the same
+# steps in the past tense as it performs them, and printing both would just be
+# the same list twice.
+_previewing() {
+  [[ "$DRY_RUN" == true ]] && return 0
+  [[ "$ASSUME_YES" != true && -t 0 ]]
+}
+
+# The --dry-run stop and the confirmation prompt, shared by every mutating
+# subcommand. Returns 1 when the caller should stop: a dry run (exit 0 after
+# saying so) or an aborted prompt (the caller exits 1).
+_go_ahead() {
+  if [[ "$DRY_RUN" == true ]]; then
+    printf '\n--dry-run: nothing was changed.\n'
+    exit 0
+  fi
+  if [[ "$ASSUME_YES" != true && -t 0 ]]; then
+    local reply=""
+    # EOF on the prompt (the terminal went away mid-question) has to read as
+    # "no", not as an unexplained non-zero exit from `read` under set -e.
+    if ! read -rp $'\nProceed? [y/N] ' reply; then reply=""; fi
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) echo "Aborted; nothing was changed."; exit 1 ;;
+    esac
+  fi
+  return 0
+}
+
+_install_line() {
+  local init="$1"; shift
+  printf '  %s --force%s\n' "${init#"$AW_ROOT"/}" "$( (($#)) && printf ' %s' "$*" )"
+}
+
+_set_active() {
+  git -C "$REPO_ROOT" config "$AW_ACTIVE_ASSISTANT_KEY" "$1"
 }
 
 cmd_set() {
@@ -273,6 +475,11 @@ cmd_set() {
       exit 1 ;;
     1) ;;
     *)
+      local dual
+      if dual=$(_dual_tracker); then
+        _set_dual "$dual" "$axis" "$value"
+        return
+      fi
       echo "Error: ${#MATCHES[@]} loadouts are configured in $REPO_ROOT:" >&2
       printf '         - %s\n' "${MATCHES[@]}" >&2
       echo "       Pass --impl <name> to say which one to replace, or run" >&2
@@ -285,98 +492,29 @@ cmd_set() {
   cur_assistant=$(la_assistant "$current")
   cur_tracker=$(la_tracker "$current")
 
-  case "$axis" in
-    assistant)
-      _in_list "$value" "${ASSISTANTS[@]}" || {
-        echo "Error: unknown assistant '$value' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
-      target="$value-$cur_tracker" ;;
-    tracker)
-      _in_list "$value" "${TRACKERS[@]}" || {
-        echo "Error: unknown tracker '$value' — known: ${TRACKERS[*]}" >&2; exit 1; }
-      target="$cur_assistant-$value" ;;
-    loadout)
-      target="$value" ;;
-    *)
-      echo "Error: unknown axis '$axis' — expected assistant, tracker or loadout" >&2
-      exit 1 ;;
-  esac
+  target=$(_set_target "$axis" "$value" "$cur_assistant" "$cur_tracker") || exit 1
 
   if [[ "$target" == "$current" ]]; then
     echo "Already on $current — nothing to do."
     return 0
   fi
 
-  # Validate the target exists on disk. This is what refuses kiro-jira: the
-  # 2×4 assistant × tracker grid has exactly one hole (#92), and the only
-  # honest way to know is to look.
-  local target_init="$AW_ROOT/$target/bin/task-init"
-  if [[ ! -x "$target_init" ]]; then
-    local t_assistant t_tracker
-    t_assistant=$(la_assistant "$target")
-    t_tracker=$(la_tracker "$target")
-    echo "Error: there is no '$target' loadout." >&2
-    if _in_list "$t_assistant" "${ASSISTANTS[@]}" && _in_list "$t_tracker" "${TRACKERS[@]}"; then
-      echo "       The assistant × tracker grid has one hole: $t_tracker is not" >&2
-      echo "       available on $t_assistant (#92). Everything else exists." >&2
-    fi
-    echo "       Available: $(aw_impl_list)" >&2
-    exit 1
-  fi
+  local target_init
+  target_init=$(_require_target_init "$target") || exit 1
 
-  local old_doc
-  old_doc=$(la_workflow_doc "$REPO_ROOT" "$current")
-
-  # Settings carry only when the tracker is unchanged — see the asymmetry note
-  # in the usage text and in lib/tracker-settings.sh.
-  local carry=() carried_desc="nothing to carry" tok
-  if [[ "$(la_tracker "$target")" == "$cur_tracker" ]]; then
-    while IFS= read -r tok; do
-      [[ -n "$tok" ]] && carry+=("$tok")
-    done < <(tf_tracker_init_flags "$old_doc" "$cur_tracker")
-    if ((${#carry[@]})); then
-      carried_desc=$(tf_tracker_extract "$old_doc" "$cur_tracker" | tr '\n' ' ')
-      carried_desc="${carried_desc% }"
-    else
-      carried_desc="nothing filled in on the old doc"
-    fi
-  else
-    carried_desc="nothing — $cur_tracker and $(la_tracker "$target") share no settings; task-init will ask"
-  fi
+  _carry "$current" "$(la_tracker "$target")"
 
   printf '%s → %s\n' "$current" "$target"
-  printf '  carrying  : %s\n' "$carried_desc"
+  printf '  carrying  : %s\n' "$CARRIED_DESC"
 
-  # Preview the plan when it is a preview — a --dry-run, or the moment before a
-  # confirmation prompt. On a confirmed or --yes run la_remove narrates the same
-  # steps in the past tense as it performs them, and printing both would just be
-  # the same list twice.
-  local preview=false
-  if [[ "$DRY_RUN" == true ]]; then preview=true
-  elif [[ "$ASSUME_YES" != true && -t 0 ]]; then preview=true
-  fi
-  if [[ "$preview" == true ]]; then
+  if _previewing; then
     printf '\nremoving %s:\n' "$current"
     la_plan "$REPO_ROOT" "$current"
     printf '\ninstalling %s:\n' "$target"
-    printf '  %s --force%s\n' "${target_init#"$AW_ROOT"/}" \
-      "$( ((${#carry[@]})) && printf ' %s' "${carry[*]}" )"
+    _install_line "$target_init" ${CARRY[@]+"${CARRY[@]}"}
   fi
 
-  if [[ "$DRY_RUN" == true ]]; then
-    printf '\n--dry-run: nothing was changed.\n'
-    return 0
-  fi
-
-  if [[ "$ASSUME_YES" != true && -t 0 ]]; then
-    local reply=""
-    # EOF on the prompt (the terminal went away mid-question) has to read as
-    # "no", not as an unexplained non-zero exit from `read` under set -e.
-    if ! read -rp $'\nProceed? [y/N] ' reply; then reply=""; fi
-    case "$reply" in
-      y|Y|yes|YES) ;;
-      *) echo "Aborted; nothing was changed."; return 1 ;;
-    esac
-  fi
+  _go_ahead
 
   printf '\n'
   la_remove "$REPO_ROOT" "$current"
@@ -385,12 +523,12 @@ cmd_set() {
   # with no loadout at all — the one state where saying nothing would be worst:
   # the next `task-work` would report "no impl configured" and give no hint that
   # a half-finished switch is why.
-  if ! "$target_init" --force ${carry[@]+"${carry[@]}"}; then
+  if ! "$target_init" --force ${CARRY[@]+"${CARRY[@]}"}; then
     {
       echo
       echo "Error: $current was removed, but installing $target failed."
       echo "       This repo has no loadout right now. Finish the switch with:"
-      echo "         task-init $target${carry[*]:+ ${carry[*]}}"
+      echo "         task-init $target${CARRY[*]:+ ${CARRY[*]}}"
     } >&2
     exit 1
   fi
@@ -405,8 +543,297 @@ cmd_set() {
   return 0
 }
 
+# _set_target <axis> <value> <assistant> <tracker> -> the loadout a `set` lands on.
+_set_target() {
+  local axis="$1" value="$2" assistant="$3" tracker="$4"
+  case "$axis" in
+    assistant)
+      _in_list "$value" "${ASSISTANTS[@]}" || {
+        echo "Error: unknown assistant '$value' — known: ${ASSISTANTS[*]}" >&2; return 1; }
+      printf '%s\n' "$value-$tracker" ;;
+    tracker)
+      _in_list "$value" "${TRACKERS[@]}" || {
+        echo "Error: unknown tracker '$value' — known: ${TRACKERS[*]}" >&2; return 1; }
+      printf '%s\n' "$assistant-$value" ;;
+    loadout)
+      printf '%s\n' "$value" ;;
+    *)
+      echo "Error: unknown axis '$axis' — expected assistant, tracker or loadout" >&2
+      return 1 ;;
+  esac
+}
+
+# _set_dual <tracker> <axis> <value> — a `set` on a repo with both assistants
+# installed on <tracker> (#293). Every outcome is a single loadout:
+#
+#   set assistant A      keep A, remove the other — "stop being dual"
+#   set loadout <A>-<T>  the same when T is this tracker; otherwise remove both
+#                        and install the one named
+#   set tracker T        refused: it would have to reinstall both, and the second
+#                        could only carry settings the user has not typed yet.
+#                        Two steps say it plainly — `set loadout`, then `add`.
+_set_dual() {
+  local tracker="$1" axis="$2" value="$3" active target m
+  active=$(_active)
+  [[ -n "$active" ]] && _in_list "$active-$tracker" "${MATCHES[@]}" || active=$(la_assistant "${MATCHES[0]}")
+
+  if [[ "$axis" == tracker ]]; then
+    _set_target tracker "$value" "$active" "$tracker" >/dev/null || exit 1
+    if [[ "$value" == "$tracker" ]]; then
+      echo "Already on $tracker — nothing to do."
+      return 0
+    fi
+    {
+      echo "Error: both assistants are installed on $tracker here; switching the tracker"
+      echo "       would have to reinstall both. Do it in two steps:"
+      echo "         task-config set loadout $active-$value"
+      echo "         task-config add assistant <the other one>"
+    } >&2
+    exit 1
+  fi
+
+  target=$(_set_target "$axis" "$value" "$active" "$tracker") || exit 1
+  local target_init
+  target_init=$(_require_target_init "$target") || exit 1
+
+  local drop=()
+  for m in "${MATCHES[@]}"; do [[ "$m" == "$target" ]] || drop+=("$m"); done
+
+  if ((${#drop[@]} < ${#MATCHES[@]})); then
+    # The target is already installed: this is just the other one going.
+    printf '%s → %s (keeping %s, removing %s)\n' \
+      "$(printf '%s+' "${MATCHES[@]}" | sed 's/+$//')" "$target" "$target" "${drop[*]}"
+    if _previewing; then
+      for m in "${drop[@]}"; do printf '\nremoving %s:\n' "$m"; la_plan "$REPO_ROOT" "$m"; done
+    fi
+    _go_ahead
+    for m in "${drop[@]}"; do printf '\n'; la_remove "$REPO_ROOT" "$m"; done
+    _set_active "$(la_assistant "$target")"
+    printf '\nNow on %s alone.\nVerify with: task-config show\n' "$target"
+    return 0
+  fi
+
+  # A loadout on another tracker: both go, and the target is a fresh install.
+  # Nothing carries — different trackers share no settings.
+  # Read by the engine through dynamic scope: both go in one run, so the walk
+  # that removes the first handles what the pair shares.
+  local LA_REMOVING="${MATCHES[*]}"
+  printf '%s → %s\n' "$(printf '%s+' "${MATCHES[@]}" | sed 's/+$//')" "$target"
+  printf '  carrying  : nothing — %s and %s share no settings; task-init will ask\n' \
+    "$tracker" "$(la_tracker "$target")"
+  if _previewing; then
+    for m in "${MATCHES[@]}"; do printf '\nremoving %s:\n' "$m"; la_plan "$REPO_ROOT" "$m"; done
+    printf '\ninstalling %s:\n' "$target"
+    _install_line "$target_init"
+  fi
+  _go_ahead
+  for m in "${MATCHES[@]}"; do printf '\n'; la_remove "$REPO_ROOT" "$m"; done
+  printf '\n'
+  if ! "$target_init" --force; then
+    {
+      echo
+      echo "Error: ${MATCHES[*]} were removed, but installing $target failed."
+      echo "       This repo has no loadout right now. Finish the switch with:"
+      echo "         task-init $target"
+    } >&2
+    exit 1
+  fi
+  _set_active "$(la_assistant "$target")"
+  printf '\n%s → %s done.\n' "$(printf '%s+' "${MATCHES[@]}" | sed 's/+$//')" "$target"
+  if [[ -n "$(tf_tracker_fields "$(la_tracker "$target")")" ]]; then
+    printf 'Fill in the new tracker settings in %s.\n' \
+      "$(_rel "$(la_workflow_doc "$REPO_ROOT" "$target")")"
+  fi
+  printf 'Verify with: task-config show\n'
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# add / use / sync (#293)
+# ---------------------------------------------------------------------------
+
+cmd_add() {
+  local axis="$1" agent="$2"
+  [[ "$axis" == assistant && -n "$agent" ]] || {
+    echo "Error: expected: task-config add assistant <$(IFS='|'; echo "${ASSISTANTS[*]}")>" >&2; exit 1; }
+  _in_list "$agent" "${ASSISTANTS[@]}" || {
+    echo "Error: unknown assistant '$agent' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
+
+  _collect_matches
+  aw_require_configured "$REPO_ROOT" "$PIN" || exit 1
+  case "${#MATCHES[@]}" in
+    0)
+      echo "Error: no loadout configured in $REPO_ROOT — there is nothing to add beside." >&2
+      echo "       Run: task-init <loadout>" >&2
+      exit 1 ;;
+    1) ;;
+    *)
+      local dual
+      if dual=$(_dual_tracker) && _in_list "$agent-$dual" "${MATCHES[@]}"; then
+        echo "$agent-$dual is already installed beside $(printf '%s\n' "${MATCHES[@]}" | grep -vxF "$agent-$dual" | paste -sd' ' -) — nothing to add."
+        echo "Pick the active one with: task-config use <assistant>"
+        return 0
+      fi
+      echo "Error: ${#MATCHES[@]} loadouts are configured in $REPO_ROOT:" >&2
+      printf '         - %s\n' "${MATCHES[@]}" >&2
+      echo "       add installs a second assistant beside one loadout; run" >&2
+      echo "       task-config show for the full picture." >&2
+      exit 1 ;;
+  esac
+
+  local current="${MATCHES[0]}" tracker target
+  tracker=$(la_tracker "$current")
+  if [[ "$(la_assistant "$current")" == "$agent" ]]; then
+    echo "Already on $current — $agent is the assistant installed here; nothing to add."
+    return 0
+  fi
+  target="$agent-$tracker"
+  local target_init
+  target_init=$(_require_target_init "$target") || exit 1
+
+  _carry "$current" "$tracker"
+  local active
+  active=$(_active)
+  [[ -n "$active" ]] && [[ "$active" == "$(la_assistant "$current")" ]] || active=""
+
+  printf '%s + %s (adding %s beside %s, same tracker)\n' "$current" "$target" "$target" "$current"
+  printf '  carrying  : %s\n' "$CARRIED_DESC"
+  if _previewing; then
+    printf '\ninstalling %s:\n' "$target"
+    _install_line "$target_init" ${CARRY[@]+"${CARRY[@]}"}
+    printf '\n%s is left untouched.\n' "$current"
+    [[ -n "$active" ]] || printf 'active assistant → %s (git config %s; local, nothing tracked)\n' \
+      "$(la_assistant "$current")" "$AW_ACTIVE_ASSISTANT_KEY"
+  fi
+  _go_ahead
+
+  printf '\n'
+  if ! "$target_init" --force ${CARRY[@]+"${CARRY[@]}"}; then
+    {
+      echo
+      echo "Error: installing $target failed; $current is untouched."
+      echo "       Retry with: task-init $target${CARRY[*]:+ ${CARRY[*]}}"
+    } >&2
+    exit 1
+  fi
+  # The assistant you were on stays the active one, so `add` changes nothing
+  # about what runs until you say so — and the repo is never left dual with no
+  # active assistant, the one state every dispatcher refuses.
+  if [[ -z "$active" ]]; then
+    _set_active "$(la_assistant "$current")"
+  fi
+
+  printf '\n%s + %s installed; active assistant: %s.\n' "$current" "$target" "$(la_assistant "$current")"
+  _collect_matches
+  _drift_report "${MATCHES[@]}" || true
+  printf 'Commit both loadouts once; from then on a switch changes no tracked file:\n'
+  printf '  task-config use %s\n' "$agent"
+  return 0
+}
+
+cmd_use() {
+  local agent="$1"
+  [[ -n "$agent" ]] || {
+    echo "Error: expected: task-config use <$(IFS='|'; echo "${ASSISTANTS[*]}")>" >&2; exit 1; }
+  _in_list "$agent" "${ASSISTANTS[@]}" || {
+    echo "Error: unknown assistant '$agent' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
+  # `use` is about what detection resolves, so a pin would only hide the repo
+  # from it.
+  [[ -z "$PIN" ]] || { echo "Error: use takes no --impl (and ignores no \$AW_IMPL): unset it first" >&2; exit 1; }
+
+  _collect_matches
+  local tracker
+  case "${#MATCHES[@]}" in
+    0)
+      echo "Error: no loadout configured in $REPO_ROOT — there is no assistant to use." >&2
+      echo "       Run: task-init <loadout>" >&2
+      exit 1 ;;
+    1) tracker=$(la_tracker "${MATCHES[0]}") ;;
+    *)
+      tracker=$(_dual_tracker) || {
+        echo "Error: the loadouts here are on different trackers:" >&2
+        printf '         - %s\n' "${MATCHES[@]}" >&2
+        echo "       An active assistant chooses between two assistants on ONE tracker;" >&2
+        echo "       remove one with task-config set loadout <name> --impl <the-other>." >&2
+        exit 1; } ;;
+  esac
+  if ! _in_list "$agent-$tracker" "${MATCHES[@]}"; then
+    echo "Error: $agent-$tracker is not installed here (configured: ${MATCHES[*]})." >&2
+    echo "       Install it beside the current one: task-config add assistant $agent" >&2
+    exit 1
+  fi
+
+  if [[ "$(_active)" == "$agent" ]]; then
+    echo "Already using $agent — nothing to do."
+    return 0
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    printf 'would set git config %s %s\n\n--dry-run: nothing was changed.\n' "$AW_ACTIVE_ASSISTANT_KEY" "$agent"
+    return 0
+  fi
+  _set_active "$agent"
+  printf 'active assistant: %s  (git config %s — local, no tracked file changed)\n' \
+    "$agent" "$AW_ACTIVE_ASSISTANT_KEY"
+  ((${#MATCHES[@]} > 1)) \
+    || printf 'Only %s is installed, so detection does not need it yet.\n' "${MATCHES[0]}"
+  return 0
+}
+
+cmd_sync() {
+  [[ -z "$PIN" ]] || { echo "Error: sync takes no --impl; it works on both installed loadouts" >&2; exit 1; }
+  _collect_matches
+  local tracker
+  tracker=$(_dual_tracker) || {
+    echo "Error: sync needs both assistants installed on one tracker (configured: ${MATCHES[*]:-none})." >&2
+    echo "       Install the second with: task-config add assistant <assistant>" >&2
+    exit 1; }
+
+  local from="${FROM_AGENT:-$(_active)}"
+  if [[ -z "$from" ]]; then
+    echo "Error: no active assistant to copy from — pass --from <assistant>, or pick one" >&2
+    echo "       with task-config use <assistant>." >&2
+    exit 1
+  fi
+  local src="$from-$tracker" dst m
+  _in_list "$src" "${MATCHES[@]}" || {
+    echo "Error: $src is not installed here (configured: ${MATCHES[*]})." >&2; exit 1; }
+  for m in "${MATCHES[@]}"; do [[ "$m" == "$src" ]] || dst="$m"; done
+
+  if _drift_report "$src" "$dst" >/dev/null; then
+    echo "$src and $dst already carry the same $tracker settings — nothing to do."
+    return 0
+  fi
+  _carry "$src" "$tracker"
+  if ((${#CARRY[@]} == 0)); then
+    echo "Error: $src has no $tracker settings filled in, so there is nothing to copy." >&2
+    echo "       Fill them in there, or sync the other way: task-config sync --from $(la_assistant "$dst")" >&2
+    exit 1
+  fi
+  local dst_init
+  dst_init=$(_require_target_init "$dst") || exit 1
+
+  # The report without its own "Resolve with" advice — this run is the resolving.
+  # `|| true`: it fails by design here, and pipefail would end the run on it.
+  { _drift_report "$src" "$dst" || true; } | sed '/^Resolve with/,$d'
+  printf '\n%s → %s\n' "$src" "$dst"
+  printf '  carrying  : %s\n' "$CARRIED_DESC"
+  if _previewing; then
+    printf '\nre-rendering %s:\n' "$(_rel "$(la_workflow_doc "$REPO_ROOT" "$dst")")"
+    _install_line "$dst_init" --workflow "${CARRY[@]}"
+  fi
+  _go_ahead
+  printf '\n'
+  "$dst_init" --force --workflow "${CARRY[@]}" || {
+    echo "Error: re-rendering $dst's workflow doc failed." >&2; exit 1; }
+  printf '\n%s now carries the same %s settings as %s.\n' "$dst" "$tracker" "$src"
+  return 0
+}
+
 case "$SUBCMD" in
   show) cmd_show ;;
   set)  cmd_set "$AXIS" "$VALUE" ;;
-  *)    echo "Error: unknown subcommand '$SUBCMD' — expected show or set" >&2; exit 1 ;;
+  add)  cmd_add "$AXIS" "$VALUE" ;;
+  use)  cmd_use "$AXIS" ;;
+  sync) cmd_sync ;;
+  *)    echo "Error: unknown subcommand '$SUBCMD' — expected show, set, add, use or sync" >&2; exit 1 ;;
 esac

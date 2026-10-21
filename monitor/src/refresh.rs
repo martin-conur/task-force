@@ -122,6 +122,20 @@ pub struct Collector {
     pub lead: Vec<PathBuf>,
 }
 
+/// `bin/<name>` of the checkout this binary was built in, else `<name>` for
+/// PATH to resolve, so a dev build runs its own checkout's scripts.
+pub fn checkout_bin(name: &str) -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.canonicalize().ok())
+        .and_then(|exe| {
+            exe.ancestors()
+                .map(|a| a.join("bin").join(name))
+                .find(|p| p.is_file())
+        })
+        .unwrap_or_else(|| name.into())
+}
+
 impl Collector {
     /// `$TASK_MONITOR_SNAPSHOT`, else the `bin/task-monitor-snapshot` of the
     /// checkout this binary was built in, else whichever is on PATH.
@@ -132,16 +146,8 @@ impl Collector {
                 lead: Vec::new(),
             };
         }
-        let sibling = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.canonicalize().ok())
-            .and_then(|exe| {
-                exe.ancestors()
-                    .map(|a| a.join("bin/task-monitor-snapshot"))
-                    .find(|p| p.is_file())
-            });
         Collector {
-            program: sibling.unwrap_or_else(|| "task-monitor-snapshot".into()),
+            program: checkout_bin("task-monitor-snapshot"),
             lead: Vec::new(),
         }
     }

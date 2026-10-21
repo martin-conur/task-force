@@ -34,11 +34,17 @@ its attention light and marks the agent that needs you with `← you`.
   -V, --version the version
 
 Keys: ↑↓ move  ⏎ expand / enter repo  o open PR/issue  t jump to tab
+      R recreate a worker whose tab is gone
       ! overview: only what needs you  a all repos  q quit
 
 t on an agent in another zellij session switches this client to that session
 and tab; task-monitor keeps running in its own session, so come back through
 zellij's session manager.
+
+R runs task-recreate-worker for the selected worker, from its repo's main
+checkout with its loadout, and opens the tab in that repo's zellij session
+(never creating one), then jumps to it as t does. Only R does this: t on a
+gone tab says `tab gone · R to recreate`. Reviewers are not recreated.
 
 Local changes (radio mail, worker state, worktree sidecars) refresh at once
 from disk; forge state refreshes every --poll seconds. The data comes from
@@ -103,6 +109,7 @@ enum Msg {
     Key(Key),
     Redraw,
     Fs,
+    Flash(String),
     Ran {
         mode: Mode,
         started: Instant,
@@ -178,6 +185,12 @@ fn main() {
 
     let mut terminal = ratatui::init();
     let mut sched = Scheduler::new(Instant::now(), args.poll);
+    // One recreate at a time: a second R before the first tab exists would
+    // pass task-recreate-worker's live-tab guard and open two.
+    let mut recreating = false;
+    let recreate_program = refresh::checkout_bin("task-recreate-worker")
+        .to_string_lossy()
+        .into_owned();
     loop {
         let now = Instant::now();
         for mode in sched.due(now) {
@@ -210,6 +223,10 @@ fn main() {
         match msg {
             Msg::Redraw => {}
             Msg::Fs => sched.fs_event(Instant::now()),
+            Msg::Flash(m) => {
+                recreating = false;
+                app.flash(Utc::now(), m);
+            }
             Msg::Ran {
                 mode,
                 started,
@@ -240,15 +257,44 @@ fn main() {
                     tab_id,
                     name,
                     session,
+                    worker,
                 }) => {
                     let r = actions::goto_tab(
                         tab_id.as_deref(),
                         &name,
                         session.as_deref(),
+                        worker,
                         &actions::system_env,
                         &mut actions::system_run,
                     );
                     app.flash(Utc::now(), r.unwrap_or_else(|e| e));
+                }
+                Some(Action::Recreate(req)) if recreating => app.flash(
+                    Utc::now(),
+                    format!(
+                        "a recreate is still running: R on {} once it is done",
+                        req.slug
+                    ),
+                ),
+                Some(Action::Recreate(req)) => {
+                    recreating = true;
+                    app.flash(
+                        Utc::now(),
+                        format!("recreating {} in {}…", req.slug, req.repo),
+                    );
+                    // Off the UI thread: the command asks the forge for the
+                    // PR, which can take seconds.
+                    let (tx, program) = (tx.clone(), recreate_program.clone());
+                    std::thread::spawn(move || {
+                        let r = actions::recreate_worker(
+                            &req,
+                            &program,
+                            &actions::system_env,
+                            &mut actions::system_run,
+                            &mut actions::system_run_in,
+                        );
+                        let _ = tx.send(Msg::Flash(r.unwrap_or_else(|e| e)));
+                    });
                 }
             },
         }

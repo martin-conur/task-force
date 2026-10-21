@@ -187,7 +187,7 @@ _render_notion_workflow() {
         read -erp "Notion tasks data source [$TASKS]: " _input
         [[ -n "${_input:-}" ]] && TASKS="$_input"
       else
-        read -erp "Notion tasks data source (collection://…) [blank → leaves placeholder]: " TASKS
+        read -erp "Notion tasks data source [blank → leaves placeholder]: " TASKS
       fi
     fi
     if [[ "$PROJECTS_VIA_FLAG" == false ]]; then
@@ -195,7 +195,7 @@ _render_notion_workflow() {
         read -erp "Notion projects data source [$PROJECTS]: " _input
         [[ -n "${_input:-}" ]] && PROJECTS="$_input"
       else
-        read -erp "Notion projects data source (collection://…) [blank → leaves placeholder]: " PROJECTS
+        read -erp "Notion projects data source [blank → leaves placeholder]: " PROJECTS
       fi
     fi
     if [[ "$BOARD_VIA_FLAG" == false ]]; then

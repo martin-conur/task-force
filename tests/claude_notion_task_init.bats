@@ -107,7 +107,7 @@ _ids() { grep -E '^- \*\*(Tasks|Projects|Board page)\*\*' "$TARGET_DIR/.claude/n
 
 @test "TTY, no flags: prompts for all three IDs and renders the answers (#225)" {
   require_pty
-  run pty_run "cd '$TARGET_DIR' && '$CLAUDE_NOTION_TASK_INIT'" $'abc123\ncollection://def456\nboard77\n'
+  run pty_run "cd '$TARGET_DIR' && '$CLAUDE_NOTION_TASK_INIT'" $'abc123\ndef456\nboard77\n'
   assert_success
   assert_output --partial "Notion tasks data source"
   assert_output --partial "Notion projects data source"

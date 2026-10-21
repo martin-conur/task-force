@@ -321,6 +321,18 @@ _sum() {
   refute_output --partial "task-config use"
 }
 
+@test "different-tracker matches are still refused when --agent names one of them" {
+  mkdir -p "$MAIN_REPO/.claude" "$MAIN_REPO/.kiro/steering"
+  touch "$MAIN_REPO/.claude/gh-workflow.md" "$MAIN_REPO/.kiro/steering/notion-workflow.md"
+  _detect "" kiro
+  assert_failure
+  assert_output --partial "multiple agentic-workflow impls detected"
+  assert_output --partial "Pass --impl"
+  _detect "" claude
+  assert_failure
+  assert_output --partial "multiple agentic-workflow impls detected"
+}
+
 @test "a linked worktree resolves through the active assistant its main checkout set" {
   _dual_docs
   git config task-force.assistant kiro

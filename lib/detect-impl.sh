@@ -297,23 +297,27 @@ _aw_resolve() {
       _aw_say "Error: unknown agent '$agent' — known: $(aw_all_agents | tr '\n' ' ' | sed 's/ *$//')"
       return 1
     fi
-    local picked=()
-    for _m in ${matches[@]+"${matches[@]}"}; do
-      [[ "${_m%%-*}" == "$agent" ]] && picked+=("$_m")
-    done
-    case "${#picked[@]}" in
-      1) printf '%s\n' "${picked[0]}"; return 0 ;;
-      0)
-        _aw_say "Error: --agent $agent: no $agent loadout is configured in $repo_root."
-        _aw_say "       configured here: $( ((${#matches[@]})) && printf '%s ' "${matches[@]}" | sed 's/ *$//' || printf 'none')"
-        _aw_say "       Install it beside the current one: task-config add assistant $agent"
-        return 1 ;;
-      *)
-        _aw_say "Error: --agent $agent matches ${#picked[@]} loadouts in $repo_root:"
-        [[ -n "$quiet" ]] || printf '  - %s\n' "${picked[@]}" >&2
-        _aw_say "Pass --impl <name> to pick one."
-        return 1 ;;
-    esac
+    # --agent only picks between two loadouts on one tracker. Loadouts on
+    # different trackers stay refused, so fall through to that refusal below.
+    if ((${#matches[@]} < 2)) || aw_dual_tracker "${matches[@]}" >/dev/null; then
+      local picked=()
+      for _m in ${matches[@]+"${matches[@]}"}; do
+        [[ "${_m%%-*}" == "$agent" ]] && picked+=("$_m")
+      done
+      case "${#picked[@]}" in
+        1) printf '%s\n' "${picked[0]}"; return 0 ;;
+        0)
+          _aw_say "Error: --agent $agent: no $agent loadout is configured in $repo_root."
+          _aw_say "       configured here: $( ((${#matches[@]})) && printf '%s ' "${matches[@]}" | sed 's/ *$//' || printf 'none')"
+          _aw_say "       Install it beside the current one: task-config add assistant $agent"
+          return 1 ;;
+        *)
+          _aw_say "Error: --agent $agent matches ${#picked[@]} loadouts in $repo_root:"
+          [[ -n "$quiet" ]] || printf '  - %s\n' "${picked[@]}" >&2
+          _aw_say "Pass --impl <name> to pick one."
+          return 1 ;;
+      esac
+    fi
   fi
 
   case "${#matches[@]}" in

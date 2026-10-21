@@ -31,7 +31,7 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
 - `queued — <role> is idle but wake failed …` → queued with **no automatic redelivery until the worker is next prompted**. Mention it to the user alongside your handoff so the worker gets nudged.
 - `WARNING — no session for <role>`, or `WARNING — <role> looks dead …` → that worker isn't running: **surface it to the user** rather than assuming the ping landed (role name likely wrong — re-check `ls ~/.task-force/radio/sessions/`; or the tab died — `radio orphans` lists stale sessions).
 
-- **After merging a PR**: run `gh pr merge <N> --squash --delete-branch` (or `--merge` / `--rebase` per project convention), **then**:
+- **After merging a PR**: run `gh pr merge <N> --squash` (or `--merge` / `--rebase` per project convention) and then `git push origin --delete task/<slug>` to delete only the remote branch — **never `--delete-branch`**: gh also deletes the local branch, and when the worker's worktree has it checked out gh removes the worktree with it, so the worker's `task-done` has nothing to run in and its tab leaks (#271). The worker's `task-done --remove-worktree` removes the local branch itself. **Then**:
   ```bash
   radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"
   ```
@@ -61,7 +61,8 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
 
   - **`review-complete-clean`** → no findings. Proceed to merge:
     ```bash
-    gh pr merge <N> --squash --delete-branch
+    gh pr merge <N> --squash
+    git push origin --delete task/<slug>
     radio send --to <worker-role> --intent approved-and-merged --pr <N> --body "merged"
     ```
   - **`review-complete-with-findings`** → reviewer posted blockers / nits to the PR. Read its verdict on your next `radio check`, then forward to the original worker so they push fixes:

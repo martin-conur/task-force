@@ -1126,14 +1126,17 @@ radio send --to pm --intent re-review-requested --pr 42
 
 Loop until the PR is clean.
 
-**8. PM merges and signals cleanup.** PM squash-merges, then radios the worker:
+**8. PM merges and signals cleanup.** PM squash-merges, deletes the remote branch, then radios the worker:
 
 ```bash
-gh pr merge 42 --squash --delete-branch
+gh pr merge 42 --squash
+git push origin --delete task/issue-42
 radio send --to worker-task-force-issue-42 --intent approved-and-merged --pr 42
 ```
 
-On its next turn the worker sees the ping, sets the project Status field to `Done`, and runs `task-done --remove-worktree` itself — removing the worktree and closing its own zellij tab. Done.
+On its next turn the worker sees the ping, sets the project Status field to `Done`, and runs `task-done --remove-worktree` itself — removing the worktree and the local branch, and closing its own zellij tab. Done.
+
+Not `gh pr merge --delete-branch` (#271): since gh 2.101 it deletes the local branch as well as the remote one, and when the worker's worktree has that branch checked out gh removes the worktree with it. The worker then drains `approved-and-merged` in a directory that no longer exists. `task-done` copes with that now — run from the vanished directory, or from the main checkout in a tab whose `$TASK_FORCE_ROLE` names the worker, it skips the diff and PR steps and still unregisters the radio session, sweeps the mailbox, removes the sidecar, prunes git's worktree registration and closes the tab (with the #260 name check) — but the remote-only delete keeps it from ever being needed.
 
 ### CI-skip markers and the `ci-guard` hook
 

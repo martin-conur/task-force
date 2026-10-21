@@ -105,6 +105,13 @@ task-work tasks/007-spike-idea.md --no-launch
 - `--force` — skip all confirmation prompts
 - `--remove-worktree` — cleanup only (use after worker has already created the PR)
 
+If the worktree is already gone — a `gh pr merge --delete-branch` removes it along
+with the local branch (#271) — `task-done` still cleans up what is left: radio
+session, mailbox, sidecar, git's worktree registration and the tab. Run it from the
+vanished directory, or from the main checkout in the worker's own tab (it reads the
+worktree from `$TASK_FORCE_ROLE`). The PM keeps it from happening at all by deleting
+only the remote branch after a merge: `git push origin --delete task/<slug>`.
+
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
 `.git/task-force/state.json`. Idempotent; safe to run anytime. Like `task-work`
 / `task-done`, it resolves the loadout per-repo (#215) — on a repo tracked in

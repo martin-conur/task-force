@@ -60,7 +60,7 @@ Workflow:
     - `WARNING — no session for pm-…`, or `WARNING — pm-… looks dead …` → **PM isn't running.** Do NOT idle silently — tell the user (re-check the role name via `ls ~/.task-force/radio/sessions/`, or start/restart PM).
 11. Idle — do NOT run `task-done` yet. Wait for one of:
     - **`changes-requested`** from PM: read the PR comments (`gh pr view <N> --comments`), push more commits, then `radio send --to pm --intent re-review-requested --pr <N>` and idle again.
-    - **`approved-and-merged`** from PM (or the user explicitly says "cleanup"): update the task's Status property to the **Status when done** value from `.claude/notion-workflow.md`, then run `task-done --remove-worktree` to clean up the worktree and close this tab.
+    - **`approved-and-merged`** from PM (or the user explicitly says "cleanup"): update the task's Status property to the **Status when done** value from `.claude/notion-workflow.md`, then run `task-done --remove-worktree` to clean up the worktree and close this tab. If your worktree is already gone (a merge with `--delete-branch` removes it), run `task-done --remove-worktree` anyway — from the vanished directory, or from the main checkout — and it cleans up what is left (#271).
 
 Always run tests after changes. If tests fail, fix before committing.
 Stay focused on the spec — don't add features beyond what's specified.

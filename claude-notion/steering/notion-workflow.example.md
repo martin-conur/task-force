@@ -31,7 +31,8 @@ claude mcp add --transport http notion https://mcp.notion.com/mcp
 
 ### Notion Database IDs
 
-<!-- Replace each placeholder with the real ID.
+<!-- Replace each placeholder with the real ID, or pass them to task-init:
+       task-init claude-notion --tasks <id> --projects <id> --board <id>
      Run `task-init claude-notion --help-ids` for step-by-step discovery instructions.
 
      What each ID looks like:
@@ -212,14 +213,11 @@ trackers share no fields at all, so `task-init` prompts for the new ones exactly
 as on a first install. `kiro-jira` is refused by name: the assistant × tracker
 grid has exactly one hole (#92).
 
-One gap to know about before you switch **this** loadout: carry-over works by
-handing `task-init` the old values as flags, and the notion loadouts have no
-settings flags at all. So `task-config show` reads and prints this repo's Notion
-database IDs, but a `claude-notion ↔ kiro-notion` switch cannot carry them — you
-paste them into the new doc yourself. Notion is the worst tracker for that, since
-the IDs are opaque strings no URL yields (the reason for `--help-ids`). **#225**
-adds the flags, after which carry-over works with no change to `task-config`. Run
-`task-config show` first and keep the output.
+On **this** loadout the carried settings are the three Notion database IDs:
+`task-init` takes them as `--tasks` / `--projects` / `--board` (#225), so a
+`claude-notion ↔ kiro-notion` switch passes them forward and you never re-paste
+them. `--tasks` / `--projects` accept the `collection://<id>` that
+`task-config show` prints, or the bare id.
 
 `task-remove` — take task-force back out of this repo (#220)
 

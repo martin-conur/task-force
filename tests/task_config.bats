@@ -101,7 +101,7 @@ _tree_sum() {
   assert_success
   assert_output --partial "loadout   : claude-notion"
   assert_output --partial "tracker   : notion"
-  # The template's IDs cannot be flag-filled, so a fresh install has none.
+  # A flagless, non-TTY install leaves the template's placeholders in place.
   assert_output --partial "unset"
   assert_output --partial "config    : .claude/notion-workflow.md"
 }
@@ -253,6 +253,35 @@ _refute_kiro_artifacts() {
   assert_success
   assert_output --partial "loadout   : claude-gh"
   assert_output --partial "owner=acme repo=widgets project=7"
+}
+
+@test "set assistant: claude-notion → kiro-notion → claude-notion carries all three IDs (#225)" {
+  _init claude-notion --tasks collection://abc123 --projects collection://def456 --board 8a1b2c3d-e4f5
+  local ids="tasks=collection://abc123 projects=collection://def456 board=8a1b2c3d-e4f5"
+
+  run "$TASK_CONFIG" set assistant kiro --yes
+  assert_success
+  assert_output --partial "claude-notion → kiro-notion"
+  assert_output --partial "carrying  : $ids"
+  assert [ ! -f "$MAIN_REPO/.claude/notion-workflow.md" ]
+  run grep -F -- '- **Board page**: `8a1b2c3d-e4f5`' "$MAIN_REPO/.kiro/steering/notion-workflow.md"
+  assert_success
+
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "loadout   : kiro-notion"
+  assert_output --partial "$ids"
+
+  run "$TASK_CONFIG" set assistant claude --yes
+  assert_success
+  assert_output --partial "kiro-notion → claude-notion"
+  assert [ ! -d "$MAIN_REPO/.kiro" ]
+
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "loadout   : claude-notion"
+  assert_output --partial "$ids"
+  refute_output --partial "YOUR_"
 }
 
 @test "set assistant: the round trip leaves no orphan radio hook or dangling import" {

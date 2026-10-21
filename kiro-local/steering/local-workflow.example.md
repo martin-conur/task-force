@@ -153,6 +153,9 @@ that is new work, and it refuses and names `task-work`.
   before it died — its `<role>.auto-submit` sidecar (#246).
 - `--focus` — switch to the new tab. By default focus stays on the tab you ran
   it from, as with `task-work` (#254).
+- `--session <name>` — open the tab in zellij session `<name>` instead of the
+  one it runs in, refusing one that is not running: it never creates a session.
+  task-monitor's `R` passes the repo's session (#291).
 - `--no-launch` — open the tab, start nothing; the role stays unregistered.
 - `--force` — proceed although a session still looks live.
 
@@ -342,7 +345,14 @@ closing one (#260). A tab in another zellij session is checked the same way,
 then reached with `zellij action switch-session <session> --tab-position`: the
 client moves and the monitor keeps running in its own session, so come back
 through zellij's session manager. A failed check switches nothing and says why
-(#287). It holds no
+(#287). When a worker's tab is gone, `t` says `tab gone · R to recreate`, and
+`R` on that worker runs `task-recreate-worker <slug> --session <session>` from
+the repo's main checkout with its loadout, then goes to the new tab the way `t`
+does (#291). The session is the repo's (its PM's), not the monitor's; one that
+is not running is refused, never created. Only `R` recreates, since a fresh
+agent costs tokens and parked work is often parked on purpose, and its
+refusals (a live tab, a fresh heartbeat) land in the status line. Reviewers
+are not recreated. It holds no
 task-force logic: every value is a snapshot field. A loadout's
 `install.sh` builds and links it when `cargo` is on PATH, and skips it with one
 line when not (#277). Its Next section is the queue the

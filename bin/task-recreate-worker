@@ -83,6 +83,11 @@ Options:
                       setting it had before it died: radio recorded it (#246).
       --focus         Switch to the new tab. By default focus stays on the tab
                       you ran this from, as task-work's does (#254).
+      --session <name>
+                      Open the tab in zellij session <name> instead of the one
+                      this runs in. Refuses when that session is not running:
+                      it never creates one. task-monitor's R passes the repo's
+                      session here (#291).
       --no-launch     Open the tab at the worktree but do NOT start the agent.
                       The role stays unregistered until something does.
       --force         Proceed even though a session still looks live for this
@@ -144,6 +149,9 @@ AUTO_SUBMIT_FLAG=""
 FOCUS=""
 NO_LAUNCH=""
 FORCE=""
+# Always assigned here, so a stray AW_ZELLIJ_SESSION in the caller's
+# environment never redirects a recovery: only --session does.
+AW_ZELLIJ_SESSION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -155,6 +163,13 @@ while [[ $# -gt 0 ]]; do
     --focus) FOCUS="1"; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --force) FORCE="1"; shift ;;
+    --session)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "Error: --session needs a zellij session name" >&2; usage 1; }
+      AW_ZELLIJ_SESSION="$2"; shift 2 ;;
+    --session=*)
+      AW_ZELLIJ_SESSION="${1#--session=}"
+      [[ -n "$AW_ZELLIJ_SESSION" ]] || { echo "Error: --session needs a zellij session name" >&2; usage 1; }
+      shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*) echo "Error: unknown flag '$1'" >&2; usage 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -165,6 +180,16 @@ done
   echo "Error: exactly one <slug> is required" >&2
   usage 1
 }
+
+# A target session must already be running (#291). `zellij -s` against a
+# missing one is harmless for list-tabs, but this command is about to open a
+# tab, and creating a session nobody asked for is the one thing it must not do.
+if [[ -n "$AW_ZELLIJ_SESSION" ]] && ! aw_zellij_session_running "$AW_ZELLIJ_SESSION"; then
+  echo "Error: zellij session '$AW_ZELLIJ_SESSION' is not running — refusing to recreate a worker there." >&2
+  echo "       task-recreate-worker never creates a session. Start or attach it first:" >&2
+  echo "         zellij attach $AW_ZELLIJ_SESSION" >&2
+  exit 1
+fi
 
 # Accept `task/<slug>` and a trailing slash so a copy-pasted branch name or a
 # shell-completed directory path both work. Then sanitize exactly as task-work's
@@ -308,7 +333,9 @@ DEAD_LETTER_DIR="$RADIO_HOME/dead-letter/${ROLE}"
 # Staleness is delegated to `radio orphans` rather than re-parsed here, so the
 # >1h threshold and the GNU/BSD date handling stay in one place.
 TAB_EXISTS=""
-[[ -n "${ZELLIJ:-}" ]] && TAB_EXISTS=$(aw_zellij_tab_id_by_name "$SLUG" || true)
+aw_zellij_reachable && TAB_EXISTS=$(aw_zellij_tab_id_by_name "$SLUG" || true)
+IN_SESSION="this session"
+[[ -n "$AW_ZELLIJ_SESSION" ]] && IN_SESSION="session '$AW_ZELLIJ_SESSION'"
 
 SESSION_LOOKS_LIVE=""
 if [[ -f "$SESSION_FILE" ]]; then
@@ -330,7 +357,7 @@ fi
 if [[ -z "$FORCE" && ( -n "$TAB_EXISTS" || -n "$SESSION_LOOKS_LIVE" ) ]]; then
   {
     echo "Error: $ROLE still looks live — refusing to open a second tab for one role."
-    [[ -n "$TAB_EXISTS" ]] && echo "       A zellij tab named '$SLUG' is open in this session (tab_id=$TAB_EXISTS)."
+    [[ -n "$TAB_EXISTS" ]] && echo "       A zellij tab named '$SLUG' is open in $IN_SESSION (tab_id=$TAB_EXISTS)."
     [[ -n "$SESSION_LOOKS_LIVE" ]] && echo "       $SESSION_FILE has a heartbeat newer than 1h (radio orphans does not list it)."
     echo ""
     echo "       If that tab is really gone, the session file is just stale bookkeeping:"
@@ -506,7 +533,7 @@ esac
 STAY_ON_CALLER="1"
 [[ -n "$FOCUS" ]] && STAY_ON_CALLER=""
 
-echo "Opening zellij tab '$SLUG'..."
+echo "Opening zellij tab '$SLUG' in $IN_SESSION..."
 # `set +H; ` must come BEFORE $RADIO_ENV_PREFIX, never between it and the agent:
 # `VAR=val cmd1; cmd2` scopes the assignments to cmd1 only, so the env would
 # attach to the `set` builtin and never reach the agent — radio routing and

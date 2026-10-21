@@ -7,6 +7,21 @@
 # treat as "lookup failed — skip" (mirrors the real behaviour when zellij
 # isn't running). Mutating actions stay no-ops; we just record the call.
 echo "zellij $*" >> "${STUB_CALLS_DIR}/zellij.calls"
+# `-s <session>` targets another session (#291). Only the sessions listed in
+# $STUB_ZELLIJ_LIVE_SESSIONS (space-separated) answer, from the same fixtures;
+# any other prints zellij's plain-text "not found" list and exits 0, as the
+# real one does. Nothing is ever created.
+if [[ "${1:-}" == -s ]]; then
+  _session="${2:-}"
+  shift 2
+  case " ${STUB_ZELLIJ_LIVE_SESSIONS:-} " in
+    *" $_session "*) ;;
+    *)
+      printf "Session '%s' not found. The following sessions are active:\n%s\n" \
+        "$_session" "${STUB_ZELLIJ_LIVE_SESSIONS:-}"
+      exit 0 ;;
+  esac
+fi
 case "$*" in
   "action list-tabs --json")
     [[ -n "${STUB_ZELLIJ_TABS_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_TABS_JSON"

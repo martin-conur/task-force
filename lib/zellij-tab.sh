@@ -4,6 +4,10 @@
 # Exports:
 #   aw_launch_tab <slug> <cwd> <cmd>
 #   aw_radio_home_env_prefix   (TASK_FORCE_HOME for a launcher's env prefix, #262)
+#   aw_zellij_session_running <session>   (#291)
+#
+# Every zellij call here goes through aw_zellij, so a launcher that sets
+# AW_ZELLIJ_SESSION drives that session instead of the one it runs in (#291).
 #
 # Creates a new zellij tab named <slug>, with cwd <cwd>, running <cmd> as the
 # initial pane's command (via `zellij action new-tab --cwd <cwd> --name <slug>
@@ -20,6 +24,40 @@
 # tab-bar plugin's output (i.e. tab names stop appearing). `-- CMD` is the
 # zellij-native path for "new tab running this command" and preserves the
 # session UI.
+
+# `zellij "$@"`, or `zellij -s "$AW_ZELLIJ_SESSION" "$@"` when a launcher
+# targets another session (#291): task-recreate-worker --session, which
+# task-monitor's R uses to open a worker's tab in its repo's session rather
+# than the monitor's. `-s` wins over the caller's own $ZELLIJ_SESSION_NAME.
+# A `-s` naming no running session prints a plain-text session list and exits
+# 0 without creating anything; aw_zellij_session_running is the check to make
+# before relying on that.
+aw_zellij() {
+  if [[ -n "${AW_ZELLIJ_SESSION:-}" ]]; then
+    zellij -s "$AW_ZELLIJ_SESSION" "$@"
+  else
+    zellij "$@"
+  fi
+}
+
+# True when there is a zellij session to talk to: the one we run in, or the
+# one AW_ZELLIJ_SESSION names.
+aw_zellij_reachable() {
+  [[ -n "${ZELLIJ:-}" || -n "${AW_ZELLIJ_SESSION:-}" ]]
+}
+
+# rc 0 when zellij session <session> is running: its list-tabs answers with a
+# JSON array. A session that is not running answers with plain text and exit
+# 0, so the exit status alone proves nothing. Without jq it cannot tell, and
+# says no.
+aw_zellij_session_running() {
+  local session="$1"
+  [[ -n "$session" ]] || return 1
+  command -v zellij >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  zellij -s "$session" action list-tabs --json 2>/dev/null \
+    | jq -e 'type == "array"' >/dev/null 2>&1
+}
 
 # Resolve a freshly-created tab's stable zellij tab_id by its name. Used by
 # task-work right after aw_launch_tab to persist TAB_ID into $INFO_FILE so
@@ -41,7 +79,7 @@ aw_zellij_tab_id_by_name() {
   [[ -n "$target" ]] || return 0
   command -v zellij >/dev/null 2>&1 || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  zellij action list-tabs --json 2>/dev/null \
+  aw_zellij action list-tabs --json 2>/dev/null \
     | jq -r --arg n "$target" \
         '[.[]
           | select((.name
@@ -62,13 +100,13 @@ aw_zellij_tab_id_miss_reason() {
   if ! command -v zellij >/dev/null 2>&1; then
     echo "no-zellij-bin zellij is not on PATH"; return 0
   fi
-  if [[ -z "${ZELLIJ:-}" ]]; then
+  if ! aw_zellij_reachable; then
     echo "not-in-zellij not running inside zellij (\$ZELLIJ unset)"; return 0
   fi
   if ! command -v jq >/dev/null 2>&1; then
     echo "no-jq jq is not on PATH"; return 0
   fi
-  tabs=$(zellij action list-tabs --json 2>/dev/null || true)
+  tabs=$(aw_zellij action list-tabs --json 2>/dev/null || true)
   names=$(printf '%s' "$tabs" | jq -c '[.[].name]' 2>/dev/null || true)
   if [[ -z "$names" ]]; then
     echo "list-tabs-empty zellij action list-tabs --json returned nothing parseable"; return 0
@@ -93,7 +131,7 @@ aw_zellij_tab_name_by_id() {
   local id="$1" tabs
   case "$id" in ''|*[!0-9]*) return 2 ;; esac
   command -v jq >/dev/null 2>&1 || return 2
-  tabs=$(zellij action list-tabs --json 2>/dev/null || true)
+  tabs=$(aw_zellij action list-tabs --json 2>/dev/null || true)
   printf '%s' "$tabs" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
   printf '%s' "$tabs"     | jq -r --argjson t "$id" '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
 }
@@ -188,25 +226,25 @@ aw_launch_tab() {
   local stay_on_caller_tab="${4:-}"
 
   local caller_pos=""
-  if [[ "$stay_on_caller_tab" == "1" && -n "${ZELLIJ:-}" ]] \
+  if [[ "$stay_on_caller_tab" == "1" ]] && aw_zellij_reachable \
      && command -v jq >/dev/null 2>&1; then
-    caller_pos=$(zellij action list-tabs --json 2>/dev/null \
+    caller_pos=$(aw_zellij action list-tabs --json 2>/dev/null \
       | jq -r '.[] | select(.active) | .position' 2>/dev/null) || caller_pos=""
   fi
 
   if [[ -z "$cmd" ]]; then
     # Interactive shell cd'd into the worktree. --cwd handles the cd; zellij
     # uses the user's default shell when no command is specified.
-    zellij action new-tab --name "$slug" --cwd "$cwd"
+    aw_zellij action new-tab --name "$slug" --cwd "$cwd"
   else
     # `--` is required before the command to stop zellij's own arg parsing.
     # `bash -ic` gives us interactive shell semantics (reads bashrc etc.) so
     # the agent command runs in the same environment the user would get.
-    zellij action new-tab --name "$slug" --cwd "$cwd" -- bash -ic "$cmd"
+    aw_zellij action new-tab --name "$slug" --cwd "$cwd" -- bash -ic "$cmd"
   fi
 
   # .position is 0-indexed; go-to-tab is 1-indexed (verified zellij 0.44.3).
   if [[ -n "$caller_pos" ]]; then
-    zellij action go-to-tab "$((caller_pos + 1))" 2>/dev/null || true
+    aw_zellij action go-to-tab "$((caller_pos + 1))" 2>/dev/null || true
   fi
 }

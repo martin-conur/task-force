@@ -467,6 +467,88 @@ dead_worker_keyed() {
   assert_output --partial "TASK_FORCE_ROLE=$(role_for issue-42)"
 }
 
+# ---------------------------------------------------------------------------
+# --session: open the tab in another zellij session (#291)
+# ---------------------------------------------------------------------------
+# task-monitor's R runs this from a monitor that may sit in a different zellij
+# session from the repo's, so the tab has to be steered into the repo's one.
+
+@test "--session opens the tab in that session, and every zellij call targets it" {
+  dead_worker issue-42
+  export STUB_ZELLIJ_LIVE_SESSIONS="rec" STUB_ZELLIJ_TABS_JSON='[]'
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --session rec
+  assert_success
+  assert_output --partial "in session 'rec'"
+  assert_stub_called zellij "-s rec action new-tab --name issue-42"
+  # The liveness lookup and the tab-id capture asked 'rec' too, never the
+  # session this ran in.
+  run grep -c -F "zellij -s rec action list-tabs --json" "$STUB_CALLS_DIR/zellij.calls"
+  assert [ "$output" -ge 2 ]
+  run grep -v -F "zellij -s rec " "$STUB_CALLS_DIR/zellij.calls"
+  assert_output ""
+}
+
+@test "--session refuses a session that is not running, and opens nothing" {
+  dead_worker issue-42
+  export STUB_ZELLIJ_LIVE_SESSIONS="other" STUB_ZELLIJ_TABS_JSON='[]'
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --session rec
+  assert_failure
+  assert_output --partial "zellij session 'rec' is not running"
+  assert_output --partial "never creates a session"
+  run stub_calls zellij
+  refute_output --partial "new-tab"
+  # Refused before the sidecar rewrite: the stale id is still where it was.
+  run cat "$WORKTREE_BASE/.issue-42.info"
+  assert_output --partial "TAB_ID=999"
+}
+
+@test "--session: the live-tab guard looks in the target session, and names it" {
+  dead_worker issue-42
+  seed_zellij_tabs issue-42
+  export STUB_ZELLIJ_LIVE_SESSIONS="rec"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --session rec
+  assert_failure
+  assert_output --partial "tab named 'issue-42' is open in session 'rec'"
+  run stub_calls zellij
+  refute_output --partial "new-tab"
+}
+
+@test "--session rebinds TAB_ID from the target session's tab list" {
+  dead_worker issue-42
+  seed_zellij_tabs issue-42
+  export STUB_ZELLIJ_LIVE_SESSIONS="rec"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --session rec --force
+  assert_success
+  run cat "$WORKTREE_BASE/.issue-42.info"
+  assert_output --partial "TAB_ID=7"
+  refute_output --partial "TAB_ID=999"
+}
+
+@test "--session works from outside zellij: the target session is what it talks to" {
+  dead_worker issue-42
+  unset ZELLIJ
+  export STUB_ZELLIJ_LIVE_SESSIONS="rec" STUB_ZELLIJ_TABS_JSON='[]'
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --session rec
+  assert_success
+  assert_stub_called zellij "-s rec action new-tab --name issue-42"
+}
+
+@test "a stray AW_ZELLIJ_SESSION in the environment does not redirect a recovery" {
+  dead_worker issue-42
+  AW_ZELLIJ_SESSION=rec AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  run stub_calls zellij
+  refute_output --partial "-s rec"
+  assert_output --partial "action new-tab --name issue-42"
+}
+
+@test "--session without a name is a usage error" {
+  dead_worker issue-42
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --session
+  assert_failure
+  assert_output --partial "--session needs a zellij session name"
+}
+
 # Write the SessionEnd payload line radio logs on an unregister, for <role> in
 # <cwd>, naming <session-id> — the shape `--resume` mines for a session id.
 log_session_end() {

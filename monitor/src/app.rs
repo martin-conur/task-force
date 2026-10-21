@@ -30,7 +30,23 @@ pub enum Action {
         tab_id: Option<String>,
         name: String,
         session: Option<String>,
+        /// A worker's tab: one that is gone can be recreated with `R`.
+        worker: bool,
     },
+    /// `R`: run `task-recreate-worker` for a worker whose tab is gone (#291).
+    Recreate(Recreate),
+}
+
+/// What `R` hands to `task-recreate-worker`: the worker, and where it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recreate {
+    pub slug: String,
+    pub repo: String,
+    /// The repo's main checkout, which the command runs from.
+    pub root: Option<String>,
+    pub loadout: Option<String>,
+    /// The repo's zellij session, which the new tab must open in.
+    pub session: Option<String>,
 }
 
 /// What [`App::offer`] did with a snapshot.
@@ -403,7 +419,7 @@ impl App {
             Key::PageUp => self.detail = Some(scroll.saturating_sub(10)),
             Key::PageDown | Key::Char(' ') => self.detail = Some(scroll.saturating_add(10)),
             Key::Enter | Key::Esc => self.detail = None,
-            Key::Char('o') | Key::Char('t') => return self.repo_key(key, now),
+            Key::Char('o') | Key::Char('t') | Key::Char('R') => return self.repo_key(key, now),
             Key::Char('a') => {
                 self.detail = None;
                 return self.repo_key(key, now);
@@ -477,9 +493,20 @@ impl App {
                             // task-reviewer's tab slug.
                             name: pr.map(|n| format!("review-pr{n}")).unwrap_or_default(),
                             session: session.and_then(|s| s.zellij_session.clone()),
+                            worker: false,
                         }
                     }
                 });
+            }
+            Key::Char('R') => {
+                let row = self.selected_overview_row()?;
+                match row {
+                    OvRow::Worker(r, i) => {
+                        let repo = &self.repos()[r];
+                        return recreate(repo, &repo.in_flight[i]);
+                    }
+                    _ => self.flash(now, NOT_A_WORKER),
+                }
             }
             Key::Char('o') => self.flash(now, "o opens an item's PR or issue: ⏎ into a repo first"),
             _ => {}
@@ -538,6 +565,13 @@ impl App {
                     _ => pm_tab(repo).unwrap_or_else(no_pm),
                 });
             }
+            Key::Char('R') => {
+                let (repo, row) = (self.current_repo()?, self.selected_row());
+                match row {
+                    Some(Row::InFlight(i)) => return recreate(repo, &repo.in_flight[i]),
+                    _ => self.flash(now, NOT_A_WORKER),
+                }
+            }
             _ => {}
         }
         None
@@ -575,7 +609,28 @@ fn worker_tab(item: &InFlight) -> Action {
             .or_else(|| session.and_then(|s| s.tab_id.clone())),
         name: item.slug.clone().unwrap_or_default(),
         session: session.and_then(|s| s.zellij_session.clone()),
+        worker: true,
     }
+}
+
+const NOT_A_WORKER: &str = "R recreates a worker whose tab is gone: select a worker";
+
+/// `R` on a worker: recreate it in its repo's zellij session, which is the
+/// PM's, else the one the worker last ran in. A worker with no slug has
+/// nothing to recreate, so no action.
+fn recreate(repo: &Repo, item: &InFlight) -> Option<Action> {
+    let slug = item.slug.clone().filter(|s| !s.is_empty())?;
+    Some(Action::Recreate(Recreate {
+        slug,
+        repo: repo.name.clone().unwrap_or_default(),
+        root: repo.root.clone(),
+        loadout: repo.loadout.clone(),
+        session: repo
+            .pm
+            .zellij_session
+            .clone()
+            .or_else(|| item.session.as_ref().and_then(|s| s.zellij_session.clone())),
+    }))
 }
 
 /// No PM session: say so rather than doing nothing.
@@ -584,6 +639,7 @@ fn no_pm() -> Action {
         tab_id: None,
         name: String::new(),
         session: None,
+        worker: false,
     }
 }
 
@@ -593,6 +649,7 @@ fn pm_tab(repo: &Repo) -> Option<Action> {
         tab_id: repo.pm.tab_id.clone(),
         name: role,
         session: repo.pm.zellij_session.clone(),
+        worker: false,
     })
 }
 
@@ -683,7 +740,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("4".into()),
                 name: "kiro-config".into(),
-                session: Some("task-force".into())
+                session: Some("task-force".into()),
+                worker: true,
             })
         );
         // A worker with no sidecar id falls back to its session's.
@@ -693,7 +751,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("7".into()),
                 name: "home-env".into(),
-                session: Some("task-force".into())
+                session: Some("task-force".into()),
+                worker: true,
             })
         );
     }
@@ -707,7 +766,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("0".into()),
                 name: "pm-task-force".into(),
-                session: Some("task-force".into())
+                session: Some("task-force".into()),
+                worker: false,
             })
         );
     }
@@ -754,7 +814,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("2".into()),
                 name: "pm-recommender-systems".into(),
-                session: Some("rec".into())
+                session: Some("rec".into()),
+                worker: false,
             })
         );
     }
@@ -866,6 +927,7 @@ pub(crate) mod tests {
             tab_id: Some("0".into()),
             name: "pm-task-force".into(),
             session: Some("task-force".into()),
+            worker: false,
         });
         assert_eq!(app.key(Key::Char('t'), now()), pm, "the repo row: its PM");
         go_to(&mut app, OvRow::Pm(0));
@@ -877,7 +939,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("4".into()),
                 name: "kiro-config".into(),
-                session: Some("task-force".into())
+                session: Some("task-force".into()),
+                worker: true,
             })
         );
         // A reviewer: its session's id and task-reviewer's tab slug.
@@ -887,7 +950,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("8".into()),
                 name: "review-pr270".into(),
-                session: Some("task-force".into())
+                session: Some("task-force".into()),
+                worker: false,
             })
         );
         // Another repo's worker names its own zellij session.
@@ -897,7 +961,8 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: Some("3".into()),
                 name: "rerank-sasrec-gate".into(),
-                session: Some("rec".into())
+                session: Some("rec".into()),
+                worker: true,
             })
         );
         // No session at all: an empty target, which goto_tab explains.
@@ -907,9 +972,109 @@ pub(crate) mod tests {
             Some(Action::GotoTab {
                 tab_id: None,
                 name: "pm-jira-repo".into(),
-                session: None
+                session: None,
+                worker: false,
             })
         );
+    }
+
+    fn recreate_of(slug: &str, repo: &str, loadout: &str, session: Option<&str>) -> Option<Action> {
+        Some(Action::Recreate(Recreate {
+            slug: slug.into(),
+            repo: repo.into(),
+            root: Some(format!("/home/you/src/{repo}")),
+            loadout: Some(loadout.into()),
+            session: session.map(str::to_string),
+        }))
+    }
+
+    #[test]
+    fn r_on_a_worker_recreates_it_in_its_repos_session() {
+        // The repo view's in-flight row, and the same row expanded.
+        let mut app = app_with(MULTI, true);
+        let tf = recreate_of("kiro-config", "task-force", "claude-gh", Some("task-force"));
+        assert_eq!(app.key(Key::Char('R'), now()), tf);
+        app.key(Key::Enter, now());
+        assert_eq!(
+            app.key(Key::Char('R'), now()),
+            tf,
+            "from the expanded item too"
+        );
+        // The overview's worker rows, each in its own repo.
+        let mut app = app_with(MULTI, false);
+        go_to(&mut app, OvRow::Worker(0, 1));
+        assert_eq!(
+            app.key(Key::Char('R'), now()),
+            recreate_of("home-env", "task-force", "claude-gh", Some("task-force"))
+        );
+        go_to(&mut app, OvRow::Worker(1, 0));
+        assert_eq!(
+            app.key(Key::Char('R'), now()),
+            recreate_of(
+                "rerank-sasrec-gate",
+                "recommender-systems",
+                "claude-local",
+                Some("rec")
+            )
+        );
+        // A repo with no PM session and a worker with none: no session, which
+        // recreate_worker refuses with a reason.
+        go_to(&mut app, OvRow::Worker(2, 0));
+        assert_eq!(
+            app.key(Key::Char('R'), now()),
+            recreate_of("kiro-config2", "jira-repo", "kiro-jira", None)
+        );
+        // The repo's session is the PM's, over a stale one the worker last ran
+        // in; with no PM session, the worker's is all there is.
+        let repos = &mut app.snapshot.as_mut().unwrap().repos;
+        repos[1].in_flight[0]
+            .session
+            .as_mut()
+            .unwrap()
+            .zellij_session = Some("old".into());
+        repos[2].in_flight[0].session = Some(crate::snapshot::Session {
+            zellij_session: Some("w".into()),
+            ..Default::default()
+        });
+        go_to(&mut app, OvRow::Worker(1, 0));
+        assert_eq!(
+            app.key(Key::Char('R'), now()),
+            recreate_of(
+                "rerank-sasrec-gate",
+                "recommender-systems",
+                "claude-local",
+                Some("rec")
+            )
+        );
+        go_to(&mut app, OvRow::Worker(2, 0));
+        assert_eq!(
+            app.key(Key::Char('R'), now()),
+            recreate_of("kiro-config2", "jira-repo", "kiro-jira", Some("w"))
+        );
+    }
+
+    #[test]
+    fn r_on_anything_but_a_worker_does_nothing() {
+        let mut app = app_with(MULTI, false);
+        for row in [OvRow::Repo(0), OvRow::Pm(0), OvRow::Reviewer(0, 0, 0)] {
+            go_to(&mut app, row);
+            app.flash = None;
+            assert_eq!(app.key(Key::Char('R'), now()), None, "{row:?}");
+            assert_eq!(app.flash.as_ref().map(|f| f.1.as_str()), Some(NOT_A_WORKER));
+        }
+        // The repo view's queued and done rows.
+        let mut app = app_with(MULTI, true);
+        let n = rows(app.current_repo().unwrap()).len();
+        for i in app.current_repo().unwrap().in_flight.len()..n {
+            app.selected = i;
+            assert_eq!(app.key(Key::Char('R'), now()), None, "row {i}");
+        }
+        // And `t` never recreates: it only targets the tab.
+        app.selected = 0;
+        assert!(matches!(
+            app.key(Key::Char('t'), now()),
+            Some(Action::GotoTab { worker: true, .. })
+        ));
     }
 
     #[test]

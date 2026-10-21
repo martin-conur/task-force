@@ -293,15 +293,24 @@ task-monitor-snapshot --local           # no forge calls: disk + the last full r
 The ratatui front end over that JSON. It opens on the repo view (In flight /
 Next / Done) inside a repo, and on the all-repos overview (`a`, or `--all`)
 outside one: one row per repo with its attention light, the signal in words,
-and the zellij session it runs in. A change under radio's state or a worktree
+and the zellij session it runs in, and under it one line per agent: the PM,
+each in-flight worker and the reviewers nested under their item, each with its
+agent, state icon and status (#287). `← you` marks the agent behind a signal:
+the PM for unread mail or a review waiting on merge, the asking worker for
+`awaiting`. A change under radio's state or a worktree
 sidecar refreshes it from disk at once (`--local`); forge state refreshes every
 45s (`--poll SECS`). A failed or slow refresh never blanks the screen: the last
 good snapshot stays up, marked `stale`. Keys: `↑↓` move, `⏎` expand (a done
 item's full PR body, scrollable) or enter a repo, `o` open the PR or issue, `t`
-jump to the item's tab (the worker's, or the PM's for a queued or done item),
-`a` toggle the overview, `q` quit. `t` stays inside the monitor's own zellij
-session, and goes to a tab only while the tab at the recorded id still bears the
-item's name, the check `task-done` makes before closing one (#260). It holds no
+jump to the item's tab (the worker's, or the PM's for a queued or done item; on
+the overview, the selected agent's), `!` show only the agents that need you,
+`a` toggle the overview, `q` quit. `t` goes to a tab only while the tab at the
+recorded id still bears the item's name, the check `task-done` makes before
+closing one (#260). A tab in another zellij session is checked the same way,
+then reached with `zellij action switch-session <session> --tab-position`: the
+client moves and the monitor keeps running in its own session, so come back
+through zellij's session manager. A failed check switches nothing and says why
+(#287). It holds no
 task-force logic: every value is a snapshot field. A loadout's
 `install.sh` builds and links it when `cargo` is on PATH, and skips it with one
 line when not (#277). Its Next section is the queue the

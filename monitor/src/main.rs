@@ -25,7 +25,8 @@ const USAGE: &str = "\
 Usage: task-monitor [--all] [--poll SECS]
 
 A real-time view of task-force work: the repo view (in flight, next, done) and
-the all-repos overview with each repo's attention light.
+the all-repos overview, which lists each repo's PM, workers and reviewers under
+its attention light and marks the agent that needs you with `← you`.
 
   --all         open on the all-repos overview (the default outside a repo)
   --poll SECS   how often to ask the forge for PR and CI state (30-600, default 45)
@@ -33,7 +34,11 @@ the all-repos overview with each repo's attention light.
   -V, --version the version
 
 Keys: ↑↓ move  ⏎ expand / enter repo  o open PR/issue  t jump to tab
-      a all repos  q quit
+      ! overview: only what needs you  a all repos  q quit
+
+t on an agent in another zellij session switches this client to that session
+and tab; task-monitor keeps running in its own session, so come back through
+zellij's session manager.
 
 Local changes (radio mail, worker state, worktree sidecars) refresh at once
 from disk; forge state refreshes every --poll seconds. The data comes from

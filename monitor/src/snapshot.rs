@@ -173,6 +173,21 @@ pub struct Attention {
 pub struct Signal {
     pub kind: Option<String>,
     pub text: Option<String>,
+    /// `unread-inbox`: the PM's unread count.
+    pub count: Option<u64>,
+    /// `review-waiting-merge`: the PRs whose review waits on the PM.
+    #[serde(deserialize_with = "numbers")]
+    pub prs: Vec<u64>,
+    /// `worker-awaiting`: the workers asking.
+    pub workers: Vec<AwaitingWorker>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AwaitingWorker {
+    pub role: Option<String>,
+    pub slug: Option<String>,
+    pub last_heartbeat: Option<String>,
 }
 
 /// Accept a string, a number or null where the schema names a string. A ref
@@ -184,6 +199,22 @@ fn scalar<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
         serde_json::Value::Number(n) => Some(n.to_string()),
         serde_json::Value::Bool(b) => Some(b.to_string()),
         _ => None,
+    })
+}
+
+/// A list of numbers, where an entry may come as a string (the collector
+/// passes through a PR it could not read as a number). Others are dropped.
+fn numbers<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|v| match v {
+                serde_json::Value::Number(n) => n.as_u64(),
+                serde_json::Value::String(s) => s.parse().ok(),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     })
 }
 
@@ -224,6 +255,22 @@ mod tests {
         assert_eq!(item.reference.as_deref(), Some("42"));
         assert_eq!(item.tab_id.as_deref(), Some("3"));
         assert!(snap.repos[0].pm.role.is_none());
+    }
+
+    #[test]
+    fn reads_each_signal_kinds_own_fields() {
+        let snap = parse(
+            r#"{"schema":1,"repos":[{"attention":{"active":true,"signals":[
+                {"kind":"unread-inbox","count":2,"text":"✉ 2 unread"},
+                {"kind":"review-waiting-merge","prs":[270,"271","x"]},
+                {"kind":"worker-awaiting","workers":[{"role":"worker-r-a","slug":"a"}]}]}}]}"#,
+        )
+        .unwrap();
+        let s = &snap.repos[0].attention.signals;
+        assert_eq!(s[0].count, Some(2));
+        assert_eq!(s[1].prs, vec![270, 271]);
+        assert_eq!(s[2].workers[0].slug.as_deref(), Some("a"));
+        assert!(s[0].workers.is_empty() && s[2].prs.is_empty());
     }
 
     #[test]

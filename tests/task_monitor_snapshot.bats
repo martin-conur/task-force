@@ -11,6 +11,9 @@ bats_load_library bats-assert
 
 load helpers/common
 
+# --separate-stderr, for the skipped-repo warnings (#296).
+bats_require_minimum_version 1.5.0
+
 SNAP="$REPO_ROOT_REAL/bin/task-monitor-snapshot"
 
 setup() {
@@ -702,6 +705,47 @@ project_page() {
   snap --all
   assert_equal "$(jq -r '[.repos[].name] | join(" ")' <<<"$output")" "$NAME $other"
   assert_equal "$(jq -r --arg n "$other" '.repos[] | select(.name == $n) | .attention.signals[0].kind' <<<"$output")" worker-awaiting
+}
+
+# A repo whose per-repo document comes out empty or not an object is skipped
+# with a warning, not appended (#296). Empty is jq 1.6's own failure shape: it
+# exits 0 having printed nothing, and `jq -e .` passed that file there. A jq
+# shim answers the assembly call for OTHER_REPO's name only; every other call
+# is the real jq.
+_all_with_broken_other() {
+  local payload="$1" real_jq shim
+  real_jq=$(command -v jq)
+  OTHER_REPO=$(mktemp -d)
+  git -C "$OTHER_REPO" init -q -b main
+  git -C "$OTHER_REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  local other; other=$(basename "$OTHER_REPO" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+  printf 'ROLE=pm-%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\n' "$other" "$OTHER_REPO" "$other" "$(ago 60)" \
+    > "$SESS/pm-$other.info"
+  shim=$(mktemp -d "$BATS_TEST_TMPDIR/jqshim.XXXX")
+  cat > "$shim/jq" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" --arg name $other "*monitor-assemble.jq*) printf '%s' '$payload'; exit 0 ;;
+esac
+exec "$real_jq" "\$@"
+SHIM
+  chmod +x "$shim/jq"
+  run --separate-stderr env PATH="$shim:$PATH" /bin/bash -c 'cd "$1" && shift && /bin/bash "$@"' _ "$MAIN_REPO" "$SNAP" --all
+}
+
+@test "--all skips a repo whose document came out empty, and says so" {
+  _all_with_broken_other ''
+  assert_success
+  assert_equal "$(jq -r '[.repos[].name] | join(" ")' <<<"$output")" "$NAME"
+  assert [ -n "$(grep -E "skipped .*$(basename "$OTHER_REPO"): its snapshot failed" <<<"$stderr")" ]
+}
+
+@test "--all skips a repo whose document is not an object" {
+  _all_with_broken_other '"oops"'
+  assert_success
+  assert_equal "$(jq -r '[.repos[] | type] | join(" ")' <<<"$output")" object
+  assert_equal "$(jq -r '[.repos[].name] | join(" ")' <<<"$output")" "$NAME"
+  assert [ -n "$(grep -E "skipped .*$(basename "$OTHER_REPO"): its snapshot failed" <<<"$stderr")" ]
 }
 
 @test "the description cache keeps only refs a run still looks up" {

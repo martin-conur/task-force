@@ -46,17 +46,19 @@ aw_zellij_reachable() {
   [[ -n "${ZELLIJ:-}" || -n "${AW_ZELLIJ_SESSION:-}" ]]
 }
 
-# rc 0 when zellij session <session> is running: its list-tabs answers with a
-# JSON array. A session that is not running answers with plain text and exit
-# 0, so the exit status alone proves nothing. Without jq it cannot tell, and
-# says no.
-# True when stdin is exactly one JSON array. Slurped, because `jq -e` on EMPTY
-# input exits 0 on jq 1.6 (4 on 1.7+): an empty list-tabs answer would pass as
-# an array there (#296). Slurping turns empty input into `[]`, false on both.
+# True when stdin is exactly one JSON array: a stream of several values fails
+# even if the last is an array, as does empty input. Slurped, because `jq -e`
+# on EMPTY input exits 0 on jq 1.6 (4 on 1.7+): an empty list-tabs answer would
+# pass as an array there (#296). Slurping turns empty input into `[]`, false on
+# both.
 aw_jq_is_array() {
   jq -se 'length == 1 and (.[0] | type == "array")' >/dev/null 2>&1
 }
 
+# rc 0 when zellij session <session> is running: its list-tabs answers with a
+# JSON array. A session that is not running answers with plain text and exit
+# 0, so the exit status alone proves nothing. Without jq it cannot tell, and
+# says no.
 aw_zellij_session_running() {
   local session="$1"
   [[ -n "$session" ]] || return 1

@@ -34,11 +34,15 @@ jobs:
         with:
           submodules: recursive
 
+      # The sha256 is jqlang's own, from sig/v1.6/sha256sum.txt in the jq repo
+      # (the 2018 release assets carry no GitHub digest).
       - name: Install jq 1.6
         run: |
           mkdir -p "$RUNNER_TEMP/jq16"
           curl -fsSL -o "$RUNNER_TEMP/jq16/jq" \
             https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64
+          echo "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44  $RUNNER_TEMP/jq16/jq" \
+            | sha256sum -c -
           chmod +x "$RUNNER_TEMP/jq16/jq"
           echo "$RUNNER_TEMP/jq16" >> "$GITHUB_PATH"
 

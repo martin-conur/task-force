@@ -218,14 +218,14 @@ _repo_roots() {
   } | awk 'NF && !seen[$0]++'
 }
 
-# The loadout a repo runs: its one workflow doc, else what its PM registered
-# with. Empty when neither says — the repo is still described, with the default
-# tracker hooks.
+# The loadout a repo runs: what detection would pick (its one workflow doc, or
+# the active assistant's when both are installed, #293), else what its PM
+# registered with. Empty when neither says — the repo is still described, with
+# the default tracker hooks.
 _repo_impl() {
-  local root="$1" name="$2" matches
-  matches=$(aw_detect_matches "$root")
-  if [[ -n "$matches" && $(printf '%s\n' "$matches" | wc -l) -eq 1 ]]; then
-    printf '%s' "$matches"
+  local root="$1" name="$2" impl
+  if impl=$(aw_resolve_impl_in "$root"); then
+    printf '%s' "$impl"
     return 0
   fi
   _field "$SESSIONS_DIR/pm-$name.info" LOADOUT

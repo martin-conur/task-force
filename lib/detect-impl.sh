@@ -17,12 +17,21 @@
 #   aw_collect_matches <root> [<pin>]  -> populates AW_MATCHES; 0 or many is fine
 #   aw_require_configured <root> <pin> -> refuses a pin naming an impl that is not
 #                                         configured in <root>
+#   aw_parse_agent_flag         -> strips --agent out of AW_REMAINING_ARGS into
+#                                  AW_PARSED_AGENT (the launchers only)
+#   aw_active_assistant <root>  -> the local active-assistant setting, or nothing
+#   aw_dual_tracker <impl>...   -> the tracker two-or-more impls share, or fails
+#   aw_resolve_impl_in <root>   -> the impl detection would pick, quietly
 #
 # Resolution order for the impl:
 #   1. --impl <name> flag (consumed by aw_parse_impl_flag — not passed through)
 #   2. AW_IMPL environment variable
 #   3. Auto-detect from the presence of a workflow doc in the current git repo.
-#      Single match -> that impl. Zero or >1 matches -> error.
+#      --agent <agent> (launchers only) keeps the one match on that assistant.
+#      Otherwise a single match -> that impl. Two matches on ONE tracker (both
+#      assistants installed, #293) -> the local active assistant,
+#      `git config task-force.assistant`, picks one. Zero matches, matches on
+#      different trackers, or a dual repo with no active assistant -> error.
 
 # shellcheck disable=SC2034  # AW_PARSED_IMPL / AW_REMAINING_ARGS / AW_MATCHES are used by callers
 
@@ -212,39 +221,167 @@ aw_require_configured() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Both assistants installed, one active (#293)
+# ---------------------------------------------------------------------------
+#
+# claude's artifacts live under .claude/ and kiro's under .kiro/, so the two
+# loadouts on one tracker never collide on disk. The only thing that stopped
+# them coexisting was detection: two workflow docs are a multi-match. Which
+# assistant a person is driving today is a per-person, per-moment choice, so it
+# lives in the repo's *local* git config rather than in a tracked file — a switch
+# (`task-config use`) changes no file anyone commits. Linked worktrees share that
+# config, so a worker's worktree resolves the way its main checkout does.
+AW_ACTIVE_ASSISTANT_KEY="task-force.assistant"
+
+# aw_active_assistant <root> -> the active assistant recorded for <root>, or
+# nothing. Never fails: an unset key is the normal state of a single-loadout repo.
+aw_active_assistant() {
+  git -C "$1" config --get "$AW_ACTIVE_ASSISTANT_KEY" 2>/dev/null || true
+}
+
+# aw_dual_tracker <impl>... -> the tracker every impl shares, when there are two
+# or more of them; fails otherwise. Two impls on one tracker can only differ by
+# assistant, which is the one multi-match the active setting may resolve —
+# claude-gh beside claude-notion is still a repo on two trackers, and refused.
+aw_dual_tracker() {
+  (($# >= 2)) || return 1
+  local tracker="${1##*-}" m
+  for m in "$@"; do
+    [[ "${m##*-}" == "$tracker" ]] || return 1
+  done
+  printf '%s\n' "$tracker"
+}
+
+# aw_parse_agent_flag -> moves `--agent <agent>` out of AW_REMAINING_ARGS into
+# AW_PARSED_AGENT. Called after aw_parse_impl_flag, and only by the launchers
+# (task-work, task-pm, task-reviewer, task-recreate-worker): a per-launch
+# override means "this one session on the other assistant", which says nothing
+# to task-done or task-board, whose behaviour has no agent axis.
+aw_parse_agent_flag() {
+  AW_PARSED_AGENT=""
+  local rest=() a
+  set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+  while [[ $# -gt 0 ]]; do
+    a="$1"
+    case "$a" in
+      --agent)
+        [[ $# -ge 2 && -n "$2" ]] || { echo "Error: --agent requires a value ($(aw_all_agents | tr '\n' ' ' | sed 's/ *$//'))" >&2; return 1; }
+        AW_PARSED_AGENT="$2"; shift 2 ;;
+      --agent=*)
+        AW_PARSED_AGENT="${a#--agent=}"; shift
+        [[ -n "$AW_PARSED_AGENT" ]] || { echo "Error: --agent requires a value" >&2; return 1; } ;;
+      --)
+        rest+=("$@"); break ;;
+      *)
+        rest+=("$a"); shift ;;
+    esac
+  done
+  AW_REMAINING_ARGS=(${rest[@]+"${rest[@]}"})
+}
+
+# _aw_resolve <root> <agent> <quiet>
+# The repo-detection half of aw_detect_impl: everything after --impl / AW_IMPL
+# have been ruled out. Prints the impl, or explains (unless <quiet>) and fails.
+_aw_resolve() {
+  local repo_root="$1" agent="$2" quiet="${3:-}"
+  local matches=() _m
+  while IFS= read -r _m; do
+    [[ -n "$_m" ]] && matches+=("$_m")
+  done < <(aw_detect_matches "$repo_root")
+
+  _aw_say() { [[ -n "$quiet" ]] || echo "$@" >&2; }
+
+  if [[ -n "$agent" ]]; then
+    if ! _aw_list_has "$agent" "$(aw_all_agents)"; then
+      _aw_say "Error: unknown agent '$agent' — known: $(aw_all_agents | tr '\n' ' ' | sed 's/ *$//')"
+      return 1
+    fi
+    # --agent only picks between two loadouts on one tracker. Loadouts on
+    # different trackers stay refused, so fall through to that refusal below.
+    if ((${#matches[@]} < 2)) || aw_dual_tracker "${matches[@]}" >/dev/null; then
+      local picked=()
+      for _m in ${matches[@]+"${matches[@]}"}; do
+        [[ "${_m%%-*}" == "$agent" ]] && picked+=("$_m")
+      done
+      case "${#picked[@]}" in
+        1) printf '%s\n' "${picked[0]}"; return 0 ;;
+        0)
+          _aw_say "Error: --agent $agent: no $agent loadout is configured in $repo_root."
+          _aw_say "       configured here: $( ((${#matches[@]})) && printf '%s ' "${matches[@]}" | sed 's/ *$//' || printf 'none')"
+          _aw_say "       Install it beside the current one: task-config add assistant $agent"
+          return 1 ;;
+        *)
+          _aw_say "Error: --agent $agent matches ${#picked[@]} loadouts in $repo_root:"
+          [[ -n "$quiet" ]] || printf '  - %s\n' "${picked[@]}" >&2
+          _aw_say "Pass --impl <name> to pick one."
+          return 1 ;;
+      esac
+    fi
+  fi
+
+  case "${#matches[@]}" in
+    0)
+      _aw_say "Error: no agentic-workflow impl configured in $repo_root."
+      _aw_say "Run: task-init <impl>  (e.g. task-init kiro-notion)"
+      return 1 ;;
+    1)
+      printf '%s\n' "${matches[0]}"; return 0 ;;
+  esac
+
+  local tracker active
+  if tracker=$(aw_dual_tracker "${matches[@]}"); then
+    active=$(aw_active_assistant "$repo_root")
+    if [[ -n "$active" ]] && _aw_list_has "$active-$tracker" "$(printf '%s\n' "${matches[@]}")"; then
+      printf '%s\n' "$active-$tracker"
+      return 0
+    fi
+    _aw_say "Error: multiple agentic-workflow impls detected in $repo_root:"
+    [[ -n "$quiet" ]] || printf '  - %s\n' "${matches[@]}" >&2
+    if [[ -n "$active" ]]; then
+      _aw_say "Both assistants are installed on $tracker, but the active one, '$active'"
+      _aw_say "(git config $AW_ACTIVE_ASSISTANT_KEY), is not one of them."
+    else
+      _aw_say "Both assistants are installed on $tracker and none is active here."
+    fi
+    _aw_say "Pick one: task-config use <$(printf '%s\n' "${matches[@]}" | sed 's/-.*//' | paste -sd'|' -)>"
+    _aw_say "(or pass --agent / --impl, or set AW_IMPL, for a single call)."
+    return 1
+  fi
+
+  _aw_say "Error: multiple agentic-workflow impls detected in $repo_root:"
+  [[ -n "$quiet" ]] || printf '  - %s\n' "${matches[@]}" >&2
+  _aw_say "Pass --impl <name> or set AW_IMPL to pick one."
+  return 1
+}
+
+# aw_resolve_impl_in <root> -> the impl aw_detect_impl would pick from <root>'s
+# workflow docs and active setting, printing nothing on failure. For readers that
+# describe a repo rather than act in it (task-monitor-snapshot).
+aw_resolve_impl_in() { _aw_resolve "$1" "" quiet; }
+
 # Detect impl by inspecting the current git repo. Echoes the impl name on
 # success, returns non-zero (and prints to stderr) on any error.
 #
 # Usage:
 #   impl=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+#   impl=$(aw_detect_impl "$AW_PARSED_IMPL" "$AW_PARSED_AGENT") || exit 1
 aw_detect_impl() {
-  local flag_impl="${1:-}"
+  local flag_impl="${1:-}" agent="${2:-}"
   local impl="$flag_impl"
   [[ -z "$impl" ]] && impl="${AW_IMPL:-}"
+
+  if [[ -n "$impl" && -n "$agent" && "${impl%%-*}" != "$agent" ]]; then
+    echo "Error: --agent $agent conflicts with loadout '$impl' (from --impl / AW_IMPL)." >&2
+    echo "       Pass one or the other." >&2
+    return 1
+  fi
 
   if [[ -z "$impl" ]]; then
     local repo_root
     repo_root=$(git rev-parse --show-toplevel 2>/dev/null) \
       || { echo "Error: not in a git repo" >&2; return 1; }
-
-    local matches=() _m
-    while IFS= read -r _m; do
-      [[ -n "$_m" ]] && matches+=("$_m")
-    done < <(aw_detect_matches "$repo_root")
-
-    case "${#matches[@]}" in
-      0)
-        echo "Error: no agentic-workflow impl configured in $repo_root." >&2
-        echo "Run: task-init <impl>  (e.g. task-init kiro-notion)" >&2
-        return 1 ;;
-      1)
-        impl="${matches[0]}" ;;
-      *)
-        echo "Error: multiple agentic-workflow impls detected in $repo_root:" >&2
-        printf '  - %s\n' "${matches[@]}" >&2
-        echo "Pass --impl <name> or set AW_IMPL to pick one." >&2
-        return 1 ;;
-    esac
+    impl=$(_aw_resolve "$repo_root" "$agent") || return 1
   fi
 
   if ! _aw_list_has "$impl" "$(aw_all_impls)"; then

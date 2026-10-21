@@ -94,6 +94,9 @@ EOF
                           TASK_WORK_TRUST_ALL=0 / false / no does the same.
 EOF
   cat <<'EOF'
+      --agent AGENT       Launch on this assistant (claude or kiro) instead of
+                          the repo's active one, for this one launch. Both
+                          loadouts must be installed (task-config add, #293).
       --no-auto-submit    Keep the Enter gate on radio wakes into the reviewer.
                           Auto-submit is on by default and independent of the
                           permission flags (#246, #146): --no-auto or
@@ -123,8 +126,10 @@ EOF
 
 # ---------------- impl resolution ----------------
 aw_parse_impl_flag "$@" || exit 1
+# --agent: this review on the other installed assistant, for one launch (#293).
+aw_parse_agent_flag || exit 1
 
-if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL"); then
+if ! IMPL=$(aw_detect_impl "$AW_PARSED_IMPL" "$AW_PARSED_AGENT"); then
   # No impl resolvable (outside a git repo / no workflow doc) — aw_detect_impl
   # already printed why. Still honor an explicit help request so
   # `task-reviewer --help` works anywhere.

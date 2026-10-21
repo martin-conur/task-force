@@ -66,6 +66,8 @@
 #                                        loadout switch's)
 #
 # Honours: LA_PURGE=1 (see above)
+#          LA_REMOVING="<loadout> ..." — every loadout this run removes, in order
+#          (see _la_shared_owner)
 
 _LA_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The task-force checkout, one level up from lib/. Removal needs it to compare an
@@ -455,6 +457,43 @@ _la_dir_empty_after() {
   return 0
 }
 
+# _la_shared_owner <root> <loadout>
+#
+# Whether this walk is the one that handles the artifacts a loadout shares with
+# its sibling on the same tracker (#293). Both assistants can be installed on one
+# tracker, and on the *-local loadouts they then share the tasks/ scaffolding and
+# the .gitignore entry. Prints why not, and fails, when this walk must leave them:
+#
+#   - a sibling on the same tracker stays configured: it still uses them, so
+#     removing one assistant of a dual repo cannot take its partner's backlog
+#     scaffolding with it;
+#   - a sibling earlier in $LA_REMOVING is removed by this same run: that walk
+#     already handled them, and handling them twice would print every line twice
+#     in a plan (where nothing has gone yet) and the backlog count twice in a run.
+#
+# LA_REMOVING unset means "only this loadout", which is what a `set` passes.
+_la_shared_owner() {
+  local root="$1" loadout="$2" tracker m removing
+  tracker=$(la_tracker "$loadout")
+  removing=$(printf '%s' "${LA_REMOVING:-$loadout}" | tr ' ' '\n')
+  while IFS= read -r m; do
+    [[ -n "$m" ]] || continue
+    [[ "$m" == "$loadout" ]] && break
+    if [[ "$(la_tracker "$m")" == "$tracker" ]]; then
+      printf 'handled with %s' "$m"
+      return 1
+    fi
+  done <<<"$removing"
+  while IFS= read -r m; do
+    [[ -n "$m" && "$m" != "$loadout" ]] || continue
+    [[ "$(la_tracker "$m")" == "$tracker" ]] || continue
+    _aw_list_has "$m" "$removing" && continue
+    printf '%s still uses them' "$m"
+    return 1
+  done < <(aw_detect_matches "$root")
+  return 0
+}
+
 la_plan()   { _la_walk "$1" "$2" plan; }
 la_remove() { _la_walk "$1" "$2" apply; }
 
@@ -536,15 +575,30 @@ _la_walk() {
     esac
   done
 
+  # The *-local tracker artifacts are shared by both assistants on that tracker;
+  # see _la_shared_owner for when this walk must leave them alone.
+  local shared=true why=""
+  if [[ "$tracker" == local ]] && ! why=$(_la_shared_owner "$root" "$loadout"); then
+    shared=false
+    if [[ "$why" == *"still uses them" ]]; then
+      if [[ "$mode" == plan ]]; then
+        printf '  would keep tasks/ scaffolding and the .gitignore entry — %s\n' "$why"
+      else
+        printf '  kept tasks/ scaffolding and the .gitignore entry — %s\n' "$why"
+      fi
+    fi
+  fi
+
   # 3. The inert pre-#218 .kiro/hooks/*.json, and the *-local tasks/ scaffolding.
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
+    [[ "$shared" == true || "$rel" != tasks/* ]] || continue
     if [[ "$mode" == apply ]]; then rm -f "$root/$rel"; fi
     removed+="$rel"$'\n'
     printf '  %s %s\n' "$verb" "$rel"
   done < <(_la_other_owned_paths "$root" "$loadout")
 
-  if [[ "$tracker" == local ]]; then
+  if [[ "$tracker" == local && "$shared" == true ]]; then
     local backlog
     backlog=$(_la_backlog_count "$root")
     if (( backlog > 0 )) && _la_purging; then
@@ -581,7 +635,7 @@ _la_walk() {
 
   # The *-local loadouts also append .git/task-force/ to .gitignore, on both
   # assistants.
-  if [[ "$tracker" == local ]]; then
+  if [[ "$tracker" == local && "$shared" == true ]]; then
     if _la_strip_line "$root" .gitignore '.git/task-force/' "$mode" \
          ".git/task-force/ entry"; then
       removed+=".gitignore"$'\n'

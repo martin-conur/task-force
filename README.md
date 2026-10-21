@@ -256,7 +256,7 @@ No loadout configured in /path/to/repo; run task-init to pick one:
 ```
 
 ```
-$ task-config show                 # a repo with two
+$ task-config show                 # a repo with two, on different trackers
 Ambiguous: 2 loadouts are configured in /path/to/repo.
 Every task-force dispatcher refuses in this state.
   … a full block for each match …
@@ -308,6 +308,35 @@ Error: there is no 'kiro-jira' loadout.
        The assistant × tracker grid has one hole: jira is not
        available on kiro (#92). Everything else exists.
 ```
+
+### Both assistants, one active: `task-config add` / `use` / `sync` (#293)
+
+Some repos move back and forth between claude and kiro. Before this, each move was a `set assistant`, which removes one assistant's files and installs the other's, so every switch dirtied the repo for a choice that is really per person and per moment. The two assistants' files never collide (`.claude/…` against `.kiro/…`). Only detection kept them apart, because two workflow docs read as an ambiguous repo. So now both can be installed and committed once, and the choice between them lives in local, untracked state:
+
+```bash
+task-config add assistant kiro   # install kiro-<tracker> beside claude-<tracker>, settings carried
+task-config use kiro             # git config task-force.assistant kiro: no tracked file changes
+task-config use claude           # and back
+task-config sync                 # make the two docs' tracker settings agree again
+```
+
+`add` keeps the assistant you are on active, so nothing changes until you `use` the other. A clone that has both committed but no local choice yet is refused by every dispatcher, with a pointer to `task-config use`. Linked worktrees share the repo's git config, so a worker's worktree resolves the same way its main checkout does.
+
+**Detection precedence**, highest first:
+
+1. `--impl <name>`
+2. `$AW_IMPL`
+3. a launcher's `--agent <claude|kiro>`: `task-work`, `task-pm`, `task-reviewer`, `task-recreate-worker`
+4. the active assistant, which resolves a multi-match **only** when the matches share one tracker and differ by assistant
+5. a single match
+
+Two loadouts on different trackers stay refused, whatever the active assistant says. `--agent` is a per-launch override: it puts one worker, PM or reviewer on the other assistant without flipping the repo. `--agent` that contradicts `--impl` / `$AW_IMPL` is refused rather than dropped. Mixed workers in one repo work because radio records the agent per role (`<role>.agent`), and that is what wakes and `task-monitor` read. `task-done` has no agent axis. `task-work` also writes `AGENT=` into the worktree's `.<slug>.info` sidecar, so `task-recreate-worker` without `--agent` relaunches a worker on the assistant it was launched on, not on whichever one is active now. It falls back to the repo's answer when that assistant is no longer installed.
+
+**Drift.** The tracker settings are written into both workflow docs. `add` and `set` keep them identical, but a hand edit to one leaves the two assistants pointed at different boards. `task-config show` compares them on a dual repo, names every field that differs with both values, and exits non-zero. There is one way to resolve it: `task-config sync`. The active assistant's doc wins, or `sync --from <assistant>` picks the other one. Only the other doc is re-rendered, through its own `task-init --force --workflow` with the settings as flags.
+
+**`set` and `task-remove` on a dual repo.** `set assistant A` keeps A and removes the other. `set loadout` on another tracker removes both and installs the one named. `set tracker` is refused with the two commands that do it (`set loadout <a>-<t>`, then `add assistant`), because it would have to reinstall both. `task-remove` removes both, as it removes every detected loadout, and clears the active-assistant setting. On the local tracker the pair shares the `tasks/` scaffolding and the `.gitignore` entry, so those stay while either loadout does and go with the last.
+
+jira cannot be dual until a kiro-jira loadout exists (#92): `add assistant kiro` on a claude-jira repo is refused with the same message as `set`.
 
 ### What a switch removes, and what it leaves alone
 
@@ -1336,6 +1365,7 @@ bug survived.
 | `task_board.bats`                 | `bin/task-board` rendering — frontmatter parsing, sidecar overlay, `_board.md` regen |
 | `task_board_dispatcher.bats`      | `bin/task-board` detection — local-loadout render, `--repo`-driven detection, refusal on gh/jira/notion |
 | `task_config.bats`                | `bin/task-config` — `show` on all seven loadouts + the zero/ambiguous states, `set` round trips, user-content survival, `--dry-run` inertness |
+| `dual_assistant.bats`             | both assistants on one tracker (#293) — `task-config add` / `use` / `sync`, detection precedence, drift, `set` / `task-remove` on a dual repo, the launchers' `--agent` |
 | `task_remove.bats`                | `bin/task-remove` — zero artifacts left on all seven loadouts (asserted against `la_owned_paths`), user-content survival, `--purge`, the ci-guard hook and its `commit-msg.local` restore, the global install left alone, `--dry-run` inertness |
 | `task_done.bats`                  | Canonical `bin/task-done` — cleanup, PR section, guards; pinned per loadout with `AW_IMPL` so each tracker module is proven to have actually *run* |
 | `radio_home_isolation.bats`       | The suite's own radio-home isolation — nothing lands under `$HOME/.task-force` |

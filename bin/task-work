@@ -36,7 +36,10 @@ source "$AW_ROOT/lib/repo-name.sh"
 source "$AW_ROOT/lib/ci-guard.sh"
 
 aw_parse_impl_flag "$@" || exit 1
-IMPL=$(aw_detect_impl "$AW_PARSED_IMPL") || exit 1
+# --agent: this one worker on the other installed assistant, without flipping
+# the repo's active one (#293).
+aw_parse_agent_flag || exit 1
+IMPL=$(aw_detect_impl "$AW_PARSED_IMPL" "$AW_PARSED_AGENT") || exit 1
 
 # Compose the loadout. Resolve first, source second — see bin/task-done for why
 # `source "$(aw_tracker_module …)" || exit 1` is not equivalent: the command
@@ -85,6 +88,9 @@ Options:
                       processed without anyone pressing Enter in the worker's
                       tab. This is the default (#254); the flag is accepted so
                       an explicit launch line still reads as intended.
+      --agent AGENT   Launch this worker on AGENT (claude or kiro) instead of
+                      the repo's active assistant, without changing it. Both
+                      loadouts must be installed (task-config add, #293).
       --no-auto-submit
                       Keep the Enter gate on radio wakes: "radio check" is typed
                       into the prompt box and waits for a keypress. Use this when
@@ -213,7 +219,10 @@ aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
-printf 'BASE_BRANCH=%s\nSLUG=%s\n%s=%s\n' "$BASE_BRANCH" "$SLUG" "$INFO_KEY" "$TASK_REF" > "$INFO_FILE"
+# AGENT is the assistant this worker runs on. In a repo with both installed it
+# can differ from the repo's active one (--agent, #293), and a recovery has to
+# relaunch the worker it lost rather than whichever assistant is active now.
+printf 'BASE_BRANCH=%s\nSLUG=%s\n%s=%s\nAGENT=%s\n' "$BASE_BRANCH" "$SLUG" "$INFO_KEY" "$TASK_REF" "$AGENT" > "$INFO_FILE"
 
 aw_tracker_post_worktree "$REPO_ROOT" "$SLUG" "$BRANCH" "$WORKTREE_DIR" "$TASK_REF"
 

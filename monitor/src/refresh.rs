@@ -117,6 +117,9 @@ impl Scheduler {
 #[derive(Debug, Clone)]
 pub struct Collector {
     pub program: PathBuf,
+    /// Arguments that go before the mode flags. Empty outside tests, which
+    /// run their scripts as `/bin/sh <script>` (#283).
+    pub lead: Vec<PathBuf>,
 }
 
 impl Collector {
@@ -124,7 +127,10 @@ impl Collector {
     /// checkout this binary was built in, else whichever is on PATH.
     pub fn locate() -> Self {
         if let Some(p) = std::env::var_os("TASK_MONITOR_SNAPSHOT").filter(|p| !p.is_empty()) {
-            return Collector { program: p.into() };
+            return Collector {
+                program: p.into(),
+                lead: Vec::new(),
+            };
         }
         let sibling = std::env::current_exe()
             .ok()
@@ -136,6 +142,7 @@ impl Collector {
             });
         Collector {
             program: sibling.unwrap_or_else(|| "task-monitor-snapshot".into()),
+            lead: Vec::new(),
         }
     }
 
@@ -156,6 +163,7 @@ impl Collector {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mut child = Command::new(&self.program)
+            .args(&self.lead)
             .args(Self::args(mode))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -488,12 +496,16 @@ mod tests {
         assert!(t.learn(&snap).is_empty());
     }
 
+    /// Run through `/bin/sh` rather than exec'd: on Linux, exec'ing a file
+    /// just written fails with ETXTBSY while a parallel test's fork still
+    /// holds its write fd (#283).
     fn script(dir: &Path, body: &str) -> Collector {
-        use std::os::unix::fs::PermissionsExt;
         let p = dir.join("snap");
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Collector { program: p }
+        std::fs::write(&p, format!("{body}\n")).unwrap();
+        Collector {
+            program: "/bin/sh".into(),
+            lead: vec![p],
+        }
     }
 
     fn tmpdir(tag: &str) -> PathBuf {
@@ -559,8 +571,8 @@ mod tests {
         let body = format!(
             "printf '{{\"schema\":1,\"repos\":[],\"pad\":\"'; i=0; while [ $i -lt 400 ]; do printf '{pad}'; i=$((i+1)); done; printf '\"}}'"
         );
-        assert!(script(&d, &body)
+        script(&d, &body)
             .run(Mode::Full, Duration::from_secs(10))
-            .is_ok());
+            .unwrap();
     }
 }

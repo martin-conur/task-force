@@ -18,7 +18,8 @@ set -euo pipefail
 #     read directly: session files (KEY=VALUE), message frontmatter;
 #   - task-work's <worktree-base>/.<slug>.info sidecars define what is in
 #     flight. A sidecar, not a fresh heartbeat: a resumed or roleless session is
-#     still in flight.
+#     still in flight. But only while its worktree is live (#286): a sidecar
+#     whose worktree was removed behind task-done's back is an orphan.
 #
 # Two modes. A full run asks the forge (`gh`) and caches what it learned under
 # ${TASK_FORCE_HOME}/monitor/<repo>/. `--local` asks nothing: `gh` is shadowed
@@ -257,6 +258,31 @@ _cache_merged_pr() {
   printf '%s\n' "$json" | _atomic_write "$dir/$n.json"
 }
 
+# Every worktree git has registered for repo <root>, one canonical path per
+# line. Fails when git cannot answer, so the caller can tell "no worktrees"
+# from "could not ask".
+_live_worktrees() {
+  local porcelain line
+  porcelain=$(git -C "$1" worktree list --porcelain 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) (cd -P "${line#worktree }" 2>/dev/null && pwd -P) || true ;;
+    esac
+  done <<<"$porcelain"
+}
+
+# Why the sidecar for worktree <dir> is an orphan, or nothing when it is live:
+# `missing` (no directory) or `unregistered` (a directory git does not list as a
+# worktree). <live> is _live_worktrees' output; with <asked> 0 git could not
+# answer, and only the directory is checked rather than hide live work.
+_orphan_reason() {
+  local dir="$1" live="$2" asked="$3" real
+  [[ -d "$dir" ]] || { printf missing; return 0; }
+  [[ "$asked" == 1 ]] || return 0
+  real=$(cd -P "$dir" && pwd -P)
+  grep -Fxq -- "$real" <<<"$live" || printf unregistered
+}
+
 # PR object for the monitor: the forge's fields plus the plain-text summary.
 _pr_object() {
   local pr_json="$1" summary
@@ -315,17 +341,28 @@ _snapshot_repo() {
   fi
   merged_index=$(jq -c 'if . == null then null else sort_by(.mergedAt) | reverse end' <<<"$merged_index")
 
-  # --- in flight: one sidecar per worktree. Reviewers' sidecars carry
-  # PR_NUMBER=; they attach to their PR's item instead of being one.
+  # --- in flight: one sidecar per live worktree. Reviewers' sidecars carry
+  # PR_NUMBER=; they attach to their PR's item instead of being one. A sidecar
+  # whose worktree is gone is an orphan, reported but never in flight (#286):
+  # any removal that bypasses task-done leaves one behind, and they pile up.
   # issues_new collects what the tracker said this run; refs_seen every ref this
   # run looked up, so the cache keeps only descriptions something still shows.
   local info slug ref key described src item pr_json n issues_new='{}' refs_seen=''
+  local live_wts wt_asked=1 reason
+  live_wts=$(_live_worktrees "$root") || wt_asked=0
   : > "$w/inflight.ndjson"
   : > "$w/reviewers.ndjson"
+  : > "$w/orphans.ndjson"
   for info in "$wtbase"/.*.info; do
     [[ -f "$info" ]] || continue
     slug=$(_field "$info" SLUG)
     [[ -n "$slug" ]] || { slug=$(basename "$info" .info); slug="${slug#.}"; }
+    reason=$(_orphan_reason "$wtbase/$slug" "$live_wts" "$wt_asked")
+    if [[ -n "$reason" ]]; then
+      jq -cn --arg slug "$slug" --arg info "$info" --arg reason "$reason" \
+        '{slug: $slug, info_path: $info, reason: $reason}' >> "$w/orphans.ndjson"
+      continue
+    fi
     n=$(_field "$info" PR_NUMBER)
     if [[ -n "$n" ]]; then
       jq -cn --arg slug "$slug" --arg pr "$n" '{slug: $slug, pr: $pr}' >> "$w/reviewers.ndjson"
@@ -465,6 +502,7 @@ _snapshot_repo() {
     --slurpfile messages "$WORK/messages.ndjson" \
     --slurpfile inflight "$w/inflight.ndjson" \
     --slurpfile reviewer_infos "$w/reviewers.ndjson" \
+    --slurpfile orphans "$w/orphans.ndjson" \
     --slurpfile next "$w/next.ndjson" \
     --slurpfile done_items "$w/done.ndjson" \
     -f "$AW_ROOT/lib/monitor-assemble.jq"

@@ -169,6 +169,9 @@ def status($pr; $last_review; $has_reviewer):
             fetched_at: ($fetched_at | nonempty),
             stale: (($fetched_at | nonempty) != null and $forge_ok != 1)},
     in_flight: $in_flight,
+    # Sidecars whose worktree is gone (#286): never in flight, listed so a
+    # cleanup can act on them.
+    orphans: $orphans,
     next: {source: (if ($next_items | length) == 0 then "none" else $next_source end), items: $next_items},
     done: {window_hours: 24, min_items: 10, items: $done_items},
     attention: {active: ($signals | length > 0), signals: $signals}

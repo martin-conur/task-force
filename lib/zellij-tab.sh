@@ -46,6 +46,15 @@ aw_zellij_reachable() {
   [[ -n "${ZELLIJ:-}" || -n "${AW_ZELLIJ_SESSION:-}" ]]
 }
 
+# True when stdin is exactly one JSON array: a stream of several values fails
+# even if the last is an array, as does empty input. Slurped, because `jq -e`
+# on EMPTY input exits 0 on jq 1.6 (4 on 1.7+): an empty list-tabs answer would
+# pass as an array there (#296). Slurping turns empty input into `[]`, false on
+# both.
+aw_jq_is_array() {
+  jq -se 'length == 1 and (.[0] | type == "array")' >/dev/null 2>&1
+}
+
 # rc 0 when zellij session <session> is running: its list-tabs answers with a
 # JSON array. A session that is not running answers with plain text and exit
 # 0, so the exit status alone proves nothing. Without jq it cannot tell, and
@@ -56,7 +65,7 @@ aw_zellij_session_running() {
   command -v zellij >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
   zellij -s "$session" action list-tabs --json 2>/dev/null \
-    | jq -e 'type == "array"' >/dev/null 2>&1
+    | aw_jq_is_array
 }
 
 # Resolve a freshly-created tab's stable zellij tab_id by its name. Used by
@@ -132,7 +141,7 @@ aw_zellij_tab_name_by_id() {
   case "$id" in ''|*[!0-9]*) return 2 ;; esac
   command -v jq >/dev/null 2>&1 || return 2
   tabs=$(aw_zellij action list-tabs --json 2>/dev/null || true)
-  printf '%s' "$tabs" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
+  printf '%s' "$tabs" | aw_jq_is_array || return 2
   printf '%s' "$tabs"     | jq -r --argjson t "$id" '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
 }
 

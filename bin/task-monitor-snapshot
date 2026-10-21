@@ -540,7 +540,10 @@ wait
 j=0
 while [[ "$j" -lt "$i" ]]; do
   j=$((j + 1))
-  if jq -e . "$WORK/repo$j.json" >/dev/null 2>&1; then
+  # Slurped: `jq -e .` passes an EMPTY file on jq 1.6, which exits 0 when it
+  # prints nothing (#296), and that is exactly what a failed repo leaves. Every
+  # value must be an object, so `null` or a stray string is skipped too.
+  if jq -se 'length > 0 and all(type == "object")' "$WORK/repo$j.json" >/dev/null 2>&1; then
     cat "$WORK/repo$j.json" >> "$WORK/repos.ndjson"
   else
     echo "task-monitor-snapshot: skipped $(sed -n "${j}p" <<<"$ROOTS"): its snapshot failed" >&2

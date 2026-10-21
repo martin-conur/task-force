@@ -27,6 +27,36 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# lib/zellij-tab.sh: aw_jq_is_array / aw_zellij_session_running (#296)
+# ---------------------------------------------------------------------------
+#
+# `jq -e` on empty input exits 0 on jq 1.6 (4 on 1.7+), so an empty list-tabs
+# answer used to pass as an array there. CI runs this file under jq 1.6 too.
+
+@test "aw_jq_is_array: exactly one JSON array, and nothing else" {
+  local input verdicts=""
+  for input in '' '[]' '[1]' '{}' 'not json' 'null' '[][]'; do
+    if printf '%s' "$input" | bash -c 'source "$1"; aw_jq_is_array' _ "$REPO_ROOT_REAL/lib/zellij-tab.sh"; then
+      verdicts+="T"
+    else
+      verdicts+="F"
+    fi
+  done
+  assert_equal "$verdicts" "FTTFFFF"
+}
+
+@test "aw_zellij_session_running: a live session's empty list-tabs answer is not running" {
+  export STUB_ZELLIJ_LIVE_SESSIONS=other
+  unset STUB_ZELLIJ_TABS_JSON
+  run bash -c 'source "$1"; aw_zellij_session_running other' _ "$REPO_ROOT_REAL/lib/zellij-tab.sh"
+  assert_failure
+  # The control: the same session answering with an array is running.
+  export STUB_ZELLIJ_TABS_JSON='[{"tab_id":1,"name":"pm"}]'
+  run bash -c 'source "$1"; aw_zellij_session_running other' _ "$REPO_ROOT_REAL/lib/zellij-tab.sh"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
 # lib/zellij-tab.sh: aw_zellij_tab_id_miss_reason
 # ---------------------------------------------------------------------------
 

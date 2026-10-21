@@ -251,8 +251,10 @@ _aw_tracker_item_describe_default() {
   else
     title="$label"
   fi
-  jq -cn --arg ref "$ref" --arg label "$label" --arg title "$title" --arg url "$url" \
-    '{ref: $ref, label: (if $label == "" then null else $label end), number: null,
+  # `$lbl`, not `$label`: `label` is a keyword in jq 1.6, which then refuses to
+  # compile the program and every snapshot built on it fails (#296).
+  jq -cn --arg ref "$ref" --arg lbl "$label" --arg title "$title" --arg url "$url" \
+    '{ref: $ref, label: (if $lbl == "" then null else $lbl end), number: null,
       title: $title, description: null, url: (if $url == "" then null else $url end)}'
 }
 

@@ -4,6 +4,12 @@
 # landed in jq 1.6 (2018); jq 1.5 errors out with `unexpected '#'` and
 # leaves .claude/settings.json half-written.
 #
+# 1.6 is also the supported floor everywhere else, not just here: CI runs the
+# whole bats suite under the official jq-1.6 binary (#296). 1.6 is stricter
+# than 1.7+ in ways that only show at compile time, e.g. `label` is a keyword,
+# so `--arg label x` + `$label` fails there while 1.7 accepts it. And `jq -e`
+# on empty input exits 0 there (4 on 1.7+), so slurp before trusting `-e`.
+#
 # Source this file and call `require_jq_1_6` before any jq invocation
 # whose program contains `#` comments.
 

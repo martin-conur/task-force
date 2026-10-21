@@ -221,7 +221,11 @@ for tf in "$TASKS_DIR"/*.md; do
       in-progress|in_progress|"in progress")
         printf '%s\t%s\n' "$sort_id" "$line" >> "$INPROG_TXT" ;;
       done)
-        printf '%s\t%s\n' "$sort_id" "$line" >> "$DONE_TXT" ;;
+        # Done sorts newest first, so a non-numeric id keys low (-1) rather
+        # than high: it sorts last and is the first trimmed by the cap.
+        done_key="$sort_id"
+        [[ "$fm_id" =~ ^[0-9]+$ ]] || done_key="-1"
+        printf '%s\t%s\n' "$done_key" "$line" >> "$DONE_TXT" ;;
       *)
         printf '%s\t%s\n' "$sort_id" "$line" >> "$TODO_TXT" ;;
     esac

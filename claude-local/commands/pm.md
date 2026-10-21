@@ -64,8 +64,8 @@ When asked to "show backlog" or "list tasks":
   proportion to the backlog, done tasks included; the board costs the same at
   10 tasks or 200. Open a task file only when the work is about that task:
   editing or speccing it, or answering a question about it.
-- Present it grouped by status (Todo / In Progress / Done), sorted by priority
-  (P0 → P3) then by id.
+- Present it as the board has it: grouped by status (Todo / In Progress /
+  Done), with each task's priority shown on its line.
 
 When creating tasks, default `status: todo` and `priority: P2` unless told otherwise.
 Keep titles concise and actionable.

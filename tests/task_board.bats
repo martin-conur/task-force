@@ -278,6 +278,22 @@ _done_tasks() {
   assert_failure
 }
 
+@test "a done task with a non-numeric id sorts last and is the first trimmed" {
+  _done_tasks 3
+  _task "$MAIN_REPO/tasks/abc-oddball.md" abc "Oddball" done
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  run _done_section
+  assert_line --index 0 --partial "Done3"
+  assert_line --index 3 --partial "Oddball"
+
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 3
+  assert_success
+  run _done_section
+  refute_output --partial "Oddball"
+  assert_line --index 3 "+ 1 older done task"
+}
+
 @test "a non-numeric cap is refused and the board is left untouched" {
   echo "previous board" > "$MAIN_REPO/tasks/_board.md"
   TASK_BOARD_DONE_LIMIT=lots run "$TASK_BOARD" --repo "$MAIN_REPO"

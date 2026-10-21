@@ -276,10 +276,17 @@ impl App {
         self.overview_rows().get(self.overview_selected).copied()
     }
 
+    /// A row's identity across refreshes: its repo's name, the worker's slug
+    /// and the reviewer's role. A missing one falls back to its index, as
+    /// `#<n>`, so two nameless rows never share a key. Names, slugs and
+    /// roles are radio's role charset, which has no `#`.
     fn overview_row_key(&self, row: OvRow) -> String {
-        let repos = self.repos();
-        let name = repos[row.repo()].name.as_deref().unwrap_or("");
-        let slug = |i: usize| repos[row.repo()].in_flight[i].slug.as_deref().unwrap_or("");
+        fn or_index(v: Option<&str>, i: usize) -> String {
+            v.map_or_else(|| format!("#{i}"), str::to_string)
+        }
+        let repo = &self.repos()[row.repo()];
+        let name = or_index(repo.name.as_deref(), row.repo());
+        let slug = |i: usize| or_index(repo.in_flight[i].slug.as_deref(), i);
         match row {
             OvRow::Repo(_) => format!("r:{name}"),
             OvRow::Pm(_) => format!("p:{name}"),
@@ -287,10 +294,7 @@ impl App {
             OvRow::Reviewer(_, i, k) => format!(
                 "v:{name}:{}:{}",
                 slug(i),
-                repos[row.repo()].in_flight[i].reviewers[k]
-                    .role
-                    .as_deref()
-                    .unwrap_or("")
+                or_index(repo.in_flight[i].reviewers[k].role.as_deref(), k)
             ),
         }
     }
@@ -448,8 +452,7 @@ impl App {
                 let row = self.overview_key.clone();
                 let repo = self
                     .selected_overview_row()
-                    .and_then(|r| self.repos()[r.repo()].name.clone())
-                    .map(|name| format!("r:{name}"));
+                    .map(|r| self.overview_row_key(OvRow::Repo(r.repo())));
                 self.needs_you = !self.needs_you;
                 let kept = row.is_some_and(|k| self.select_overview(&k))
                     || repo.is_some_and(|k| self.select_overview(&k));
@@ -936,6 +939,36 @@ pub(crate) mod tests {
         snap.repos.reverse();
         app.offer(Instant::now(), Mode::Local, snap, now());
         assert_eq!(app.selected_overview_row(), Some(OvRow::Worker(2, 0)));
+    }
+
+    #[test]
+    fn nameless_rows_keep_distinct_keys() {
+        let nameless = r#"{"schema":1,"repos":[
+            {"in_flight":[{"reviewers":[{},{}]},{}]},
+            {"in_flight":[{}]}]}"#;
+        let app = app_with(nameless, false);
+        let rows = app.overview_rows();
+        let mut keys: Vec<String> = rows.iter().map(|&r| app.overview_row_key(r)).collect();
+        assert_eq!(rows.len(), 9);
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), rows.len(), "{keys:?}");
+        // So a refresh keeps the second nameless repo's worker selected,
+        // rather than snapping to the first one that shares its key.
+        let mut app = app_with(nameless, false);
+        go_to(&mut app, OvRow::Worker(1, 0));
+        app.offer(Instant::now(), Mode::Local, parse(nameless).unwrap(), now());
+        assert_eq!(app.selected_overview_row(), Some(OvRow::Worker(1, 0)));
+        // And `!` falls back to a nameless repo's own row.
+        let flagged = r#"{"schema":1,"repos":[
+            {"in_flight":[{}],
+             "attention":{"active":true,"signals":[{"kind":"unread-inbox"}]}},
+            {"in_flight":[{"reviewers":[{}]}],
+             "attention":{"active":true,"signals":[{"kind":"unread-inbox"}]}}]}"#;
+        let mut app = app_with(flagged, false);
+        go_to(&mut app, OvRow::Reviewer(1, 0, 0));
+        app.key(Key::Char('!'), now());
+        assert_eq!(app.selected_overview_row(), Some(OvRow::Repo(1)));
     }
 
     #[test]

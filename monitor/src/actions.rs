@@ -117,8 +117,15 @@ pub fn goto_tab(
     let Some(pos) = t.position else {
         return Err(format!("zellij did not say where tab {id} is in '{there}'"));
     };
-    // `--tab-position` counts from 1 (zellij 0.44.2: 1, 2, 3 focus the
-    // tabs list-tabs reports at positions 0, 1, 2).
+    // `--tab-position` counts from 1, where list-tabs' `position` counts from
+    // 0. From the zellij v0.44.2 source: the attaching client's position goes
+    // to `Screen::go_to_tab`, which calls
+    // `switch_active_tab(tab_index.saturating_sub(1), ..)`, and that function
+    // matches `t.position == new_tab_pos`, the field list-tabs reports.
+    // https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-server/src/screen.rs#L7347-L7348
+    // https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-server/src/screen.rs#L1955-L1957
+    // A probe on throwaway sessions agreed: 1, 2 and 3 focused positions 0,
+    // 1 and 2, and 0 also focused position 0.
     let pos = (pos + 1).to_string();
     run(
         "zellij",

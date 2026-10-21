@@ -55,6 +55,7 @@ You always need:
 - [Zellij](https://zellij.dev) (≥ 0.44) — the multiplexer that hosts each agent in its own tab
 - [gh CLI](https://cli.github.com) — opens pull requests
 - Git
+- [jq](https://jqlang.github.io/jq/) (≥ 1.6) — `task-init`, radio and `task-monitor-snapshot` all use it. 1.6 is the supported floor, since Ubuntu 22.04 and older Homebrew installs still ship it, and CI runs the suite against it (#296)
 - Either [Claude Code](https://docs.claude.com/claude-code) or [Kiro CLI](https://kiro.dev)
 - For Jira / Notion trackers, the matching MCP server; for GitHub Projects, just the `gh` CLI authenticated (`gh auth status`) — see [Per-combo setup](#per-combo-setup)
 

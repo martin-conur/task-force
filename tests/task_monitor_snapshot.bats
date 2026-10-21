@@ -279,6 +279,21 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.in_flight[0].url')" "https://www.notion.so/My-Task-abc123def456abc123def456abc123de"
 }
 
+# The describer jira and notion fall back to, and gh / local reach whenever the
+# forge does not answer. It bound `$label` until #296, which jq 1.6 refuses to
+# compile (`label` is a keyword there): the empty output then broke the next
+# --argjson and the whole snapshot. CI runs this file under jq 1.6 too.
+@test "the default item describer prints the item object for a key, a URL and a bare slug" {
+  run /bin/bash -c 'source "$1/lib/trackers/_default.sh"
+    _aw_tracker_item_describe_default PROJ-42 kiro-config
+    _aw_tracker_item_describe_default https://www.notion.so/My-Task-abc my-task
+    _aw_tracker_item_describe_default "" lone-slug' _ "$REPO_ROOT_REAL"
+  assert_success
+  assert_line --index 0 '{"ref":"PROJ-42","label":"PROJ-42","number":null,"title":"PROJ-42 · kiro-config","description":null,"url":null}'
+  assert_line --index 1 '{"ref":"https://www.notion.so/My-Task-abc","label":null,"number":null,"title":"my-task","description":null,"url":"https://www.notion.so/My-Task-abc"}'
+  assert_line --index 2 '{"ref":"","label":null,"number":null,"title":"lone-slug","description":null,"url":null}'
+}
+
 @test "in flight: once a PR exists its title and ## Summary replace the issue's" {
   sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
   issue 5 "Issue title" "Issue body."

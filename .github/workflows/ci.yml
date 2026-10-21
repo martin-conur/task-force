@@ -22,6 +22,31 @@ jobs:
       - name: Run tests
         run: ./run_tests.sh
 
+  # jq 1.6 is the supported floor (#296), and it rejects programs 1.7+ accept:
+  # `$label` (a keyword in 1.6) broke every jira/notion snapshot while this
+  # matrix, on the runners' newer jq, stayed green. So the suite runs once more
+  # with the official 1.6 binary first on PATH.
+  test-jq16:
+    name: Bats tests (jq 1.6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install jq 1.6
+        run: |
+          mkdir -p "$RUNNER_TEMP/jq16"
+          curl -fsSL -o "$RUNNER_TEMP/jq16/jq" \
+            https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64
+          chmod +x "$RUNNER_TEMP/jq16/jq"
+          echo "$RUNNER_TEMP/jq16" >> "$GITHUB_PATH"
+
+      - name: Run tests
+        run: |
+          test "$(jq --version)" = jq-1.6
+          ./run_tests.sh
+
   lint:
     name: ShellCheck
     runs-on: ubuntu-latest

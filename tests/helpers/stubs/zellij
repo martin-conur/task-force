@@ -24,7 +24,16 @@ if [[ "${1:-}" == -s ]]; then
 fi
 case "$*" in
   "action list-tabs --json")
-    [[ -n "${STUB_ZELLIJ_TABS_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_TABS_JSON"
+    # $STUB_ZELLIJ_TABS_JSON_QUEUE names a file of one JSON answer per line:
+    # each list-tabs consumes the first, so a test can script focus moving
+    # between calls (#311). Once it is empty, the fixed fixture answers.
+    _q="${STUB_ZELLIJ_TABS_JSON_QUEUE:-}"
+    if [[ -n "$_q" && -s "$_q" ]]; then
+      head -n 1 "$_q"
+      tail -n +2 "$_q" > "$_q.rest" && mv "$_q.rest" "$_q"
+    elif [[ -n "${STUB_ZELLIJ_TABS_JSON:-}" ]]; then
+      printf '%s' "$STUB_ZELLIJ_TABS_JSON"
+    fi
     ;;
   "action list-panes --json --tab")
     [[ -n "${STUB_ZELLIJ_PANES_JSON:-}" ]] && printf '%s' "$STUB_ZELLIJ_PANES_JSON"

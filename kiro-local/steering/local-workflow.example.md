@@ -42,7 +42,16 @@ Filename convention: `NNN-slug.md`, where `NNN` is the zero-padded task id and
 ### Board View
 
 `tasks/_board.md` is **auto-generated** by `task-board` — never hand-edit it.
-It has three sections: Todo / In Progress / Done.
+It has three sections: Todo / In Progress / Done. Every open task is listed;
+Done lists only the 10 newest (highest id first), then one
+`+ N older done tasks` line (#294). `task-board --done-limit N` or
+`TASK_BOARD_DONE_LIMIT=N` changes the cap.
+
+The PM reads this file for the backlog — it runs `task-board`, then reads
+`tasks/_board.md` — and opens a task file only when the work is about that
+task. Reading the frontmatter of every `tasks/*.md` instead would cost context
+in proportion to the backlog, done tasks included; the board costs the same at
+10 tasks or 200.
 
 Triggers that regenerate the board:
 - `task-work tasks/NNN-slug.md` (after worktree creation)
@@ -114,7 +123,9 @@ worktree from `$TASK_FORCE_ROLE`). The PM keeps it from happening at all by dele
 only the remote branch after a merge: `git push origin --delete task/<slug>`.
 
 `task-board` — regenerate `tasks/_board.md` from `tasks/*.md` frontmatter +
-`.git/task-force/state.json`. Idempotent; safe to run anytime. Like `task-work`
+`.git/task-force/state.json`. Idempotent; safe to run anytime. Done is capped
+at the 10 newest tasks plus a count of the rest; `--done-limit N` (or
+`TASK_BOARD_DONE_LIMIT`) changes the cap (#294). Like `task-work`
 / `task-done`, it resolves the loadout per-repo (#215) — on a repo tracked in
 GitHub / Jira / Notion it refuses with a message naming that loadout, because
 there are no local task files to render a board from. It is a single root copy

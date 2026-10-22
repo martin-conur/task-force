@@ -594,7 +594,7 @@ task-init claude-local         # creates tasks/, .claude/local-workflow.md, and 
 
 - One `NNN-slug.md` per task (e.g. `001-add-login-flow.md`). `NNN` is the zero-padded id the PM allocates; `slug` is a kebab-case short title.
 - Each file opens with YAML frontmatter (`id`, `title`, `status`, `priority`, `tags`, `created`, `branch`, `pr`) followed by `## Problem`, `## Solution`, `## Files to Create/Modify`, `## Verification`.
-- `tasks/_board.md` is the **auto-generated** board — never hand-edit. It has three columns: Todo / In Progress / Done.
+- `tasks/_board.md` is the **auto-generated** board — never hand-edit. It has three columns: Todo / In Progress / Done. Every open task is listed; Done shows only the 10 newest (highest id first) and then one `+ N older done tasks` line, so the board stays the same size however many tasks you finish (#294).
 
 **Lifecycle** — `todo` → `in-progress` → `done`. The worker bumps `status` in the task file's frontmatter on its first commit (`in-progress`) and again before opening the PR (`done`). The PM is the only role that creates new task files and allocates ids.
 
@@ -603,7 +603,12 @@ task-init claude-local         # creates tasks/, .claude/local-workflow.md, and 
 ```bash
 task-board                    # uses $(git rev-parse --show-toplevel)
 task-board --repo ~/other     # explicit repo
+task-board --done-limit 25    # list 25 done tasks instead of 10
 ```
+
+The cap on done tasks defaults to 10; `--done-limit N` or `TASK_BOARD_DONE_LIMIT=N` changes it, the flag winning over the variable, and `0` lists none but still counts them.
+
+**The PM reads the board, not the backlog** (#294). To show the backlog, the PM runs `task-board` and reads `tasks/_board.md` — one file whose size does not grow with finished work — rather than the frontmatter of every `tasks/*.md`, which cost context in proportion to the whole backlog, done tasks included. It opens a task file only when the work is about that task. Running `task-board` first is how it knows the board is current: the render is cheap, answers in one line, and is always right, where comparing timestamps would miss a change to `state.json`'s live overlay.
 
 **Live state** — `.git/task-force/state.json` is a gitignored, per-clone sidecar that tracks which worktrees are currently active. `task-work` writes a row; `task-done` removes it. Frontmatter is the durable, committed state; the sidecar is the live overlay. If a task appears in the sidecar, the board forces it into the In Progress column regardless of frontmatter.
 

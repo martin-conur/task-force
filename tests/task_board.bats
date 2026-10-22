@@ -179,6 +179,133 @@ _state_entry() {
 }
 
 # ---------------------------------------------------------------------------
+# Bounded Done section (#294)
+# ---------------------------------------------------------------------------
+
+# Helper: the Done section's lines (everything below "## Done").
+_done_section() {
+  awk '/^## Done/{flag=1; next} /^## /{flag=0} flag' "$MAIN_REPO/tasks/_board.md" | grep -v '^$'
+}
+
+# Helper: write done tasks 001..N.
+_done_tasks() {
+  local n="$1" i id
+  for ((i = 1; i <= n; i++)); do
+    id=$(printf '%03d' "$i")
+    _task "$MAIN_REPO/tasks/${id}-done${i}.md" "$id" "Done$i" done
+  done
+}
+
+@test "every open task is listed however many there are" {
+  local i id
+  for ((i = 1; i <= 15; i++)); do
+    id=$(printf '%03d' "$i")
+    _task "$MAIN_REPO/tasks/${id}-open${i}.md" "$id" "Open$i" todo
+  done
+  for ((i = 16; i <= 30; i++)); do
+    _task "$MAIN_REPO/tasks/0${i}-wip${i}.md" "0$i" "Wip$i" in-progress
+  done
+  _done_tasks 0
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 1
+  assert_success
+  run grep -c '^- \[' "$MAIN_REPO/tasks/_board.md"
+  assert_output "30"
+  run grep -F "older done" "$MAIN_REPO/tasks/_board.md"
+  assert_failure
+}
+
+@test "done tasks are capped at 10 by default, newest first, with a count line" {
+  _done_tasks 13
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  run _done_section
+  assert_line --index 0 --partial "Done13"
+  assert_line --index 9 --partial "Done4"
+  assert_line --index 10 "+ 3 older done tasks"
+  assert_equal "${#lines[@]}" 11
+  refute_output --partial "Done3]"
+  refute_output --partial "Done1]"
+}
+
+@test "--done-limit sets the cap" {
+  _done_tasks 5
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 2
+  assert_success
+  run _done_section
+  assert_equal "${#lines[@]}" 3
+  assert_line --index 0 --partial "Done5"
+  assert_line --index 1 --partial "Done4"
+  assert_line --index 2 "+ 3 older done tasks"
+}
+
+@test "TASK_BOARD_DONE_LIMIT sets the cap, and --done-limit wins over it" {
+  _done_tasks 5
+  TASK_BOARD_DONE_LIMIT=3 run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  run _done_section
+  assert_equal "${#lines[@]}" 4
+  assert_line --index 3 "+ 2 older done tasks"
+
+  TASK_BOARD_DONE_LIMIT=3 run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 4
+  assert_success
+  run _done_section
+  assert_line --index 4 "+ 1 older done task"
+}
+
+@test "a leading-zero cap is read as decimal, not octal" {
+  _done_tasks 12
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 010
+  assert_success
+  run _done_section
+  assert_line --index 10 "+ 2 older done tasks"
+}
+
+@test "--done-limit 0 lists no done task, only the count" {
+  _done_tasks 4
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 0
+  assert_success
+  run _done_section
+  assert_output "+ 4 older done tasks"
+}
+
+@test "fewer done tasks than the cap: all listed, no count line" {
+  _done_tasks 10
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  run _done_section
+  assert_equal "${#lines[@]}" 10
+  run grep -F "older done" "$MAIN_REPO/tasks/_board.md"
+  assert_failure
+}
+
+@test "a done task with a non-numeric id sorts last and is the first trimmed" {
+  _done_tasks 3
+  _task "$MAIN_REPO/tasks/abc-oddball.md" abc "Oddball" done
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  run _done_section
+  assert_line --index 0 --partial "Done3"
+  assert_line --index 3 --partial "Oddball"
+
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit 3
+  assert_success
+  run _done_section
+  refute_output --partial "Oddball"
+  assert_line --index 3 "+ 1 older done task"
+}
+
+@test "a non-numeric cap is refused and the board is left untouched" {
+  echo "previous board" > "$MAIN_REPO/tasks/_board.md"
+  TASK_BOARD_DONE_LIMIT=lots run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_failure
+  assert_output --partial "non-negative integer"
+  run cat "$MAIN_REPO/tasks/_board.md"
+  assert_output "previous board"
+  run "$TASK_BOARD" --repo "$MAIN_REPO" --done-limit
+  assert_failure
+}
+
+# ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
 

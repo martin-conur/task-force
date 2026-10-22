@@ -246,6 +246,7 @@ setup_kiro_agents() {
 # never register. Written untracked, straight into the worktree, so the fixture
 # repo's history and loadout detection stay as each suite set them up.
 # Usage: seed_hook_carriers <dir>
+# shellcheck disable=SC2016  # the hook commands are literal: the agent expands them, not this
 seed_hook_carriers() {
   local dir="$1"
   mkdir -p "$dir/.claude" "$dir/.kiro/agents"

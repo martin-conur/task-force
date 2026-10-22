@@ -371,6 +371,64 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.in_flight[0].status')" under-review
 }
 
+# #307: a reviewer's `pr` went out as the string "9", and the front end's u64
+# refused the whole document, so the board stopped refreshing whenever a review
+# ran. Every PR number in the document is a number.
+@test "PR numbers are numbers: reviewers[].pr, last_intent.pr, pr.number" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  sidecar review-pr9 GH_URL https://github.com/acme/widgets/pull/9 PR_NUMBER=9 ISSUE_NUMBER=5
+  session "reviewer-$NAME-pr9" busy
+  msg "pm-$NAME" processed 1 "worker-$NAME-issue-5" review-requested 9
+  pr_fixture 9 task/issue-5 "Closes #5" > "$BATS_TEST_TMPDIR/p9"
+  open_prs "$BATS_TEST_TMPDIR/p9"
+  snap
+  assert_equal "$(q '.in_flight[0].reviewers[0].pr | type')" number
+  assert_equal "$(q '.in_flight[0].reviewers[0].pr')" 9
+  assert_equal "$(q '.in_flight[0].last_intent.pr | type')" number
+  assert_equal "$(q '.in_flight[0].pr.number | type')" number
+}
+
+# The PR the worker named in its own messages, when no PR has its head branch.
+@test "PR numbers are numbers: the radio fallback PR" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  msg "pm-$NAME" processed 1 "worker-$NAME-issue-5" review-requested 9
+  snap
+  assert_equal "$(q '.in_flight[0].pr.number | type')" number
+  assert_equal "$(q '.in_flight[0].last_intent.pr | type')" number
+}
+
+# The regression guard #307 asked for: the Rust tests parsed hand-written JSON,
+# which is how a string where the parser wants a number shipped. This scenario's
+# real output must have the same shape, value for value type, as the checked-in
+# fixture `cargo test` parses (monitor/src/snapshot.rs). Values differ run to
+# run (paths, times), so only types are compared. Regenerate with
+# TASK_FORCE_REGEN_FIXTURES=1 after an intended schema change.
+@test "the shared snapshot fixture has the real snapshot's shape (reviewer attached)" {
+  local fixture="$REPO_ROOT_REAL/tests/fixtures/task-monitor/snapshot-reviewer.json"
+  issue 5 "Issue five" "The fifth issue."
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  sidecar review-pr9 GH_URL https://github.com/acme/widgets/pull/9 PR_NUMBER=9 ISSUE_NUMBER=5
+  session "worker-$NAME-issue-5" idle
+  session "reviewer-$NAME-pr9" busy
+  session "pm-$NAME" idle
+  msg "pm-$NAME" processed 1 "worker-$NAME-issue-5" review-requested 9
+  pr_fixture 9 task/issue-5 "Closes #5" > "$BATS_TEST_TMPDIR/p9"
+  open_prs "$BATS_TEST_TMPDIR/p9"
+  snap --json
+  assert_success
+  if [[ -n "${TASK_FORCE_REGEN_FIXTURES:-}" ]]; then
+    mkdir -p "$(dirname "$fixture")"
+    # Scrub the scratch paths and repo name, so the checked-in file reads clean.
+    jq --arg root "$MAIN_REPO" --arg name "$NAME" '
+      walk(if type == "string" then split($root) | join("/src/widgets")
+                                    | split($name) | join("widgets") else . end)' \
+      <<<"$output" > "$fixture"
+  fi
+  local shape='walk(if type == "object" or type == "array" then . else type end)'
+  assert_equal "$(jq -cS "$shape" <<<"$output")" "$(jq -cS "$shape" "$fixture")"
+  assert_equal "$(jq -r '.repos[0].in_flight[0].reviewers[0].pr | type' "$fixture")" number
+}
+
 # ----- next -----------------------------------------------------------------------
 
 @test "next: the PM queue, in its order, with notes, minus what is in flight" {
@@ -575,6 +633,7 @@ project_page() {
   snap
   assert_equal "$(q '.attention.signals | map(.kind) | join(",")')" review-waiting-merge
   assert_equal "$(q '.attention.signals[0].prs | join(",")')" 9
+  assert_equal "$(q '.attention.signals[0].prs | map(type) | join(",")')" number
   assert_equal "$(q '.attention.signals[0].text')" "1 review waiting merge"
   msg "worker-$NAME-issue-5" processed 2 "pm-$NAME" approved-and-merged 9
   snap

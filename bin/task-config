@@ -23,6 +23,7 @@ Usage: task-config [show]
        task-config set tracker   <gh|jira|notion|local> [--dry-run] [--yes]
        task-config set loadout   <name>                 [--dry-run] [--yes]
        task-config add assistant <claude|kiro>          [--dry-run] [--yes]
+       task-config remove assistant <claude|kiro>       [--dry-run] [--yes]
        task-config use <claude|kiro>                    [--dry-run]
        task-config sync [--from <claude|kiro>]          [--dry-run] [--yes]
 
@@ -41,6 +42,10 @@ add assistant
   committed once; after that a switch is `use`, which changes no tracked file.
   The assistant you are on now becomes the active one, so nothing changes until
   you say so. jira cannot be dual until a kiro-jira loadout exists (#92).
+
+remove assistant
+  The mirror of add: uninstall one of the two assistants, keep the other, and
+  make it the active one. Previews what it deletes and confirms on a TTY.
 
 use
   Pick the active assistant in a repo with both installed. It is written to the
@@ -82,6 +87,7 @@ Examples
   task-config set loadout claude-notion --yes
   task-config add assistant kiro
   task-config use kiro
+  task-config remove assistant kiro
   task-config sync --from claude
 EOF
   exit 0
@@ -285,7 +291,11 @@ _show_dual() {
   printf 'Dual: %s are installed on %s.\n' \
     "$(printf '%s\n' "${MATCHES[@]}" | sed 's/-.*//' | paste -sd'+' - | sed 's/+/ and /g')" "$tracker"
   if [[ -n "$active" ]] && _in_list "$active-$tracker" "${MATCHES[@]}"; then
-    printf 'active    : %s  (git config %s — local, not committed)\n\n' "$active" "$AW_ACTIVE_ASSISTANT_KEY"
+    printf 'active    : %s  (git config %s — local, not committed)\n' "$active" "$AW_ACTIVE_ASSISTANT_KEY"
+    # `set assistant` is not the switch here (#303), so say what is.
+    local other
+    other=$(printf '%s\n' "${MATCHES[@]}" | sed 's/-.*//' | grep -vxF "$active" | head -1)
+    printf 'switch: task-config use %s · launch one: task-work … --agent %s\n\n' "$other" "$other"
   else
     if [[ -n "$active" ]]; then
       printf 'active    : %s — not installed here, so none is active\n' "$active"
@@ -566,9 +576,12 @@ _set_target() {
 }
 
 # _set_dual <tracker> <axis> <value> — a `set` on a repo with both assistants
-# installed on <tracker> (#293). Every outcome is a single loadout:
+# installed on <tracker> (#293). Every outcome that changes anything is a
+# single loadout:
 #
-#   set assistant A      keep A, remove the other — "stop being dual"
+#   set assistant A      refused (#303): A is installed, so this is either a
+#                        switch (`use A`) or a removal (`remove assistant B`),
+#                        and guessing the second deleted a user's kiro files
 #   set loadout <A>-<T>  the same when T is this tracker; otherwise remove both
 #                        and install the one named
 #   set tracker T        refused: it would have to reinstall both, and the second
@@ -602,17 +615,23 @@ _set_dual() {
   for m in "${MATCHES[@]}"; do [[ "$m" == "$target" ]] || drop+=("$m"); done
 
   if ((${#drop[@]} < ${#MATCHES[@]})); then
-    # The target is already installed: this is just the other one going.
-    printf '%s → %s (keeping %s, removing %s)\n' \
-      "$(printf '%s+' "${MATCHES[@]}" | sed 's/+$//')" "$target" "$target" "${drop[*]}"
-    if _previewing; then
-      for m in "${drop[@]}"; do printf '\nremoving %s:\n' "$m"; la_plan "$REPO_ROOT" "$m"; done
-    fi
-    _go_ahead
-    for m in "${drop[@]}"; do printf '\n'; la_remove "$REPO_ROOT" "$m"; done
-    _set_active "$(la_assistant "$target")"
-    printf '\nNow on %s alone.\nVerify with: task-config show\n' "$target"
-    return 0
+    # The target is already installed. Before #303 this kept it and removed the
+    # other, and `set assistant claude` reads as "switch to claude": a user
+    # testing the dual setup confirmed it and lost every kiro file. A switch is
+    # `use`; dropping an assistant is `remove assistant`, which says so. Refused
+    # whatever --yes says, since the refusal is about meaning, not consent.
+    local keep other
+    keep=$(la_assistant "$target")
+    other=$(la_assistant "${drop[0]}")
+    {
+      echo "Error: both assistants are installed here (${MATCHES[*]}), so $target is"
+      echo "       already installed and there is nothing to switch to. Nothing was changed."
+      echo "       Make $keep the active one, keeping $other:"
+      echo "         task-config use $keep"
+      echo "       Or uninstall $other and keep $keep alone:"
+      echo "         task-config remove assistant $other"
+    } >&2
+    exit 1
   fi
 
   # A loadout on another tracker: both go, and the target is a fresh install.
@@ -764,6 +783,64 @@ cmd_add() {
   return 0
 }
 
+# remove assistant <B> — the mirror of `add` (#303): uninstall B from a repo
+# with both assistants on one tracker, keep the other, and make it active. The
+# explicit form of what `set assistant <the other>` used to do by surprise.
+cmd_remove() {
+  local axis="$1" agent="$2"
+  [[ "$axis" == assistant && -n "$agent" ]] || {
+    echo "Error: expected: task-config remove assistant <$(IFS='|'; echo "${ASSISTANTS[*]}")>" >&2; exit 1; }
+  _in_list "$agent" "${ASSISTANTS[@]}" || {
+    echo "Error: unknown assistant '$agent' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
+  [[ -z "$PIN" ]] || { echo "Error: remove takes no --impl (and ignores no \$AW_IMPL): unset it first" >&2; exit 1; }
+
+  _collect_matches
+  local tracker
+  case "${#MATCHES[@]}" in
+    0)
+      echo "Error: no loadout configured in $REPO_ROOT — there is no assistant to remove." >&2
+      exit 1 ;;
+    1)
+      if [[ "$(la_assistant "${MATCHES[0]}")" == "$agent" ]]; then
+        echo "Error: $agent is the only assistant installed here (${MATCHES[0]}); removing it" >&2
+        echo "       would leave no loadout. Switch it with task-config set assistant <other>," >&2
+        echo "       or take task-force out entirely with task-remove." >&2
+      else
+        echo "Error: $agent is not installed here (configured: ${MATCHES[0]}) — nothing to remove." >&2
+      fi
+      exit 1 ;;
+    *)
+      tracker=$(_dual_tracker) || {
+        echo "Error: the loadouts here are on different trackers:" >&2
+        printf '         - %s\n' "${MATCHES[@]}" >&2
+        echo "       remove assistant drops one of two assistants on ONE tracker;" >&2
+        echo "       remove a loadout with task-config set loadout <name> --impl <the-other>." >&2
+        exit 1; } ;;
+  esac
+
+  local gone="$agent-$tracker" keep m
+  _in_list "$gone" "${MATCHES[@]}" || {
+    echo "Error: $gone is not installed here (configured: ${MATCHES[*]}) — nothing to remove." >&2; exit 1; }
+  for m in "${MATCHES[@]}"; do [[ "$m" == "$gone" ]] || keep="$m"; done
+
+  printf '%s → %s (removing %s, keeping %s)\n' \
+    "$(printf '%s+' "${MATCHES[@]}" | sed 's/+$//')" "$keep" "$gone" "$keep"
+  if _previewing; then
+    printf '\nremoving %s:\n' "$gone"
+    la_plan "$REPO_ROOT" "$gone"
+    printf '\n%s is left untouched.\n' "$keep"
+    printf 'active assistant → %s (git config %s; local, nothing tracked)\n' \
+      "$(la_assistant "$keep")" "$AW_ACTIVE_ASSISTANT_KEY"
+  fi
+  _go_ahead
+  printf '\n'
+  la_remove "$REPO_ROOT" "$gone"
+  _set_active "$(la_assistant "$keep")"
+  printf '\nNow on %s alone; active assistant: %s.\n' "$keep" "$(la_assistant "$keep")"
+  printf 'Put it back with: task-config add assistant %s\n' "$agent"
+  return 0
+}
+
 cmd_use() {
   local agent="$1"
   [[ -n "$agent" ]] || {
@@ -864,10 +941,11 @@ cmd_sync() {
 }
 
 case "$SUBCMD" in
-  show) cmd_show ;;
-  set)  cmd_set "$AXIS" "$VALUE" ;;
-  add)  cmd_add "$AXIS" "$VALUE" ;;
-  use)  cmd_use "$AXIS" ;;
-  sync) cmd_sync ;;
-  *)    echo "Error: unknown subcommand '$SUBCMD' — expected show, set, add, use or sync" >&2; exit 1 ;;
+  show)   cmd_show ;;
+  set)    cmd_set "$AXIS" "$VALUE" ;;
+  add)    cmd_add "$AXIS" "$VALUE" ;;
+  remove) cmd_remove "$AXIS" "$VALUE" ;;
+  use)    cmd_use "$AXIS" ;;
+  sync)   cmd_sync ;;
+  *)      echo "Error: unknown subcommand '$SUBCMD' — expected show, set, add, remove, use or sync" >&2; exit 1 ;;
 esac

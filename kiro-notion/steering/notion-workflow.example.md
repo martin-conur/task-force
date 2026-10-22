@@ -218,6 +218,7 @@ side and committed once. Which one runs is then a local choice, not a commit:
 task-config add assistant kiro   # install the other one beside this, settings carried
 task-config use kiro             # the active assistant: local git config, no tracked file
 task-config sync                 # make the two docs' tracker settings agree again
+task-config remove assistant kiro  # drop one again: the mirror of add, the kept one goes active
 ```
 
 `add` keeps the assistant you are on active, so nothing changes until you `use`
@@ -233,8 +234,13 @@ none active, every dispatcher refuses and names `task-config use`. `show` marks 
 active loadout and flags **drift**, a tracker setting the two workflow docs disagree
 on. `sync` resolves it: the active assistant's doc wins, or `--from <assistant>`
 picks the other one, and only the other doc is re-rendered. On a dual repo,
-`set assistant A` keeps A and removes the other, `set loadout` on another tracker
-replaces both, and `set tracker` is refused with the two steps that do it.
+`set assistant A` is refused and changes nothing, `--yes` or not (#303): A is
+already installed, so the switch is `use A` and dropping the other is
+`remove assistant <other>`, which previews its deletions and confirms on a TTY.
+`set loadout` onto the same tracker is refused the same way; onto another tracker
+it replaces both, and `set tracker` is refused with the two steps that do it.
+`show` prints the switch in one line: `task-config use <other>`, or
+`task-work … --agent <other>` for one launch.
 `task-remove` removes both and clears the setting. jira cannot be dual until a
 kiro-jira loadout exists (#92).
 

@@ -15,7 +15,9 @@
 #     different trackers;
 #   - the two docs' tracker settings are checked for drift, and `sync` fixes it;
 #   - `set` and `task-remove` handle the dual state, keeping what the pair shares
-#     until the last of them goes;
+#     until the last of them goes; `set assistant` (or `set loadout` on the same
+#     tracker) is refused there, and `remove assistant` is the explicit way to
+#     drop one (#303);
 #   - kiro-jira does not exist (#92), so jira cannot be dual.
 
 bats_load_library bats-support
@@ -448,16 +450,121 @@ _sum() {
 # set on a dual repo
 # ---------------------------------------------------------------------------
 
-@test "set assistant on a dual repo keeps that assistant and removes the other" {
+# A dual repo committed clean, claude active: the state a refused command must
+# leave exactly as it found it.
+_dual_committed() {
   _init claude-gh --owner acme --repo widgets --project 7
   run "$TASK_CONFIG" add assistant kiro --yes
+  assert_success
+  _commit_all dual
+}
+
+_assert_untouched() {
+  run git -C "$MAIN_REPO" status --porcelain
+  assert_output ""
+  assert_equal "$(_active)" claude
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+  assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+  assert [ -f "$MAIN_REPO/.kiro/agents/worker.json" ]
+}
+
+@test "set assistant on a dual repo is refused, changes nothing, and names use and remove (#303)" {
+  _dual_committed
+  local a
+  for a in claude kiro; do
+    run "$TASK_CONFIG" set assistant "$a" --yes
+    assert_failure
+    assert_output --partial "both assistants are installed here (claude-gh kiro-gh)"
+    assert_output --partial "task-config use $a"
+    assert_output --partial "task-config remove assistant $( [[ $a == claude ]] && echo kiro || echo claude )"
+    refute_output --partial "removed"
+    _assert_untouched
+  done
+}
+
+@test "set loadout <assistant>-<same tracker> on a dual repo is refused like set assistant (#303)" {
+  _dual_committed
+  run "$TASK_CONFIG" set loadout claude-gh --yes
+  assert_failure
+  assert_output --partial "task-config use claude"
+  assert_output --partial "task-config remove assistant kiro"
+  _assert_untouched
+}
+
+@test "set assistant on a dual repo is refused without --yes too, before any prompt (#303)" {
+  _dual_committed
+  run bash -c "'$TASK_CONFIG' set assistant claude </dev/null"
+  assert_failure
+  refute_output --partial "Proceed?"
+  _assert_untouched
+}
+
+@test "remove assistant drops only the other assistant's artifacts and makes the kept one active (#303)" {
+  _dual_committed
+  git config task-force.assistant kiro
+  local before
+  before=$(_sum .claude CLAUDE.md)
+  run "$TASK_CONFIG" remove assistant kiro --yes
+  assert_success
+  assert_output --partial "removing kiro-gh, keeping claude-gh"
+  assert [ ! -e "$MAIN_REPO/.kiro" ]
+  assert_equal "$(_sum .claude CLAUDE.md)" "$before"
+  assert_equal "$(_active)" claude
+  run bash -c "source '$DETECT'; aw_detect_matches '$MAIN_REPO'"
+  assert_output claude-gh
+  # Every change is a deletion under .kiro/: nothing of claude's was touched.
+  run git -C "$MAIN_REPO" status --porcelain
+  refute_line --regexp '^.. [^.]|^.. \.[^k]'
+}
+
+@test "remove assistant --dry-run previews the deletions and changes nothing (#303)" {
+  _dual_committed
+  run "$TASK_CONFIG" remove assistant kiro --dry-run
+  assert_success
+  assert_output --partial "removing kiro-gh:"
+  assert_output --partial ".kiro/agents/worker.json"
+  assert_output --partial "active assistant → claude"
+  assert_output --partial "--dry-run: nothing was changed."
+  _assert_untouched
+}
+
+@test "remove assistant is refused for the only assistant, one not installed, or a bad usage (#303)" {
+  _init claude-gh --owner acme --repo widgets --project 7
+  run "$TASK_CONFIG" remove assistant claude --yes
+  assert_failure
+  assert_output --partial "the only assistant installed here"
+  assert_output --partial "task-remove"
+  assert [ -f "$MAIN_REPO/.claude/gh-workflow.md" ]
+  run "$TASK_CONFIG" remove assistant kiro --yes
+  assert_failure
+  assert_output --partial "kiro is not installed here"
+  run "$TASK_CONFIG" remove tracker gh --yes
+  assert_failure
+  assert_output --partial "expected: task-config remove assistant"
+  run "$TASK_CONFIG" remove assistant codex --yes
+  assert_failure
+  assert_output --partial "unknown assistant 'codex'"
+}
+
+@test "set assistant on a single-assistant repo still swaps, as before #293 (#303)" {
+  _dual_committed
+  run "$TASK_CONFIG" remove assistant kiro --yes
+  assert_success
   run "$TASK_CONFIG" set assistant kiro --yes
   assert_success
-  assert_output --partial "keeping kiro-gh, removing claude-gh"
-  assert [ ! -e "$MAIN_REPO/.claude/gh-workflow.md" ]
-  assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
+  assert_output --partial "claude-gh → kiro-gh done."
   run bash -c "source '$DETECT'; aw_detect_matches '$MAIN_REPO'"
   assert_output kiro-gh
+}
+
+@test "show on a dual repo hints at the switch and the one-off launch (#303)" {
+  _dual_committed
+  run "$TASK_CONFIG" show
+  assert_success
+  assert_output --partial "switch: task-config use kiro · launch one: task-work … --agent kiro"
+  git config task-force.assistant kiro
+  run "$TASK_CONFIG" show
+  assert_output --partial "switch: task-config use claude · launch one: task-work … --agent claude"
 }
 
 @test "set loadout on another tracker replaces both loadouts with the one named" {
@@ -483,10 +590,10 @@ _sum() {
   assert [ -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
 }
 
-@test "set assistant on a local dual repo keeps the shared tasks/ scaffolding and .gitignore entry" {
+@test "remove assistant on a local dual repo keeps the shared tasks/ scaffolding and .gitignore entry" {
   _init claude-local
   run "$TASK_CONFIG" add assistant kiro --yes
-  run "$TASK_CONFIG" set assistant claude --yes
+  run "$TASK_CONFIG" remove assistant kiro --yes
   assert_success
   assert_output --partial "kept tasks/ scaffolding and the .gitignore entry — claude-local still uses them"
   assert [ -f "$MAIN_REPO/tasks/README.md" ]

@@ -47,6 +47,8 @@ source "$AW_ROOT/lib/zellij-tab.sh"
 source "$AW_ROOT/lib/repo-name.sh"
 # shellcheck source=lib/ci-guard.sh
 source "$AW_ROOT/lib/ci-guard.sh"
+# shellcheck source=lib/hook-carrier.sh
+source "$AW_ROOT/lib/hook-carrier.sh"
 
 usage() {
   cat <<'EOF'
@@ -60,6 +62,11 @@ Opens a fresh tab on the existing worktree and launches the agent with the same
 role environment task-work injects, so the session registers with radio and is
 reachable again. It never creates, reuses or removes a worktree: if the worktree
 is missing, this refuses and points at `task-work`.
+
+It refuses a worktree that has no radio hooks for the agent (one forked before
+that assistant's loadout was committed) and names the merge that fixes it. After
+the launch it waits up to $TASK_RECREATE_WORKER_REGISTER_WAIT seconds (default
+30) for the role to register, and says "Recovered" only when it has.
 
 Options:
       --resume        Resume the previous agent session instead of starting a
@@ -462,6 +469,23 @@ if [[ -z "$NO_LAUNCH" ]]; then
   # this check and block the recovery — and a false refusal here is worse than
   # the conservative pass the guard's own docs describe.
   aw_agent_preflight "$MAIN_WORKTREE" "$IMPL" || exit 1
+
+  # The check above asks whether the repo is installed for this agent; this one
+  # asks whether THE WORKTREE is (#304). It holds what was committed when it was
+  # forked, so a worktree cut before `task-config add assistant` has no hooks for
+  # the newer assistant, and an agent started there registers nothing while this
+  # command reported it recovered. Refused before the sidecar is touched.
+  if ! aw_dir_has_hook_carrier "$AGENT" "$WORKTREE_DIR"; then
+    {
+      echo "Error: worktree '$SLUG' has no $AGENT radio hooks — refusing to launch $AGENT there."
+      echo "       $WORKTREE_DIR/$(aw_hook_carrier_rel "$AGENT") is missing, or carries no 'radio register' hook."
+      echo "       The worktree predates the $AGENT loadout: $AGENT would start, never register,"
+      echo "       and radio could not reach it."
+      aw_hook_carrier_remedy "$AGENT" "$WORKTREE_DIR" "$BASE_BRANCH" "$MAIN_WORKTREE"
+      echo "         task-recreate-worker ${ORIG_ARGS[*]}"
+    } >&2
+    exit 1
+  fi
 fi
 
 # ---------------- report ----------------
@@ -557,6 +581,8 @@ STAY_ON_CALLER="1"
 [[ -n "$FOCUS" ]] && STAY_ON_CALLER=""
 
 echo "Opening zellij tab '$SLUG' in $IN_SESSION..."
+# The register this command waits for below must be newer than this.
+LAUNCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # `set +H; ` must come BEFORE $RADIO_ENV_PREFIX, never between it and the agent:
 # `VAR=val cmd1; cmd2` scopes the assignments to cmd1 only, so the env would
 # attach to the `set` builtin and never reach the agent — radio routing and
@@ -576,18 +602,89 @@ aw_record_tab_id "$SLUG" "$INFO_FILE" task-recreate-worker
 if [[ -n "$NO_LAUNCH" ]]; then
   echo "Tab opened at $WORKTREE_DIR — agent NOT launched (--no-launch)."
   echo "Nothing has registered with radio, so $ROLE stays unwakeable until it does."
-elif [[ -n "$RESUME" ]]; then
+  exit 0
+fi
+
+# Which session a --resume launched is a fact about the launch, not the
+# register, so it is said whether or not the register below lands.
+if [[ -n "$RESUME" ]]; then
   if [[ -n "$RESUME_SESSION_ID" ]]; then
-    echo "Recovered $ROLE in $WORKTREE_DIR — resuming session $RESUME_SESSION_ID"
+    echo "Launched $ROLE in $WORKTREE_DIR — resuming session $RESUME_SESSION_ID"
     echo "(its id came from the SessionEnd payload radio logged for this worktree)."
   else
-    echo "Recovered $ROLE in $WORKTREE_DIR — pick the session to resume in the new tab."
+    echo "Launched $ROLE in $WORKTREE_DIR — pick the session to resume in the new tab."
     echo "No session id was recoverable for this worktree, so Claude's picker is doing the choosing."
   fi
   echo "Either way the session inherits the role env from this launch, so radio can reach it (#229)."
-else
-  echo "Recovered $ROLE in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
-  if [[ "$INBOX_N" != "0" ]]; then
-    echo "Its SessionStart register will surface the $INBOX_N queued message(s) on the first turn."
+fi
+
+# ---------------- verify the register ----------------
+# "Recovered" is a claim about radio, not about zellij: it means the role is
+# addressable again. So it is printed only once the new session's SessionStart
+# register has landed — a session file written since the launch, by this agent,
+# bound to a tab (#304). Before this the line was printed on faith, and a
+# hookless agent got it as readily as a working one.
+REGISTER_WAIT="${TASK_RECREATE_WORKER_REGISTER_WAIT:-30}"
+[[ "$REGISTER_WAIT" =~ ^[0-9]+$ ]] || REGISTER_WAIT=30
+NEW_TAB_ID=$(_info_field TAB_ID "$INFO_FILE")
+
+# Prints nothing and succeeds once the register is in; otherwise prints why not.
+_register_status() {
+  local hb agent tab_id
+  [[ -f "$SESSION_FILE" ]] || { echo "no session file was written"; return 1; }
+  hb=$(_info_field LAST_HEARTBEAT "$SESSION_FILE")
+  # ISO-8601 UTC at one-second resolution, so a string compare orders them.
+  if [[ -z "$hb" || "$hb" < "$LAUNCHED_AT" ]]; then
+    echo "the session file is left over from before the launch (heartbeat ${hb:-none})"
+    return 1
   fi
+  agent=$(_info_field AGENT "$SESSION_FILE")
+  if [[ "$agent" != "$AGENT" ]]; then
+    echo "the session file says AGENT=${agent:-<none>}, not $AGENT"
+    return 1
+  fi
+  tab_id=$(_info_field TAB_ID "$SESSION_FILE")
+  if [[ -z "$tab_id" ]]; then
+    echo "it registered with an empty TAB_ID, so no wake can reach it"
+    return 1
+  fi
+  if [[ -n "$NEW_TAB_ID" && "$tab_id" != "$NEW_TAB_ID" ]]; then
+    echo "it registered TAB_ID=$tab_id, but the new tab is $NEW_TAB_ID"
+    return 1
+  fi
+  return 0
+}
+
+REGISTER_WHY=""
+_waited=0
+while ! REGISTER_WHY=$(_register_status); do
+  (( _waited >= REGISTER_WAIT )) && break
+  sleep 1
+  _waited=$(( _waited + 1 ))
+done
+
+if [[ -n "$REGISTER_WHY" ]]; then
+  {
+    echo "Warning: $ROLE was launched in tab '$SLUG' but has NOT registered with radio"
+    echo "         after ${REGISTER_WAIT}s: $REGISTER_WHY."
+    echo "         It is not recovered yet — radio cannot reach it, and its $INBOX_N queued"
+    echo "         message(s) stay unread until it registers. Look at the tab. Likely causes:"
+    if [[ -n "$RESUME" && -z "$RESUME_SESSION_ID" ]]; then
+      echo "           - claude's session picker is waiting for you to pick: the register"
+      echo "             follows the pick;"
+    fi
+    echo "           - a startup prompt is waiting for input (claude's folder-trust question,"
+    echo "             kiro's upgrade dialog): answer it and the register follows;"
+    echo "           - the agent failed to start, or exited;"
+    echo "           - $(aw_hook_carrier_rel "$AGENT") in the worktree lost its radio hooks."
+    echo "         Check: cat $SESSION_FILE"
+    echo "                grep 'register' ${RADIO_HOME}/log | tail -5"
+  } >&2
+  exit 0
+fi
+
+echo "Recovered $ROLE in $WORKTREE_DIR (branch: $BRANCH, base: $BASE_BRANCH)"
+echo "It registered with radio: AGENT=$AGENT, TAB_ID=$(_info_field TAB_ID "$SESSION_FILE")."
+if [[ -z "$RESUME" && "$INBOX_N" != "0" ]]; then
+  echo "Its SessionStart register surfaced the $INBOX_N queued message(s) for its first turn."
 fi

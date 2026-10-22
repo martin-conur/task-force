@@ -103,6 +103,8 @@ AW_ROOT=$(dirname "$BIN_DIR")
 . "$AW_ROOT/lib/tracker-settings.sh"
 # shellcheck source=lib/loadout-artifacts.sh
 . "$AW_ROOT/lib/loadout-artifacts.sh"
+# shellcheck source=lib/hook-carrier.sh
+. "$AW_ROOT/lib/hook-carrier.sh"
 
 ASSISTANTS=(claude kiro)
 TRACKERS=(gh jira notion local)
@@ -652,6 +654,36 @@ _set_dual() {
 # add / use / sync (#293)
 # ---------------------------------------------------------------------------
 
+# _stale_worktree_warning <agent>
+# add and use change only the main checkout (#304). A live worktree keeps the
+# files it was forked with, so one cut before <agent>'s loadout was committed
+# has no hooks for it, and a worker relaunched there on <agent> would never
+# register. List them, with the merge each needs. A warning, never a refusal:
+# nothing is launched here, and task-recreate-worker refuses at the launch.
+_stale_worktree_warning() {
+  local agent="$1" main stale rel slug dir base
+  main=$(git -C "$REPO_ROOT" worktree list --porcelain | head -1 | sed 's/^worktree //')
+  [[ -d "$main" ]] || return 0
+  stale=$(aw_stale_worktrees "$main" "$agent")
+  [[ -n "$stale" ]] || return 0
+  rel=$(aw_hook_carrier_rel "$agent")
+  {
+    printf '\nWarning: %s live worktree(s) have no %s radio hooks (%s): they were\n' \
+      "$(grep -c . <<<"$stale")" "$agent" "$rel"
+    printf '         forked before the %s loadout was committed. A worker relaunched in one on\n' "$agent"
+    printf '         %s would never register, so task-recreate-worker refuses until it is merged:\n' "$agent"
+    while IFS=$'\t' read -r slug dir base; do
+      printf '           %-24s git -C %s merge %s\n' "$slug" "$dir" "$base"
+    done <<<"$stale"
+    if ! aw_ref_has_hook_carrier "$agent" "$main" HEAD; then
+      printf '         %s is not committed on %s yet: commit it first, since a merge brings\n' \
+        "$rel" "$(git -C "$main" rev-parse --abbrev-ref HEAD)"
+      printf '         only what is.\n'
+    fi
+  } >&2
+  return 0
+}
+
 cmd_add() {
   local axis="$1" agent="$2"
   [[ "$axis" == assistant && -n "$agent" ]] || {
@@ -728,6 +760,7 @@ cmd_add() {
   _drift_report "${MATCHES[@]}" || true
   printf 'Commit both loadouts once; from then on a switch changes no tracked file:\n'
   printf '  task-config use %s\n' "$agent"
+  _stale_worktree_warning "$agent"
   return 0
 }
 
@@ -776,6 +809,7 @@ cmd_use() {
     "$agent" "$AW_ACTIVE_ASSISTANT_KEY"
   ((${#MATCHES[@]} > 1)) \
     || printf 'Only %s is installed, so detection does not need it yet.\n' "${MATCHES[0]}"
+  _stale_worktree_warning "$agent"
   return 0
 }
 

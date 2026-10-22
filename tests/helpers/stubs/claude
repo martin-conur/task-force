@@ -7,4 +7,19 @@ echo "TASK_FORCE_ROLE=${TASK_FORCE_ROLE:-} ZELLIJ_TAB=${ZELLIJ_TAB:-} TASK_FORCE
 # The radio home it was started with, `<unset>` when none (#262). Its own file:
 # claude.env lines are matched whole by existing tests.
 echo "TASK_FORCE_HOME=${TASK_FORCE_HOME-<unset>}" >> "${STUB_CALLS_DIR}/claude.home"
+# Opt-in: play the SessionStart hook a hooked install would run, registering
+# with the radio at $STUB_CLAUDE_RADIO as $STUB_CLAUDE_AGENT (default claude).
+# $STUB_CLAUDE_REGISTER_DELAY seconds later, in the background, when set: an
+# agent that takes a while to start.
+if [[ -n "${STUB_CLAUDE_RADIO:-}" ]]; then
+  _register() {
+    "$STUB_CLAUDE_RADIO" register --role "${TASK_FORCE_ROLE:-}" --tab "${ZELLIJ_TAB:-}" \
+      --repo "$PWD" --agent "${STUB_CLAUDE_AGENT:-claude}" --loadout claude-gh >/dev/null 2>&1 || true
+  }
+  if [[ -n "${STUB_CLAUDE_REGISTER_DELAY:-}" ]]; then
+    ( sleep "$STUB_CLAUDE_REGISTER_DELAY"; _register ) >/dev/null 2>&1 &
+  else
+    _register
+  fi
+fi
 exit 0

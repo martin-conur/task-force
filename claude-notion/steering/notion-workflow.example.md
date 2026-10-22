@@ -79,7 +79,7 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 `task-work <slug> [notion-url] [options]` — create worktree + zellij tab + worker session
 
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
-- `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`)
+- `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`). Refused when `REF` lacks the radio hooks `HEAD` carries for the agent (#304): a worktree forked from it would start an agent that never registers. Merge the base into `REF` first
 - `-p, --plan` — launch the worker in Claude plan mode (runs `/planner`); mutually exclusive with `--auto`
 - `--auto` — launch the worker in Claude auto permission mode (runs `/worker`); permission mode only, mutually exclusive with `--plan`
 - `--auto-submit` — radio auto-submit: an incoming wake submits itself instead of waiting in the prompt box for an Enter. **The default** on every launch, `--plan` included, since nobody types in a worker's tab (#254); the flag only makes a launch line explicit
@@ -161,6 +161,23 @@ definition, and `radio register` adopts it from that file when its own name
 lookup misses (#218). Stripping it first means a register that beats us to the
 write finds nothing to adopt and resolves the new tab by name instead.
 
+It refuses a worktree with no radio hooks for the agent it is about to
+launch (#304): `.claude/settings.json` for claude, `.kiro/agents/worker.json`
+(or the global one) for kiro, each carrying radio's `register` hook. A worktree
+holds what was committed when it was forked, so one cut before
+`task-config add assistant` has none for the newer assistant, and an agent
+started there runs and never registers. The refusal names the fix,
+`git -C <worktree> merge <base>` with the base from the sidecar, or says the
+base does not carry the hooks either.
+
+And it prints `Recovered` only once the register has landed: after the launch
+it waits up to 30s (`TASK_RECREATE_WORKER_REGISTER_WAIT`) for the role's
+session file to show a register newer than the launch, by the expected
+`AGENT`, with a `TAB_ID`. Otherwise it warns that the agent started but has not
+registered, with the likely causes (a startup prompt waiting in the tab, an
+agent that exited), and the "surfaced N queued message(s)" line is not printed.
+It still exits 0: the tab and the agent are up.
+
 ```bash
 task-recreate-worker issue-223           # fresh session; tab, role and mail rebound
 task-recreate-worker issue-223 --auto    # hands-off: auto-submit (and auto permission mode on claude)
@@ -225,7 +242,11 @@ task-config sync                 # make the two docs' tracker settings agree aga
 ```
 
 `add` keeps the assistant you are on active, so nothing changes until you `use`
-the other. The choice lives in `git config task-force.assistant`, which linked
+the other. Both change only the main checkout: a live worktree keeps the files
+it was forked with, so `add` and `use` end with a warning listing every worker
+worktree that has no radio hooks for the new assistant, each with its
+`git -C <worktree> merge <base>` (#304). A warning only; `task-recreate-worker`
+is what refuses. The choice lives in `git config task-force.assistant`, which linked
 worktrees share. Detection reads `--impl` > `$AW_IMPL` > a launcher's `--agent` >
 the active assistant > a single match, and the active assistant only resolves two
 loadouts on **one** tracker: two trackers stay refused. With both installed and

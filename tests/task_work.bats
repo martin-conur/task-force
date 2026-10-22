@@ -635,3 +635,48 @@ _setup_stale_local_base() {
     return 1
   }
 }
+
+# ---------------------------------------------------------------------------
+# --from a ref that predates the agent's loadout (#304)
+# ---------------------------------------------------------------------------
+
+# A branch cut before the claude loadout was committed, then the loadout on main.
+_stale_branch_then_loadout() {
+  git branch old-feature
+  seed_hook_carriers "$MAIN_REPO"
+  git add .claude/settings.json
+  git commit -q -m "claude loadout"
+}
+
+@test "--from a ref without the agent's hooks is refused, naming the merge (#304)" {
+  _stale_branch_then_loadout
+  run "$TASK_WORK" --from old-feature stacked
+  assert_failure
+  assert_output --partial "--from 'old-feature' has no claude radio hooks"
+  assert_output --partial "Merge 'main' into 'old-feature' first"
+  assert [ ! -d "$WORKTREE_BASE/stacked" ]
+  run git rev-parse --verify --quiet task/stacked
+  assert_failure
+}
+
+@test "--from a ref that carries the hooks proceeds (#304)" {
+  _stale_branch_then_loadout
+  git checkout -q old-feature && git merge -q main && git checkout -q main
+  run "$TASK_WORK" --from old-feature stacked
+  assert_success
+  assert [ -d "$WORKTREE_BASE/stacked" ]
+}
+
+@test "--from is not refused when HEAD has no hooks either: no merge would fix it (#304)" {
+  git branch old-feature
+  run "$TASK_WORK" --from old-feature stacked
+  assert_success
+  assert [ -d "$WORKTREE_BASE/stacked" ]
+}
+
+@test "--from --no-launch is not refused: nothing is started (#304)" {
+  _stale_branch_then_loadout
+  run "$TASK_WORK" --from old-feature stacked --no-launch
+  assert_success
+  assert [ -d "$WORKTREE_BASE/stacked" ]
+}

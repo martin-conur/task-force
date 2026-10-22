@@ -239,6 +239,22 @@ setup_kiro_agents() {
   done
 }
 
+# Seeds both assistants' radio hook carriers (#304) into <dir>: the
+# `.claude/settings.json` and `.kiro/agents/worker.json` an installed loadout
+# leaves there, each with a `radio register` hook. task-recreate-worker refuses a
+# worktree without the one for its agent, since an agent started there would
+# never register. Written untracked, straight into the worktree, so the fixture
+# repo's history and loadout detection stay as each suite set them up.
+# Usage: seed_hook_carriers <dir>
+seed_hook_carriers() {
+  local dir="$1"
+  mkdir -p "$dir/.claude" "$dir/.kiro/agents"
+  printf '%s\n' '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --agent claude"}]}]}}' \
+    > "$dir/.claude/settings.json"
+  printf '%s\n' '{"name":"worker","hooks":{"agentSpawn":[{"command":"radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --agent kiro"}]}}' \
+    > "$dir/.kiro/agents/worker.json"
+}
+
 # Creates a git worktree + .info file, simulating what task-work would do.
 # Usage: setup_worktree <slug> [base_branch]
 setup_worktree() {
@@ -290,6 +306,9 @@ setup_stubs() {
   done
 
   export PATH="$STUB_BIN:$PATH"
+  # A stubbed agent never registers, so task-recreate-worker's wait for the
+  # register (#304) would run out its full default on every launch.
+  export TASK_RECREATE_WORKER_REGISTER_WAIT=0
 
   reset_radio_env
 }

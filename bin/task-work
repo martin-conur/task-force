@@ -34,6 +34,8 @@ source "$AW_ROOT/lib/worktree-create.sh"
 source "$AW_ROOT/lib/repo-name.sh"
 # shellcheck source=lib/ci-guard.sh
 source "$AW_ROOT/lib/ci-guard.sh"
+# shellcheck source=lib/hook-carrier.sh
+source "$AW_ROOT/lib/hook-carrier.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 # --agent: this one worker on the other installed assistant, without flipping
@@ -178,6 +180,26 @@ FROM_REF="${FROM_REF_OVERRIDE:-HEAD}"
 
 if ! git rev-parse --verify --quiet "${FROM_REF}^{commit}" >/dev/null 2>&1; then
   echo "Error: --from ref '$FROM_REF' does not resolve to a commit" >&2
+  exit 1
+fi
+
+# An explicit --from can name a ref older than the agent's loadout — an in-flight
+# branch cut before `task-config add assistant` (#304). A worktree forked from it
+# has no hooks for this agent, so the worker would start and never register.
+# Refused only when HEAD does carry them: then it is the ref that is stale, and a
+# merge fixes it. A repo whose HEAD lacks them is in that state on every fork,
+# --from or not, which is not this check's call.
+if [[ -n "$FROM_REF_OVERRIDE" && -z "$NO_LAUNCH" ]] \
+   && aw_ref_has_hook_carrier "$AGENT" "$REPO_ROOT" HEAD \
+   && ! aw_ref_has_hook_carrier "$AGENT" "$REPO_ROOT" "$FROM_REF"; then
+  {
+    echo "Error: --from '$FROM_REF' has no $AGENT radio hooks — refusing to fork a worker from it."
+    echo "       $(aw_hook_carrier_rel "$AGENT") is missing there, or carries no 'radio register' hook:"
+    echo "       '$FROM_REF' predates the $AGENT loadout, so $AGENT would start in the new"
+    echo "       worktree, never register, and radio could not reach it."
+    echo "       Merge '$BASE_BRANCH' into '$FROM_REF' first (git merge $BASE_BRANCH, on that"
+    echo "       branch), or fork from a ref that has it; then re-run."
+  } >&2
   exit 1
 fi
 

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-22
+
 ### Fixed
 - **`task-recreate-worker` and `task-done` see agent processes still running in the worktree (#305).** In recommender-systems three kiro workers' tabs were closed and their processes kept running for up to two days: `kiro-cli-chat chat`, the bun `tui.js` front end and `kiro-cli-chat acp`, one of them in a worktree git had already pruned. They were stalled only because the kiro credits had run out, beside the claude workers `task-recreate-worker` had since started in the same worktrees. That command judged liveness by the tab name and the radio heartbeat, both gone, so it could not see them; a PM found them with `lsof` and killed them by hand.
   - **The scan.** A new `lib/worktree-procs.sh` lists the processes whose cwd is inside a worktree, with pid, start time and command. Its cost is bounded: one `ps` over the table, then a cwd lookup only for agent processes and their descendants. An agent is judged by what runs: the `claude` or `kiro-cli*` binary, a bun or node launcher whose script is one, or a shell `-c` wrapper that runs one (task-work's `bash -ic`), so `less docs/claude` is not one. The lookup goes through `/proc/<pid>/cwd` on Linux or one batched `lsof -a -d cwd` elsewhere. The caller's own agent tree is left out, starting from the outermost agent above it (the `bash -ic` wrapper), since `task-done` runs under the finishing worker's agent, whose tab is about to close. Run from another tab, a live worker is listed. `TASK_FORCE_NO_PROC_SCAN=1` turns the scan off.
@@ -510,7 +512,8 @@ First feature release since `v0.0.1`. Highlights: two new local-tracking loadout
 - Test temp-dir cleanups moved to bats `teardown()` so they fire even on assertion failure (#64)
 - Bats suite at **460 tests** across 7 loadouts × 2 OS
 
-[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/martin-conur/task-force/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/martin-conur/task-force/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/martin-conur/task-force/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/martin-conur/task-force/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/martin-conur/task-force/compare/v0.2.0...v0.2.1

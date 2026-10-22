@@ -463,13 +463,16 @@ task-monitor-snapshot --local           # disk only: no forge calls, merged with
 
 ```bash
 task-monitor-queue set 267 266 180 --note 267="kiro hooks first"   # replace, in order
+task-monitor-queue set PROJ-7 --title PROJ-7="Rotate the keys"     # a title the tracker cannot give
 task-monitor-queue add 290                                         # append
 task-monitor-queue rm 266                                          # drop
 task-monitor-queue clear                                           # empty
 task-monitor-queue                                                 # show it
 ```
 
-A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page URL, a task file name. Refs are compared by their last path segment, ignoring a URL's query string and fragment, so `267`, `#267` and `…/issues/267` are one item, and so are a Notion page URL with and without `?pvs=4`. That is what lets `task-work` drop the ref it dispatches from the queue whatever form the PM queued it in, so a dispatched item never comes back as "next" after it lands. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears it. `--note` splits on the first `=`, so a ref containing `=` cannot take a note, and `--` goes before a ref that starts with `-`. The file is `$TASK_FORCE_HOME/monitor/<repo>/queue`, one ref per line with an optional tab-separated note, and `task-monitor-queue` owns that format.
+A ref is whatever the tracker uses: an issue number, a Jira key, a Notion page URL, a task file name. Refs are compared by their last path segment, ignoring a URL's query string and fragment, so `267`, `#267` and `…/issues/267` are one item, and so are a Notion page URL with and without `?pvs=4`. That is what lets `task-work` drop the ref it dispatches from the queue whatever form the PM queued it in, so a dispatched item never comes back as "next" after it lands. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears it. `--note` splits on the first `=`, so a ref containing `=` cannot take a note, and `--` goes before a ref that starts with `-`. The file is `$TASK_FORCE_HOME/monitor/<repo>/queue`, one ref per line with an optional tab-separated note and, after a second tab, an optional title, and `task-monitor-queue` owns that format.
+
+`--title <ref>=<text>` is for trackers the shell cannot read (#306). task-force holds no Jira or Notion credentials, so on those boards a queued row has no title of its own. The PM knows the item's short name from the conversation where it was agreed, and gives it once. `--title` works on `set` and `add` and is repeatable, like `--note`. `set` keeps the title of a ref that stays queued, `--title <ref>=` clears it, and it splits on the first `=` the same way. The snapshot uses the PM's title only where the tracker has no real one: gh and local keep the issue's or task file's own title. With no title at all, a Notion page reads `notion:3fdd9a72…` (the short page id) and a Jira browse URL reads as its key. The full URL stays the item's `url`, so `o` still opens it.
 
 ## `task-monitor` — the board, live
 

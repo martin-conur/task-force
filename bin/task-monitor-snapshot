@@ -413,15 +413,25 @@ _snapshot_repo() {
   #
   # The queue file's format is owned by bin/task-monitor-queue (#275), which
   # the PM writes it through: one ref per line, an optional note after a tab,
-  # `#` comments ignored.
-  local queue="$cache/queue" next_source=none line note fallback fb_ok=1
+  # an optional title after a second tab, `#` comments ignored.
+  #
+  # The PM's title (#306) is for trackers the shell cannot read: it replaces the
+  # describer's title only when that is no real title — empty, or just the ref
+  # or label echoed back, which is all jira, notion and a describer that could
+  # not ask ever give. gh and local keep the tracker's own. It is applied after
+  # the cache lookup and never cached, so a blank title cached by an earlier
+  # run cannot hide one the PM sets later.
+  local queue="$cache/queue" next_source=none line rest note title fallback fb_ok=1
   : > "$w/next.ndjson"
   if [[ -s "$queue" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       case "$line" in ''|'#'*) continue ;; esac
       ref="${line%%$'\t'*}"
-      note=""
-      [[ "$line" == *$'\t'* ]] && note="${line#*$'\t'}"
+      rest=""
+      [[ "$line" == *$'\t'* ]] && rest="${line#*$'\t'}"
+      note="${rest%%$'\t'*}"
+      title=""
+      [[ "$rest" == *$'\t'* ]] && title="${rest#*$'\t'}"
       described=$(_describe "$ref" "" "$root" "$prev")
       refs_seen+="$ref"$'\n'
       src="${described%%$'\t'*}"
@@ -429,7 +439,10 @@ _snapshot_repo() {
       if [[ "$src" == live ]]; then
         issues_new=$(jq -c --arg ref "$ref" --argjson item "$item" '.[$ref] = $item' <<<"$issues_new")
       fi
-      jq -c --arg note "$note" '. + {note: (if $note == "" then null else $note end)}' <<<"$item" >> "$w/next.ndjson"
+      jq -c --arg note "$note" --arg title "$title" '
+        (.title // "") as $t
+        | (if $title != "" and ($t == "" or $t == .ref or $t == .label) then .title = $title else . end)
+        + {note: (if $note == "" then null else $note end)}' <<<"$item" >> "$w/next.ndjson"
       next_source=queue
     done < "$queue"
   fi

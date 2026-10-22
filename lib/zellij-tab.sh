@@ -272,6 +272,11 @@ aw_launch_tab() {
 # tell, and a launch never fails over focus. A retry or a final failure
 # writes one `tab-focus:` line to radio's log, to count how often the race
 # actually happens.
+#
+# Known limit: a first list-tabs answered before zellij has processed the
+# new-tab still reports the caller active, so the loop returns and a focus
+# steal that lands after it goes unseen. If a live run ever shows that, the
+# fix is to require two consecutive active observations of the caller.
 aw_snap_back_to_tab() {
   local slug="$1" caller_pos="$2"
   local checks="${AW_TAB_FOCUS_CHECKS:-7}" interval="${AW_TAB_FOCUS_INTERVAL:-0.25}"

@@ -104,8 +104,9 @@ only the remote branch after a merge: `git push origin --delete task/<slug>`.
 `task-done` also warns about, and lists, any agent processes still running in
 the worktree it removes (#305): an agent from an earlier tab that closed
 without taking it along. It never stops them; that is the PM's or your call.
-The agent running `task-done` is not listed, since its whole process tree goes
-with the tab. The warning is also logged, because that tab closes and takes it
+Run from the worker's own tab, the worker itself is not listed, since its whole
+process tree goes with the tab. Run from anywhere else, the PM's tab included, a
+worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
 along: `grep 'stray-procs:' ~/.task-force/radio/log`.
 
 `task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
@@ -163,13 +164,15 @@ It also refuses while **agent processes are still running in the worktree**
 workers' processes (`kiro-cli-chat chat`, the bun `tui.js` front end,
 `kiro-cli-chat acp`) once outlived their tabs by two days, idle only because the
 credits had run out, in worktrees this command was starting new agents in. The
-tab and the heartbeat cannot see them, so it asks the kernel: every process
-whose command looks like an agent (`claude`, `kiro-cli*`, a bun or node running
-kiro-cli), plus its children, with a cwd inside the worktree. The refusal lists
+tab and the heartbeat cannot see them, so it asks the kernel: every agent
+process (the `claude` or `kiro-cli*` binary, a bun or node launcher running one,
+a shell `-c` wrapper that runs one), plus its children, with a cwd inside the
+worktree. It judges by what runs, so `less docs/claude` is not an agent. The refusal lists
 pid, start time and command. `--force` does not get past it; `--kill-stale`
 stops them first, re-checking each pid's start time just before the signal so a
-recycled pid is left alone, and a process that survives the KILL stops the
-recovery. `TASK_FORCE_NO_PROC_SCAN=1` turns the scan off.
+recycled pid is left alone. Whether a process is still running is decided by
+scanning again, not by `kill -0`, so one that survives the KILL or refuses the
+signal (EPERM) stops the recovery. `TASK_FORCE_NO_PROC_SCAN=1` turns the scan off.
 
 The sidecar's `TAB_ID` is **stripped before the tab is spawned** and rewritten
 afterwards, never carried over: zellij's server restarted, so that id is stale by

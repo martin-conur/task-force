@@ -14,9 +14,8 @@
 #
 # So this lists, for one worktree, the agent processes whose cwd is inside it.
 # The cost is bounded: one `ps` over the whole table, then a cwd lookup only for
-# processes whose command looks like an agent (`claude`, `kiro-cli*`, a bun or
-# node running kiro-cli) and their descendants — `/proc/<pid>/cwd` on Linux, a
-# single batched `lsof -a -d cwd` elsewhere.
+# agent processes (see `is_agent` below for what counts) and their descendants
+# — `/proc/<pid>/cwd` on Linux, a single batched `lsof -a -d cwd` elsewhere.
 #
 # The caller's own agent is never listed. task-done runs inside the worker's
 # tab, under the very agent that is finishing, so its own ancestry has its cwd
@@ -47,15 +46,35 @@ _aw_proc_table() {
 # process and per descendant of one, minus the self pid's agent tree.
 _aw_proc_candidates() {
   awk -v self="$1" '
+    function base(w) { sub(/.*\//, "", w); return w }
+    function agent_word(w) { w = base(w); return w == "claude" || w ~ /^kiro-cli/ }
+    # Judged by what runs, not by any word on the line, so `less docs/claude`
+    # is not an agent. Three shapes are: the binary itself (claude,
+    # kiro-cli-chat); a bun or node launcher whose script is one (node …/claude,
+    # bun …/kiro-cli/tui.js); and a shell -c whose command string runs one, the
+    # bash -ic wrapper task-work launches an agent in. The wrapper has to count:
+    # it is the outermost agent above the caller, so the self exclusion below
+    # drops it, and a stray tab leaves one behind with the rest. A shell -c
+    # running `less docs/claude` still counts; the listing shows it, and
+    # --kill-stale asks before it signals.
+    function is_agent(i, a0, s) {
+      a0 = base($8)
+      if (agent_word(a0)) return 1
+      if (a0 == "bun" || a0 == "node") {
+        for (i = 9; i <= NF; i++) if ($i !~ /^-/) break
+        return i <= NF && (agent_word($i) || $i ~ /kiro-cli/)
+      }
+      if (a0 ~ /^-?(bash|sh|zsh|dash)$/ && $9 ~ /^-[a-zA-Z]*c[a-zA-Z]*$/) {
+        for (i = 10; i <= NF; i++) if (agent_word($i)) return 1
+      }
+      return 0
+    }
     {
       pid = $1; ppid[pid] = $2
       start[pid] = $3 " " $4 " " $5 " " $6 " " $7
       cmd = $8; for (i = 9; i <= NF; i++) cmd = cmd " " $i
       command[pid] = cmd; order[++n] = pid
-      # Matched on the whole command line, so a wrapper (node …/claude,
-      # bun …/kiro-cli/tui.js, the bash -ic task-work launches) counts too.
-      if (cmd ~ /(^|[ \/])claude( |$)/ || cmd ~ /(^|[ \/])kiro-cli[^ \/]*( |$)/ \
-          || cmd ~ /(^|[ \/])(bun|node)( .*)?kiro-cli/) agent[pid] = 1
+      if (is_agent()) agent[pid] = 1
     }
     END {
       # The outermost agent among the caller and its ancestors.
@@ -152,45 +171,58 @@ _aw_proc_signal() {
   fi
 }
 
-# aw_kill_worktree_procs <dir> <lines>
-# Stops the processes in <lines> (as listed for <dir>): TERM, then KILL whatever
-# is still alive after $AW_PROC_TERM_WAIT seconds. Each pid is signalled only if
-# a fresh scan of <dir> still lists it with the same start time — a process that
-# exited during the confirmation, or a pid since recycled by an unrelated
-# process, is left alone. Prints one line per signal sent; fails when anything
-# survived the KILL.
-aw_kill_worktree_procs() {
-  local dir="$1" listed="$2" now pid start cmd waited=0
-  local wait="${AW_PROC_TERM_WAIT:-5}"
-  local -a targets=() alive=()
-  [[ "$wait" =~ ^[0-9]+$ ]] || wait=5
-  now=$(aw_worktree_agent_procs "$dir")
+# _aw_still_running <dir> <lines>
+# The pids in <lines> that a fresh scan of <dir> still lists with the same start
+# time, one a line. This, not `kill -0`, is what "still running" means here:
+# `kill -0` fails alike for a process that is gone and for one we may not signal
+# (EPERM), and counting the second as stopped would recover beside it.
+_aw_still_running() {
+  local now pid start cmd
+  now=$(aw_worktree_agent_procs "$1")
   while IFS=$'\t' read -r pid start cmd; do
     [[ -n "$pid" ]] || continue
-    grep -qxF "$(printf '%s\t%s\t%s' "$pid" "$start" "$cmd")" <<<"$now" && targets+=("$pid")
-  done <<<"$listed"
-  [[ ${#targets[@]} -gt 0 ]] || return 0
-  echo "Sending TERM to: ${targets[*]}"
-  _aw_proc_signal -TERM "${targets[@]}" 2>/dev/null || true
+    if grep -qxF "$(printf '%s\t%s\t%s' "$pid" "$start" "$cmd")" <<<"$now"; then
+      echo "$pid"
+    fi
+  done <<<"$2"
+}
+
+# _aw_lines_for <lines> <pids>: the rows of <lines> for these pids, one a line.
+_aw_lines_for() {
+  awk -F'\t' -v want=" $(tr '\n' ' ' <<<"$2")" 'index(want, " " $1 " ")' <<<"$1"
+}
+
+# aw_kill_worktree_procs <dir> <lines>
+# Stops the processes in <lines> (as listed for <dir>): TERM, then KILL whatever
+# is still running after $AW_PROC_TERM_WAIT seconds. Each pid is signalled only
+# if a fresh scan of <dir> still lists it with the same start time, so a process
+# that exited during the confirmation, or a pid since recycled by an unrelated
+# process, is left alone. Prints one line per signal sent; fails when anything
+# is still running after the KILL, including a process that refused the signal.
+aw_kill_worktree_procs() {
+  local dir="$1" listed="$2" waited=0 targets alive left
+  local wait="${AW_PROC_TERM_WAIT:-5}"
+  [[ "$wait" =~ ^[0-9]+$ ]] || wait=5
+  targets=$(_aw_still_running "$dir" "$listed")
+  [[ -n "$targets" ]] || return 0
+  listed=$(_aw_lines_for "$listed" "$targets")
+  echo "Sending TERM to: $(tr '\n' ' ' <<<"$targets" | sed 's/ $//')"
+  # shellcheck disable=SC2086  # one word per pid, on purpose
+  _aw_proc_signal -TERM $targets 2>/dev/null || true
   while :; do
-    alive=()
-    for pid in "${targets[@]}"; do
-      _aw_proc_signal -0 "$pid" 2>/dev/null && alive+=("$pid")
-    done
-    [[ ${#alive[@]} -gt 0 && $waited -lt $wait ]] || break
+    alive=$(_aw_still_running "$dir" "$listed")
+    [[ -n "$alive" && $waited -lt $wait ]] || break
     sleep 1
     waited=$(( waited + 1 ))
   done
-  [[ ${#alive[@]} -gt 0 ]] || return 0
-  echo "Still running after ${wait}s; sending KILL to: ${alive[*]}"
-  _aw_proc_signal -KILL "${alive[@]}" 2>/dev/null || true
+  [[ -n "$alive" ]] || return 0
+  echo "Still running after ${wait}s; sending KILL to: $(tr '\n' ' ' <<<"$alive" | sed 's/ $//')"
+  # shellcheck disable=SC2086
+  _aw_proc_signal -KILL $alive 2>/dev/null || true
   sleep 1
-  local -a left=()
-  for pid in "${alive[@]}"; do
-    _aw_proc_signal -0 "$pid" 2>/dev/null && left+=("$pid")
-  done
-  if [[ ${#left[@]} -gt 0 ]]; then
-    echo "Could not stop: ${left[*]}" >&2
+  left=$(_aw_still_running "$dir" "$(_aw_lines_for "$listed" "$alive")")
+  if [[ -n "$left" ]]; then
+    echo "Could not stop: $(tr '\n' ' ' <<<"$left" | sed 's/ $//')" >&2
     return 1
   fi
   return 0

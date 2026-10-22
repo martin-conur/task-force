@@ -38,31 +38,38 @@ echo "ps $*" >> "$STUB_CALLS_DIR/ps.calls"
 # A second table, from the Nth call on, models a process table that changed
 # between the listing and the kill.
 n=$(grep -c . "$STUB_CALLS_DIR/ps.calls")
+table="$PROC_FIX/ps.txt"
 if [[ -f "$PROC_FIX/ps.after" && -n "${PROC_PS_SWITCH_AT:-}" && $n -ge $PROC_PS_SWITCH_AT ]]; then
-  cat "$PROC_FIX/ps.after"
-else
-  cat "$PROC_FIX/ps.txt"
+  table="$PROC_FIX/ps.after"
 fi
+# Only the rows still alive: a signalled process leaves the table.
+awk 'NR == FNR { alive[$1]; next } ($1 in alive)' "$PROC_FIX/alive" "$table"
 EOF
   cat > "$STUB_BIN/lsof" <<'EOF'
 #!/usr/bin/env bash
 echo "lsof $*" >> "$STUB_CALLS_DIR/lsof.calls"
 cat "$PROC_FIX/lsof.txt"
 EOF
-  # Records every signal; `-0 <pid>` succeeds only for pids listed in alive.
+  # Records every signal and removes a signalled pid from alive, so it leaves
+  # the ps table. Pids in alive.after-term survive the TERM; pids in immortal
+  # take both signals and stay; pids in eperm refuse every signal, -0 included,
+  # the way another user's process does.
   cat > "$STUB_BIN/kill-stub" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_CALLS_DIR/kill.calls"
-if [[ "$1" == -0 ]]; then grep -qxF "$2" "$PROC_FIX/alive"; exit; fi
-if [[ "$1" == -TERM ]]; then
-  shift
-  for p in "$@"; do grep -qxF "$p" "$PROC_FIX/alive.after-term" 2>/dev/null || sed -i.bak "/^$p\$/d" "$PROC_FIX/alive"; done
-fi
-if [[ "$1" == -KILL ]]; then
-  shift
-  for p in "$@"; do sed -i.bak "/^$p\$/d" "$PROC_FIX/alive"; done
-fi
-exit 0
+listed() { grep -qxF "$1" "$PROC_FIX/$2" 2>/dev/null; }
+sig="$1"; shift
+rc=0
+for p in "$@"; do
+  if listed "$p" eperm; then rc=1; continue; fi
+  case "$sig" in
+    -0) listed "$p" alive || rc=1 ;;
+    -TERM) listed "$p" alive.after-term || listed "$p" immortal \
+             || sed -i.bak "/^$p\$/d" "$PROC_FIX/alive" ;;
+    -KILL) listed "$p" immortal || sed -i.bak "/^$p\$/d" "$PROC_FIX/alive" ;;
+  esac
+done
+exit "$rc"
 EOF
   chmod +x "$STUB_BIN/ps" "$STUB_BIN/lsof" "$STUB_BIN/kill-stub"
   WT_PHYS="$(cd "$MAIN_REPO/.." && pwd -P)/${REPO_NAME}-worktrees"
@@ -131,6 +138,25 @@ lib() {
   refute_output --partial 5000007
 }
 
+@test "helper: an agent is what runs, not any word on the command line" {
+  proc 5000020 1 /work/wt less docs/claude
+  proc 5000021 1 /work/wt grep -r kiro-cli .
+  proc 5000022 1 /work/wt node /usr/local/bin/claude --resume
+  proc 5000023 1 /work/wt bun /opt/kiro-cli/tui.js
+  proc 5000024 1 /work/wt /opt/homebrew/bin/claude /worker
+  proc 5000025 1 /work/wt bash -ic TASK_FORCE_ROLE=w kiro-cli chat --agent worker
+  proc 5000026 1 /work/wt node /opt/mcp/claude-tools.js
+  run lib "aw_worktree_agent_procs /work/wt"
+  assert_success
+  refute_output --partial 5000020
+  refute_output --partial 5000021
+  assert_output --partial $'5000022\t'
+  assert_output --partial $'5000023\t'
+  assert_output --partial $'5000024\t'
+  assert_output --partial $'5000025\t'
+  refute_output --partial 5000026
+}
+
 @test "helper: asks lsof for the cwd of agent candidates only, in one call" {
   stray_kiro_in /work/wt
   run lib "aw_worktree_agent_procs /work/wt"
@@ -146,14 +172,19 @@ lib() {
 }
 
 @test "helper: leaves out the agent the caller runs under, and its whole tree" {
-  # task-done runs under the finishing worker's own claude, cwd in the worktree.
-  proc 5000010 1 /work/wt claude /worker
+  # task-done runs under the finishing worker's own claude, cwd in the worktree,
+  # which task-work launched inside a bash -ic wrapper that is an agent too. The
+  # exclusion has to start at that wrapper, the OUTERMOST agent: starting at
+  # claude would list the wrapper as a stray.
+  proc 5000009 1 /work/wt bash -ic set +H\; TASK_FORCE_ROLE=worker-x ZELLIJ_TAB=x claude /worker
+  proc 5000010 5000009 /work/wt claude /worker
   proc 5000011 5000010 /work/wt /bin/zsh -c task-done
   proc 5000012 5000010 /work/wt node mcp-server
   proc 5000001 1 /work/wt kiro-cli-chat chat
   AW_PROC_SELF_PID=5000011 run lib "aw_worktree_agent_procs /work/wt"
   assert_success
   assert_output --partial $'5000001\t'
+  refute_output --partial 5000009
   refute_output --partial 5000010
   refute_output --partial 5000011
   refute_output --partial 5000012
@@ -241,18 +272,24 @@ lib() {
 @test "recreate: --kill-stale refuses to recover when a process will not die" {
   dead_worker issue-42
   stray_kiro_in "$WT_PHYS/issue-42"
-  # The stub never removes it: TERM and KILL both bounce.
-  cat > "$STUB_BIN/kill-stub" <<'EOF'
-#!/usr/bin/env bash
-echo "$*" >> "$STUB_CALLS_DIR/kill.calls"
-[[ "$1" == -0 && "$2" == 5000003 ]] && exit 0
-[[ "$1" == -0 ]] && exit 1
-exit 0
-EOF
+  echo 5000003 > "$PROC_FIX/immortal"
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --kill-stale --yes
   assert_failure
   assert_output --partial "Could not stop: 5000003"
-  run grep -q new-tab "$STUB_CALLS_DIR/zellij.calls"
+  refute_output --partial "Could not stop: 5000001"
+  run grep -qs new-tab "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "recreate: --kill-stale refuses to recover beside a process it may not signal (EPERM)" {
+  # kill -0 fails for it too, which is why liveness is a re-scan, not kill -0.
+  dead_worker issue-42
+  stray_kiro_in "$WT_PHYS/issue-42"
+  echo 5000002 > "$PROC_FIX/eperm"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --kill-stale --yes
+  assert_failure
+  assert_output --partial "Could not stop: 5000002"
+  run grep -qs new-tab "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
@@ -274,6 +311,44 @@ EOF
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --kill-stale </dev/null
   assert_failure
   assert_output --partial "no terminal to ask on"
+  assert_equal "$(kill_calls)" ""
+}
+
+# The [y/N] prompt on a real terminal. A yes is the positive control, so the
+# no and EOF cases cannot pass by never reaching the prompt.
+_recreate_on_pty() {
+  run pty_run "cd '$MAIN_REPO' && AW_IMPL=claude-gh '$TASK_RECREATE_WORKER' issue-42 --kill-stale" "$1"
+}
+
+@test "recreate: --kill-stale on a terminal, answered y, signals and recovers" {
+  require_pty
+  dead_worker issue-42
+  stray_kiro_in "$WT_PHYS/issue-42"
+  _recreate_on_pty $'y\n'
+  assert_success
+  assert_output --partial "Stop them (TERM, then KILL)? [y/N]"
+  run grep -E '^-TERM' "$STUB_CALLS_DIR/kill.calls"
+  assert_output "-TERM 5000001 5000002 5000003"
+}
+
+@test "recreate: --kill-stale on a terminal, answered n, signals nothing" {
+  require_pty
+  dead_worker issue-42
+  stray_kiro_in "$WT_PHYS/issue-42"
+  _recreate_on_pty $'n\n'
+  assert_failure
+  assert_output --partial "Stop them (TERM, then KILL)? [y/N]"
+  assert_output --partial "Aborted; nothing was signalled or recovered."
+  assert_equal "$(kill_calls)" ""
+}
+
+@test "recreate: --kill-stale on a terminal, EOF at the prompt, signals nothing" {
+  require_pty
+  dead_worker issue-42
+  stray_kiro_in "$WT_PHYS/issue-42"
+  _recreate_on_pty ""
+  assert_failure
+  assert_output --partial "Aborted; nothing was signalled or recovered."
   assert_equal "$(kill_calls)" ""
 }
 

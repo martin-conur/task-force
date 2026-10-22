@@ -228,6 +228,11 @@ aw_record_tab_id() {
 # Note on the ~100-300ms flicker window between new-tab and go-to-tab:
 # keystrokes typed during that window can land in the new tab. Acceptable:
 # the dispatching PM is typically idle on radio while the launch runs.
+#
+# zellij handles new-tab asynchronously and 0.44 has no way to open a tab
+# without focusing it, so the go-to-tab can land before the new tab has
+# finished opening, which then takes focus anyway (#311). The race cannot be
+# avoided, only corrected: aw_snap_back_to_tab re-checks afterwards.
 aw_launch_tab() {
   local slug="$1"
   local cwd="$2"
@@ -254,6 +259,43 @@ aw_launch_tab() {
 
   # .position is 0-indexed; go-to-tab is 1-indexed (verified zellij 0.44.3).
   if [[ -n "$caller_pos" ]]; then
-    aw_zellij action go-to-tab "$((caller_pos + 1))" 2>/dev/null || true
+    aw_snap_back_to_tab "$slug" "$caller_pos"
   fi
+}
+
+# Focus the tab at 0-indexed <caller_pos> and make sure it stays focused
+# (#311). Checks the active tab right after the go-to-tab and, while it is
+# not the caller's, issues go-to-tab again: at most AW_TAB_FOCUS_CHECKS checks
+# (default 7), AW_TAB_FOCUS_INTERVAL seconds apart (default 0.25), so the
+# worst case is about 1.5s and the common case is one list-tabs with no sleep.
+# A list-tabs that answers nothing usable ends the loop quietly: it cannot
+# tell, and a launch never fails over focus. A retry or a final failure
+# writes one `tab-focus:` line to radio's log, to count how often the race
+# actually happens.
+aw_snap_back_to_tab() {
+  local slug="$1" caller_pos="$2"
+  local checks="${AW_TAB_FOCUS_CHECKS:-7}" interval="${AW_TAB_FOCUS_INTERVAL:-0.25}"
+  local target=$((caller_pos + 1)) gotos=1 i active=""
+
+  aw_zellij action go-to-tab "$target" 2>/dev/null || true
+  for (( i = 1; i <= checks; i++ )); do
+    active=$(aw_zellij action list-tabs --json 2>/dev/null \
+      | jq -r '[.[] | select(.active) | .position] | .[0] // empty' 2>/dev/null) || active=""
+    [[ -n "$active" ]] || return 0
+    if [[ "$active" == "$caller_pos" ]]; then
+      if (( gotos > 1 )); then
+        aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s' \
+          "$gotos" "$slug" "$caller_pos")"
+      fi
+      return 0
+    fi
+    (( i < checks )) || break
+    sleep "$interval" 2>/dev/null || true
+    aw_zellij action go-to-tab "$target" 2>/dev/null || true
+    gotos=$((gotos + 1))
+  done
+  aw_radio_log "$(printf 'tab-focus: snap-back failed after %d go-to-tab(s) slug=%s caller_position=%s active_position=%s' \
+    "$gotos" "$slug" "$caller_pos" "$active")"
+  echo "⚠ Could not keep focus on your tab: '$slug' may have taken it (logged, grep 'tab-focus:')." >&2
+  return 0
 }

@@ -42,6 +42,7 @@ teardown() {
 dead_worker() {
   mkdir -p "$WORKTREE_BASE"
   git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/issue-42" -b task/issue-42
+  seed_hook_carriers "$WORKTREE_BASE/issue-42"
   printf 'BASE_BRANCH=main\nSLUG=issue-42\nGH_URL=https://github.com/owner/repo/issues/42\nTAB_ID=999\n' \
     > "$WORKTREE_BASE/.issue-42.info"
 }

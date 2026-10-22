@@ -197,6 +197,7 @@ miss_reason() {
   export ZELLIJ=fake-session
   mkdir -p "$WORKTREE_BASE"
   git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/issue-42" -b task/issue-42
+  seed_hook_carriers "$WORKTREE_BASE/issue-42"
   printf 'BASE_BRANCH=main\nSLUG=issue-42\nGH_URL=\nTAB_ID=999\n' > "$WORKTREE_BASE/.issue-42.info"
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_success

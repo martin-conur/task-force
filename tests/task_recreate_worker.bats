@@ -50,6 +50,7 @@ dead_worker() {
   local url="${2:-https://github.com/owner/repo/issues/42}"
   mkdir -p "$WORKTREE_BASE"
   git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  seed_hook_carriers "$WORKTREE_BASE/$slug"
   printf 'BASE_BRANCH=main\nSLUG=%s\nGH_URL=%s\nTAB_ID=999\n' "$slug" "$url" \
     > "$WORKTREE_BASE/.$slug.info"
 }
@@ -204,6 +205,7 @@ dead_worker_keyed() {
   local slug="$1" key="$2" ref="$3"
   mkdir -p "$WORKTREE_BASE"
   git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  seed_hook_carriers "$WORKTREE_BASE/$slug"
   printf 'BASE_BRANCH=main\nSLUG=%s\n%s=%s\nTAB_ID=999\n' "$slug" "$key" "$ref" \
     > "$WORKTREE_BASE/.$slug.info"
 }
@@ -589,6 +591,7 @@ dead_worker_symlinked_base() {
   mkdir -p "$SYMLINK_STORE"
   ln -s "$SYMLINK_STORE" "$WORKTREE_BASE"
   git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  seed_hook_carriers "$WORKTREE_BASE/$slug"
   printf 'BASE_BRANCH=main\nSLUG=%s\nGH_URL=%s\nTAB_ID=999\n' "$slug" "$url" \
     > "$WORKTREE_BASE/.$slug.info"
 }
@@ -805,6 +808,227 @@ dead_worker_symlinked_base() {
   run launch_cmd_for issue-42
   assert_output --partial "claude --permission-mode auto --resume"
   refute_output --partial "/worker"
+}
+
+# ---------------------------------------------------------------------------
+# A worktree that predates the agent's loadout (#304)
+# ---------------------------------------------------------------------------
+# A worktree holds what was committed when it was forked. One cut before
+# `task-config add assistant` has no hooks for the newer assistant, so an agent
+# started there registers nothing — and this command used to report it
+# recovered anyway.
+
+@test "claude: refuses a worktree with no .claude/settings.json, and names the merge (#304)" {
+  dead_worker issue-42
+  rm -f "$WORKTREE_BASE/issue-42/.claude/settings.json"
+  local before
+  before=$(cat "$WORKTREE_BASE/.issue-42.info")
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_failure
+  assert_output --partial "worktree 'issue-42' has no claude radio hooks"
+  assert_output --partial "git -C $WT_PHYS/issue-42 merge main"
+  run stub_calls zellij
+  refute_output --partial "new-tab"
+  # Refused before the sidecar rewrite: the stale TAB_ID is still there for a retry.
+  run cat "$WORKTREE_BASE/.issue-42.info"
+  assert_output "$before"
+}
+
+@test "claude: a settings.json without radio's register hook is no hook carrier (#304)" {
+  dead_worker issue-42
+  printf '{"permissions":{"allow":[]}}\n' > "$WORKTREE_BASE/issue-42/.claude/settings.json"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_failure
+  assert_output --partial "has no claude radio hooks"
+  run stub_calls zellij
+  refute_output --partial "new-tab"
+}
+
+@test "a register hook behind a prefix still counts: env assignment, absolute path, command (#304)" {
+  local slug=41 cmd
+  for cmd in 'TASK_FORCE_X=1 /usr/local/bin/radio register --role r' \
+             'command radio register --role r'; do
+    slug=$((slug + 1))
+    dead_worker "issue-$slug"
+    printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' \
+      "$cmd" > "$WORKTREE_BASE/issue-$slug/.claude/settings.json"
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" "issue-$slug"
+    assert_success
+    refute_output --partial "has no claude radio hooks"
+    assert_stub_called zellij "new-tab --name issue-$slug"
+  done
+
+  # Words, not a substring: another tool whose name ends in radio is no carrier.
+  dead_worker issue-44
+  printf '{"hooks":{"SessionStart":[{"hooks":[{"command":"myradio register"}]}]}}\n' \
+    > "$WORKTREE_BASE/issue-44/.claude/settings.json"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-44
+  assert_failure
+  assert_output --partial "has no claude radio hooks"
+}
+
+@test "kiro: refuses a worktree with no .kiro/agents/worker.json, and names the merge (#304)" {
+  dead_worker issue-42
+  rm -rf "$WORKTREE_BASE/issue-42/.kiro"
+  # The main checkout's agents still resolve, so only the worktree check can fire;
+  # a scratch HOME keeps a real global agent dir out of it.
+  HOME="$BATS_TEST_TMPDIR" AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_failure
+  assert_output --partial "worktree 'issue-42' has no kiro radio hooks"
+  assert_output --partial ".kiro/agents/worker.json is missing"
+  assert_output --partial "git -C $WT_PHYS/issue-42 merge main"
+  run stub_calls zellij
+  refute_output --partial "new-tab"
+}
+
+@test "kiro: a hooked global worker agent counts, since kiro-cli falls back to it (#304)" {
+  dead_worker issue-42
+  rm -rf "$WORKTREE_BASE/issue-42/.kiro"
+  mkdir -p "$BATS_TEST_TMPDIR/.kiro/agents"
+  # Without the radio hook a global agent does not count either.
+  printf '{"name":"worker"}\n' > "$BATS_TEST_TMPDIR/.kiro/agents/worker.json"
+  HOME="$BATS_TEST_TMPDIR" AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_failure
+  assert_output --partial "has no kiro radio hooks"
+
+  seed_hook_carriers "$BATS_TEST_TMPDIR"
+  HOME="$BATS_TEST_TMPDIR" AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_stub_called zellij "new-tab --name issue-42"
+}
+
+@test "a worktree that carries the agent's hooks proceeds, on claude and on kiro (#304)" {
+  dead_worker issue-42
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  refute_output --partial "has no claude radio hooks"
+  assert_stub_called zellij "new-tab --name issue-42"
+
+  dead_worker issue-43
+  HOME="$BATS_TEST_TMPDIR" AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-43
+  assert_success
+  refute_output --partial "has no kiro radio hooks"
+  assert_stub_called zellij "new-tab --name issue-43"
+}
+
+@test "the remedy says when the base has the hooks to merge, and when it does not (#304)" {
+  dead_worker issue-42
+  rm -f "$WORKTREE_BASE/issue-42/.claude/settings.json"
+  # Nothing committed on main carries them: a merge would bring nothing.
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_failure
+  assert_output --partial "'main' does not have it either: commit .claude/settings.json on main first"
+
+  # Committed on main after the fork — the case in #304: merging main fixes it.
+  seed_hook_carriers "$MAIN_REPO"
+  git -C "$MAIN_REPO" add .claude/settings.json
+  git -C "$MAIN_REPO" commit -q -m "claude loadout"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_failure
+  assert_output --partial "'main' has it. Bring it in, then re-run:"
+  refute_output --partial "does not have it either"
+
+  # And the remedy it names works.
+  git -C "$WORKTREE_BASE/issue-42" merge -q main
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_stub_called zellij "new-tab --name issue-42"
+}
+
+@test "--no-launch does not ask for hooks: nothing is started (#304)" {
+  dead_worker issue-42
+  rm -f "$WORKTREE_BASE/issue-42/.claude/settings.json"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --no-launch
+  assert_success
+  assert_stub_called zellij "new-tab --name issue-42"
+}
+
+# ---------------------------------------------------------------------------
+# "Recovered" only once the register has landed (#304)
+# ---------------------------------------------------------------------------
+
+@test "a launch whose register never lands warns instead of saying Recovered (#304)" {
+  dead_worker issue-42
+  queue_mail "$(role_for issue-42)"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_output --partial "Warning: $(role_for issue-42) was launched in tab 'issue-42' but has NOT registered with radio"
+  assert_output --partial "no session file was written"
+  refute_output --partial "Recovered"
+  refute_output --partial "surfaced the 1 queued message(s)"
+}
+
+@test "a launch whose register lands says Recovered, with the agent and tab it registered (#304)" {
+  dead_worker issue-42
+  queue_mail "$(role_for issue-42)"
+  seed_zellij_tabs issue-42
+  STUB_ZELLIJ_NEW_TAB_RUN=1 STUB_CLAUDE_RADIO="$RADIO" \
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --force
+  assert_success
+  assert_output --partial "Recovered $(role_for issue-42)"
+  assert_output --partial "It registered with radio: AGENT=claude, TAB_ID=7."
+  assert_output --partial "surfaced the 1 queued message(s)"
+  refute_output --partial "has NOT registered"
+}
+
+@test "the wait polls: a register that lands a few seconds in still counts (#304)" {
+  dead_worker issue-42
+  seed_zellij_tabs issue-42
+  STUB_ZELLIJ_NEW_TAB_RUN=1 STUB_CLAUDE_RADIO="$RADIO" STUB_CLAUDE_REGISTER_DELAY=2 \
+    TASK_RECREATE_WORKER_REGISTER_WAIT=10 \
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --force
+  assert_success
+  assert_output --partial "Recovered $(role_for issue-42)"
+  refute_output --partial "has NOT registered"
+}
+
+@test "the wait is bounded: a register later than it is reported as missing (#304)" {
+  dead_worker issue-42
+  seed_zellij_tabs issue-42
+  STUB_ZELLIJ_NEW_TAB_RUN=1 STUB_CLAUDE_RADIO="$RADIO" STUB_CLAUDE_REGISTER_DELAY=4 \
+    TASK_RECREATE_WORKER_REGISTER_WAIT=1 \
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --force
+  assert_success
+  assert_output --partial "has NOT registered with radio"
+  assert_output --partial "after 1s"
+  refute_output --partial "Recovered"
+  sleep 4   # let the late register finish before teardown removes its home
+}
+
+@test "the old agent's stale session file is not taken for a register (#304)" {
+  # The #304 state: the session file still says AGENT=kiro with a day-old
+  # heartbeat, and its TAB_ID happens to name a live tab.
+  dead_worker issue-42
+  local sf="$TASK_FORCE_HOME/radio/sessions/$(role_for issue-42).info"
+  mkdir -p "$(dirname "$sf")"
+  printf 'ROLE=%s\nTAB=issue-42\nTAB_ID=7\nSTATE=idle\nLAST_HEARTBEAT=2020-01-01T00:00:00Z\nAGENT=kiro\nLOADOUT=kiro-gh\n' \
+    "$(role_for issue-42)" > "$sf"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_output --partial "has NOT registered with radio"
+  assert_output --partial "left over from before the launch (heartbeat 2020-01-01T00:00:00Z)"
+  refute_output --partial "Recovered"
+}
+
+@test "a register by the wrong agent is not a recovery (#304)" {
+  dead_worker issue-42
+  seed_zellij_tabs issue-42
+  STUB_ZELLIJ_NEW_TAB_RUN=1 STUB_CLAUDE_RADIO="$RADIO" STUB_CLAUDE_AGENT=kiro \
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --force
+  assert_success
+  assert_output --partial "the session file says AGENT=kiro, not claude"
+  refute_output --partial "Recovered"
+}
+
+@test "a register with an empty TAB_ID is not a recovery (#304)" {
+  # No zellij tabs seeded: the register's name lookup misses, and the stripped
+  # sidecar leaves it nothing to adopt — the unwakeable state.
+  dead_worker issue-42
+  STUB_ZELLIJ_NEW_TAB_RUN=1 STUB_CLAUDE_RADIO="$RADIO" \
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  assert_output --partial "it registered with an empty TAB_ID, so no wake can reach it"
+  refute_output --partial "Recovered"
 }
 
 # ---------------------------------------------------------------------------

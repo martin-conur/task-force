@@ -49,9 +49,17 @@ case "$*" in
     # The calls log joins argv with spaces, which loses the quoting of the
     # `bash -ic "<cmd>"` payload. Keep that payload verbatim so a test can
     # re-run it and see what the agent's env really is (#262).
+    _cwd=""; _prev=""
     for _a in "$@"; do
+      [[ "$_prev" == --cwd ]] && _cwd="$_a"
+      _prev="$_a"
       if [[ "$_a" == -- ]]; then
         printf '%s' "${@: -1}" > "${STUB_CALLS_DIR}/zellij.new-tab-cmd"
+        # Opt-in: run the payload as the new tab would, in its cwd, so the
+        # stubbed agent's own behaviour (a register, #304) actually happens.
+        if [[ -n "${STUB_ZELLIJ_NEW_TAB_RUN:-}" ]]; then
+          (cd "${_cwd:-.}" && bash -c "${@: -1}") >/dev/null 2>&1 || true
+        fi
         break
       fi
     done

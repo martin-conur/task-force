@@ -584,6 +584,7 @@ _dead_worker() {
   local slug="$1" agent="$2"
   mkdir -p "$WORKTREE_BASE"
   git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  seed_hook_carriers "$WORKTREE_BASE/$slug"
   printf 'BASE_BRANCH=main\nSLUG=%s\nGH_URL=\nAGENT=%s\nTAB_ID=999\n' "$slug" "$agent" \
     > "$WORKTREE_BASE/.$slug.info"
 }
@@ -630,4 +631,76 @@ _dead_worker() {
   assert_success
   refute_output --partial "multiple agentic-workflow impls"
   assert [ ! -d "$WORKTREE_BASE/done-probe" ]
+}
+
+# ---------------------------------------------------------------------------
+# Live worktrees that predate the assistant being switched to (#304)
+# ---------------------------------------------------------------------------
+# add and use change only the main checkout. A worktree forked before the other
+# assistant's loadout was committed has no hooks for it, and a worker relaunched
+# there on it would never register.
+
+# A worker worktree as task-work leaves it, forked from main as it is NOW.
+_live_worktree() {
+  local slug="$1"
+  mkdir -p "$WORKTREE_BASE"
+  git -C "$MAIN_REPO" worktree add -q "$WORKTREE_BASE/$slug" -b "task/$slug"
+  printf 'BASE_BRANCH=main\nSLUG=%s\nGH_URL=\n' "$slug" > "$WORKTREE_BASE/.$slug.info"
+}
+
+_wt_phys() { printf '%s/%s-worktrees/%s' "$(cd "$MAIN_REPO/.." && pwd -P)" "$REPO_NAME" "$1"; }
+
+@test "add assistant lists the live worktrees that lack the new assistant's hooks (#304)" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  _init claude-gh --owner acme --repo widgets --project 7
+  _commit_all claude
+  _live_worktree issue-7
+  _live_worktree fresh-one
+  seed_hook_carriers "$WORKTREE_BASE/fresh-one"
+  _live_worktree review-pr9
+
+  run "$TASK_CONFIG" add assistant kiro --yes
+  assert_success
+  assert_output --partial "Warning: 1 live worktree(s) have no kiro radio hooks (.kiro/agents/worker.json)"
+  assert_output --partial "git -C $(_wt_phys issue-7) merge main"
+  refute_output --partial "fresh-one"
+  refute_output --partial "review-pr9"
+  # add has not committed anything, so the merge would bring nothing yet.
+  assert_output --partial ".kiro/agents/worker.json is not committed on main yet"
+}
+
+@test "use lists the stale worktrees, and they drop off once merged (#304)" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  _init claude-gh --owner acme --repo widgets --project 7
+  _commit_all claude
+  _live_worktree issue-7
+  run "$TASK_CONFIG" add assistant kiro --yes
+  assert_success
+  _commit_all dual
+
+  run "$TASK_CONFIG" use kiro
+  assert_success
+  assert_output --partial "active assistant: kiro"
+  assert_output --partial "Warning: 1 live worktree(s) have no kiro radio hooks"
+  assert_output --partial "git -C $(_wt_phys issue-7) merge main"
+  refute_output --partial "is not committed on main yet"
+
+  git -C "$WORKTREE_BASE/issue-7" merge -q main
+  run "$TASK_CONFIG" use claude
+  assert_success
+  run "$TASK_CONFIG" use kiro
+  assert_success
+  refute_output --partial "Warning"
+}
+
+@test "use warns, never refuses: the switch still happens (#304)" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  _init claude-gh --owner acme --repo widgets --project 7
+  _commit_all claude
+  _live_worktree issue-7
+  run "$TASK_CONFIG" add assistant kiro --yes
+  _commit_all dual
+  run "$TASK_CONFIG" use kiro
+  assert_success
+  assert_equal "$(_active)" kiro
 }

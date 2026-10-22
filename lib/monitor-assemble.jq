@@ -81,8 +81,10 @@ def status($pr; $last_review; $has_reviewer):
     ($S | keys[] | select(startswith("reviewer-" + $name + "-pr")) | select(mine)
         | ltrimstr("reviewer-" + $name + "-pr")) ]
   | unique
+  # `pr` is a number in the document (#307); the string `$n` stays the key a
+  # reviewer is matched to its item by, against `$prn` below.
   | map(. as $n | ("reviewer-" + $name + "-pr" + $n) as $role
-        | {pr: $n, role: $role, session: session_obj($S; $role)}) ) as $reviewers
+        | {key: $n, pr: ($n | tonumber? // null), role: $role, session: session_obj($S; $role)}) ) as $reviewers
 
 | [ $inflight[]
     | ("worker-" + $name + "-" + .slug) as $wrole
@@ -90,11 +92,11 @@ def status($pr; $last_review; $has_reviewer):
     # own review-requested, so a renamed branch still shows its review state.
     | (.pr // ([$msgs[] | select(.from == $wrole and .pr != null)] | last
                | if . == null then null else
-                   {number: (.pr | tonumber? // .pr), url: null, title: null, state: null,
+                   {number: (.pr | tonumber? // null), url: null, title: null, state: null,
                     is_draft: false, head: null, summary: null, merged_at: null, merge_sha: null}
                  end)) as $pr
     | ($pr.number | if . == null then null else tostring end) as $prn
-    | [$reviewers[] | select(.pr == $prn)] as $revs
+    | [$reviewers[] | select(.key == $prn) | del(.key)] as $revs
     | ([$msgs[] | select($prn != null and .pr == $prn) | select(.intent | among(review_intents))] | last) as $last_review
     | ([$msgs[] | select(.from == $wrole or .to == $wrole or ($prn != null and .pr == $prn))] | last) as $last
     | { slug, ref, branch, base, worktree,
@@ -105,7 +107,7 @@ def status($pr; $last_review; $has_reviewer):
         pr: $pr,
         status: status($pr; $last_review; ($revs | length > 0)),
         last_intent: (if $last == null then null else
-                        {intent: $last.intent, from: $last.from, to: $last.to, pr: $last.pr, at: $last.created_at} end),
+                        {intent: $last.intent, from: $last.from, to: $last.to, pr: ($last.pr | tonumber? // null), at: $last.created_at} end),
         session: session_obj($S; $wrole),
         tab_id: .tab_id,
         reviewers: $revs } ] as $in_flight
@@ -141,7 +143,7 @@ def status($pr; $last_review; $has_reviewer):
        last_heartbeat: (.value.LAST_HEARTBEAT | nonempty)}]) as $awaiting
 | ( (if $unread > 0 then [{kind: "unread-inbox", count: $unread, text: "✉ \($unread) unread"}] else [] end)
   + (if ($waiting_prs | length) > 0 then
-       [{kind: "review-waiting-merge", prs: ($waiting_prs | map(tonumber? // .)),
+       [{kind: "review-waiting-merge", prs: ($waiting_prs | map(tonumber? // empty)),
          text: "\($waiting_prs | length) review\(if ($waiting_prs | length) > 1 then "s" else "" end) waiting merge"}]
      else [] end)
   + (if ($awaiting | length) > 0 then

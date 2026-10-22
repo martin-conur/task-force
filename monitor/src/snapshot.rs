@@ -76,6 +76,7 @@ pub struct Session {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Pr {
+    #[serde(deserialize_with = "number")]
     pub number: Option<u64>,
     pub url: Option<String>,
     pub title: Option<String>,
@@ -90,6 +91,7 @@ pub struct Pr {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Reviewer {
+    #[serde(deserialize_with = "number")]
     pub pr: Option<u64>,
     pub role: Option<String>,
     pub session: Option<Session>,
@@ -202,6 +204,16 @@ fn scalar<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     })
 }
 
+/// A number, where it may come as a numeric string. A reviewer's PR went out
+/// as `"41"` (#307), and a strict u64 refused the whole document over it.
+fn number<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n.as_u64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    })
+}
+
 /// A list of numbers, where an entry may come as a string (the collector
 /// passes through a PR it could not read as a number). Others are dropped.
 fn numbers<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
@@ -271,6 +283,36 @@ mod tests {
         assert_eq!(s[1].prs, vec![270, 271]);
         assert_eq!(s[2].workers[0].slug.as_deref(), Some("a"));
         assert!(s[0].workers.is_empty() && s[2].prs.is_empty());
+    }
+
+    /// The real snapshot output, with a reviewer attached; the bats suite
+    /// checks this file still has the shape `task-monitor-snapshot` prints.
+    #[test]
+    fn parses_a_real_snapshot_with_a_reviewer() {
+        let snap = parse(include_str!(
+            "../../tests/fixtures/task-monitor/snapshot-reviewer.json"
+        ))
+        .unwrap();
+        let item = &snap.repos[0].in_flight[0];
+        assert_eq!(item.pr.as_ref().unwrap().number, Some(9));
+        assert_eq!(item.reviewers[0].pr, Some(9));
+        assert_eq!(
+            item.reviewers[0].role.as_deref(),
+            Some("reviewer-widgets-pr9")
+        );
+    }
+
+    #[test]
+    fn reads_a_pr_number_given_as_a_string() {
+        let snap = parse(
+            r#"{"schema":1,"repos":[{"in_flight":[{"pr":{"number":"41"},
+                "reviewers":[{"pr":"41"},{"pr":41},{"pr":"x"},{"pr":null}]}]}]}"#,
+        )
+        .unwrap();
+        let item = &snap.repos[0].in_flight[0];
+        assert_eq!(item.pr.as_ref().unwrap().number, Some(41));
+        let prs: Vec<_> = item.reviewers.iter().map(|r| r.pr).collect();
+        assert_eq!(prs, vec![Some(41), Some(41), None, None]);
     }
 
     #[test]

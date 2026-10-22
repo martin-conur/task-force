@@ -844,6 +844,29 @@ dead_worker_symlinked_base() {
   refute_output --partial "new-tab"
 }
 
+@test "a register hook behind a prefix still counts: env assignment, absolute path, command (#304)" {
+  local slug=41 cmd
+  for cmd in 'TASK_FORCE_X=1 /usr/local/bin/radio register --role r' \
+             'command radio register --role r'; do
+    slug=$((slug + 1))
+    dead_worker "issue-$slug"
+    printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' \
+      "$cmd" > "$WORKTREE_BASE/issue-$slug/.claude/settings.json"
+    AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" "issue-$slug"
+    assert_success
+    refute_output --partial "has no claude radio hooks"
+    assert_stub_called zellij "new-tab --name issue-$slug"
+  done
+
+  # Words, not a substring: another tool whose name ends in radio is no carrier.
+  dead_worker issue-44
+  printf '{"hooks":{"SessionStart":[{"hooks":[{"command":"myradio register"}]}]}}\n' \
+    > "$WORKTREE_BASE/issue-44/.claude/settings.json"
+  AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-44
+  assert_failure
+  assert_output --partial "has no claude radio hooks"
+}
+
 @test "kiro: refuses a worktree with no .kiro/agents/worker.json, and names the merge (#304)" {
   dead_worker issue-42
   rm -rf "$WORKTREE_BASE/issue-42/.kiro"

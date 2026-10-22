@@ -19,8 +19,11 @@
 #
 # "Carries the hooks" means the file holds a `radio register` command, the hook
 # that makes a role addressable at all. A grep rather than a jq walk: claude's
-# settings and both of kiro's hooks shapes (#267) all quote the command string
-# the same way, and the test has to answer on a box without jq too.
+# settings and both of kiro's hooks shapes (#267) all hold it as a command
+# string, and the test has to answer on a box without jq too. The two words are
+# matched anywhere in that string, not only at its start, so a prefixed hook —
+# `ENV=1 radio register`, `/usr/local/bin/radio register`, `command radio
+# register` — still counts; `myradio register` does not.
 
 # aw_hook_carrier_rel <agent>
 # The carrier's path relative to the checkout root.
@@ -37,7 +40,7 @@ aw_hook_carrier_rel() {
 _aw_carries_radio_register() {
   local body
   body=$(cat)
-  grep -q '"radio register' <<<"$body"
+  grep -Eq '(^|[^[:alnum:]_-])radio[[:space:]]+register([^[:alnum:]_-]|$)' <<<"$body"
 }
 
 # kiro-cli falls back to the user's global agent dir when the workspace has no

@@ -27,6 +27,12 @@ setup_suite() {
   export PATH
   require_task_force_free_path || return 1
 
+  # task-done and task-recreate-worker look for agent processes running in the
+  # worktree they act on (#305). No suite may read this machine's process table
+  # for that: the developer's own agents run in worktrees too. The tests of the
+  # scan unset this and stub ps, lsof and the signal sender instead.
+  export TASK_FORCE_NO_PROC_SCAN=1
+
   if [[ -n "${TASK_FORCE_HOME:-}" ]]; then
     # Caller supplied one (CI, or a developer pinning a scratch dir): honour
     # it, but only once it has been proven not to be the real home.

@@ -110,6 +110,14 @@ vanished directory, or from the main checkout in the worker's own tab (it reads 
 worktree from `$TASK_FORCE_ROLE`). The PM keeps it from happening at all by deleting
 only the remote branch after a merge: `git push origin --delete task/<slug>`.
 
+`task-done` also warns about, and lists, any agent processes still running in
+the worktree it removes (#305): an agent from an earlier tab that closed
+without taking it along. It never stops them; that is the PM's or your call.
+Run from the worker's own tab, the worker itself is not listed, since its whole
+process tree goes with the tab. Run from anywhere else, the PM's tab included, a
+worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
+along: `grep 'stray-procs:' ~/.task-force/radio/log`.
+
 `task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
 
 A machine restart (or a killed zellij server) takes out every tab on the box and
@@ -148,12 +156,32 @@ that is new work, and it refuses and names `task-work`.
   task-monitor's `R` passes the repo's session (#291).
 - `--no-launch` — open the tab, start nothing; the role stays unregistered.
 - `--force` — proceed although a session still looks live.
+  It does not get past agent processes still running in the worktree (#305).
+- `--kill-stale` — stop the agent processes still running in the worktree
+  (TERM, then KILL after 5s) after a `[y/N]` on the terminal, then recover.
+- `--yes` — skip `--kill-stale`'s confirmation. With no terminal, `--kill-stale`
+  needs it, and refuses without it having signalled anything.
 
 It refuses when the role still looks live: a zellij tab of that name is open, or
 the session file's heartbeat is newer than an hour (it asks `radio orphans`
 rather than re-deriving the threshold). The first hour after a reboot looks
 exactly like a live session, which is what `--force` is for — read the refusal
 first, it names which of the two signals fired.
+
+It also refuses while **agent processes are still running in the worktree**
+(#305). A closed tab does not reliably take its agent with it: three kiro
+workers' processes (`kiro-cli-chat chat`, the bun `tui.js` front end,
+`kiro-cli-chat acp`) once outlived their tabs by two days, idle only because the
+credits had run out, in worktrees this command was starting new agents in. The
+tab and the heartbeat cannot see them, so it asks the kernel: every agent
+process (the `claude` or `kiro-cli*` binary, a bun or node launcher running one,
+a shell `-c` wrapper that runs one), plus its children, with a cwd inside the
+worktree. It judges by what runs, so `less docs/claude` is not an agent. The refusal lists
+pid, start time and command. `--force` does not get past it; `--kill-stale`
+stops them first, re-checking each pid's start time just before the signal so a
+recycled pid is left alone. Whether a process is still running is decided by
+scanning again, not by `kill -0`, so one that survives the KILL or refuses the
+signal (EPERM) stops the recovery. `TASK_FORCE_NO_PROC_SCAN=1` turns the scan off.
 
 The sidecar's `TAB_ID` is **stripped before the tab is spawned** and rewritten
 afterwards, never carried over: zellij's server restarted, so that id is stale by

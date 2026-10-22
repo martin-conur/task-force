@@ -334,6 +334,7 @@ _fakeroot_without_tracker() {
   cp "$REPO_ROOT_REAL/bin/task-done" "$fake/bin/task-done"
   cp "$REPO_ROOT_REAL/lib/detect-impl.sh" "$fake/lib/"
   cp "$REPO_ROOT_REAL/lib/zellij-tab.sh" "$fake/lib/"
+  cp "$REPO_ROOT_REAL/lib/worktree-procs.sh" "$fake/lib/"
   cp "$REPO_ROOT_REAL/lib/trackers/"*.sh "$fake/lib/trackers/"
   cp "$REPO_ROOT_REAL/lib/agents/"*.sh "$fake/lib/agents/"
   rm -f "$fake/lib/trackers/$tracker.sh"

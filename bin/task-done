@@ -30,6 +30,8 @@ AW_ROOT=$(dirname "$BIN_DIR")
 source "$AW_ROOT/lib/detect-impl.sh"
 # shellcheck source=lib/zellij-tab.sh
 source "$AW_ROOT/lib/zellij-tab.sh"
+# shellcheck source=lib/worktree-procs.sh
+source "$AW_ROOT/lib/worktree-procs.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 
@@ -289,6 +291,22 @@ case "$_ROLE" in
     [[ -d "$_MAILBOX_DIR" ]] && rm -rf "$_MAILBOX_DIR"
     ;;
 esac
+
+# Agent processes still running in the worktree (#305), looked for while its
+# path still resolves. The agent running this command is not one of them: the
+# helper leaves out the caller's own agent tree, which goes with the tab. What
+# is left is an agent from an earlier tab that closed without taking it along.
+# Warned about, never stopped: whether they are stray is the PM's call. Logged
+# as well, because this tab is about to close and take this output with it.
+_STRAY_PROCS=$(aw_worktree_agent_procs "$WORKTREE_DIR")
+if [[ -n "$_STRAY_PROCS" ]]; then
+  _STRAY_PIDS=$(cut -f1 <<<"$_STRAY_PROCS" | tr '\n' ' ')
+  echo "⚠ Agent processes are still running in this worktree, and removing it will not stop them:"
+  aw_print_worktree_procs "    " "$_STRAY_PROCS"
+  echo "  They outlived the tab that started them. Check they are stray, then: kill ${_STRAY_PIDS% }"
+  echo ""
+  aw_radio_log "stray-procs: task-done left ${_STRAY_PIDS}running in $WORKTREE_DIR slug=$SLUG"
+fi
 
 # Move out of worktree before removing it
 cd "$MAIN_WORKTREE"

@@ -49,6 +49,8 @@ source "$AW_ROOT/lib/repo-name.sh"
 source "$AW_ROOT/lib/ci-guard.sh"
 # shellcheck source=lib/hook-carrier.sh
 source "$AW_ROOT/lib/hook-carrier.sh"
+# shellcheck source=lib/worktree-procs.sh
+source "$AW_ROOT/lib/worktree-procs.sh"
 
 usage() {
   cat <<'EOF'
@@ -67,6 +69,10 @@ It refuses a worktree that has no radio hooks for the agent (one forked before
 that assistant's loadout was committed) and names the merge that fixes it. After
 the launch it waits up to $TASK_RECREATE_WORKER_REGISTER_WAIT seconds (default
 30) for the role to register, and says "Recovered" only when it has.
+
+It also refuses while agent processes are still running in the worktree — an
+agent whose tab closed without taking it along — and lists them. --kill-stale
+stops them first.
 
 Options:
       --resume        Resume the previous agent session instead of starting a
@@ -99,6 +105,12 @@ Options:
                       The role stays unregistered until something does.
       --force         Proceed even though a session still looks live for this
                       role. Read the refusal first — it says what looks alive.
+                      It does not get past agent processes still running in the
+                      worktree: that takes --kill-stale.
+      --kill-stale    Stop the agent processes still running in the worktree
+                      (TERM, then KILL after 5s), after a confirmation on the
+                      terminal, then recover. Without a terminal it needs --yes.
+      --yes           Skip --kill-stale's confirmation.
       --agent <agent> Relaunch on this assistant (claude or kiro). Without it,
                       a repo with both installed relaunches the worker on the
                       assistant task-work recorded for it, not the repo's
@@ -162,6 +174,8 @@ AUTO_SUBMIT_FLAG=""
 FOCUS=""
 NO_LAUNCH=""
 FORCE=""
+KILL_STALE=""
+ASSUME_YES=""
 # Always assigned here, so a stray AW_ZELLIJ_SESSION in the caller's
 # environment never redirects a recovery: only --session does.
 AW_ZELLIJ_SESSION=""
@@ -176,6 +190,8 @@ while [[ $# -gt 0 ]]; do
     --focus) FOCUS="1"; shift ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
     --force) FORCE="1"; shift ;;
+    --kill-stale) KILL_STALE="1"; shift ;;
+    --yes|-y) ASSUME_YES="1"; shift ;;
     --session)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Error: --session needs a zellij session name" >&2; usage 1; }
       AW_ZELLIJ_SESSION="$2"; shift 2 ;;
@@ -486,6 +502,51 @@ if [[ -z "$NO_LAUNCH" ]]; then
     } >&2
     exit 1
   fi
+fi
+
+# ---------------- agent processes still in the worktree ----------------
+# The tab and the heartbeat say whether radio's idea of the role is alive; this
+# asks the kernel (#305). A tab closed under kiro can leave all three of its
+# processes running for days, idle only until its credits come back, and a
+# second agent started beside them would then share the worktree with them.
+# --force does not get past this: it overrides a judgement about bookkeeping,
+# and these are processes. Last of the refusals, so --kill-stale never stops
+# anything for a recovery that was going to refuse anyway.
+STRAY_PROCS=$(aw_worktree_agent_procs "$WORKTREE_DIR")
+if [[ -n "$STRAY_PROCS" ]]; then
+  if [[ -z "$KILL_STALE" ]]; then
+    {
+      echo "Error: agent processes are still running in worktree '$SLUG' — refusing to start another."
+      echo "       Their tab is gone, but they are not: an agent left behind by a closed tab."
+      aw_print_worktree_procs "         " "$STRAY_PROCS"
+      echo ""
+      echo "       Stop them and recover in one go:"
+      echo "         task-recreate-worker ${ORIG_ARGS[*]} --kill-stale"
+      echo "       or by hand: kill $(cut -f1 <<<"$STRAY_PROCS" | tr '\n' ' ')"
+    } >&2
+    exit 1
+  fi
+  echo "Agent processes still running in worktree '$SLUG':"
+  aw_print_worktree_procs "  " "$STRAY_PROCS"
+  if [[ -z "$ASSUME_YES" ]]; then
+    if [[ ! -t 0 ]]; then
+      echo "Error: --kill-stale asks before it signals anything, and there is no terminal to ask on." >&2
+      echo "       Re-run it from a terminal, or add --yes." >&2
+      exit 1
+    fi
+    _reply=""
+    if ! read -rp "Stop them (TERM, then KILL)? [y/N] " _reply; then _reply=""; fi
+    case "$_reply" in
+      y|Y|yes|YES) ;;
+      *) echo "Aborted; nothing was signalled or recovered."; exit 1 ;;
+    esac
+  fi
+  aw_kill_worktree_procs "$WORKTREE_DIR" "$STRAY_PROCS" || {
+    echo "Error: some of them would not stop — not recovering beside them." >&2
+    exit 1
+  }
+  aw_radio_log "stray-procs: task-recreate-worker stopped $(cut -f1 <<<"$STRAY_PROCS" | tr '\n' ' ')in $WORKTREE_DIR slug=$SLUG"
+  echo ""
 fi
 
 # ---------------- report ----------------

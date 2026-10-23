@@ -697,12 +697,15 @@ NOTION_B=https://www.notion.so/acme/Fix-auth-3fad9a72260f8184be21d483ce5d88d4?pv
     pr_fixture "$n" task/proj-7 $'## Summary\n\nx' "$((n * 60))" | jq --arg t "$t" '.title = $t' > "$GH_FIX/pr-$n.json"
     files+=("$GH_FIX/pr-$n.json"); n=$((n + 1))
   done
-  pr_fixture "$n" task/proj-7 $'## Summary\n\nx' "$((n * 60))" | jq '.title = "PROJ-70: another key"' > "$GH_FIX/pr-$n.json"
-  files+=("$GH_FIX/pr-$n.json")
+  # Kept as they are: a longer key, and titles that are nothing but the key.
+  for t in "PROJ-70: another key" "PROJ-7" "PROJ-7:" "[PROJ-7]"; do
+    pr_fixture "$n" task/proj-7 $'## Summary\n\nx' "$((n * 60))" | jq --arg t "$t" '.title = $t' > "$GH_FIX/pr-$n.json"
+    files+=("$GH_FIX/pr-$n.json"); n=$((n + 1))
+  done
   merged_idx "${files[@]}"
   snap
   assert_equal "$(q '[.done.items[].title] | join("|")')" \
-    "Ship the widget|Ship the widget|Ship the widget|Ship the widget|PROJ-70: another key"
+    "Ship the widget|Ship the widget|Ship the widget|Ship the widget|PROJ-70: another key|PROJ-7|PROJ-7:|[PROJ-7]"
   assert_equal "$(q '.done.items[0].label')" PROJ-7
 }
 
@@ -1001,6 +1004,11 @@ SHIM
   run bash -c "source '$lib'; printf '%s\n' 'intro' '' 'Fixes https://acme.atlassian.net/browse/ML-450' '' 'After the URL.' | tm_pr_summary"
   assert_output "After the URL."
   run bash -c "source '$lib'; printf '%s\n' 'https://x.example/a' '' '[ML-450](https://x.example/b)' '' 'Closes ML-450' | tm_pr_summary"
+  assert_output ""
+  # A Closes line is skipped only when it closes something: a key, #N or a URL.
+  run bash -c "source '$lib'; printf '%s\n' 'Fixes bug' | tm_pr_summary"
+  assert_output "Fixes bug"
+  run bash -c "source '$lib'; printf '%s\n' 'Closes ML-450' '' 'Closes #5' '' 'Closes https://acme.atlassian.net/browse/ML-450' | tm_pr_summary"
   assert_output ""
   # A ## Summary still wins over everything else.
   run bash -c "source '$lib'; printf '%s\n' 'JIRA: https://x.example/a' '' '## Summary' '' 'sum' | tm_pr_summary"

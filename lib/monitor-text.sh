@@ -30,7 +30,7 @@ _TM_AWK_COMMON='
   function junk(p,   q) {
     q = p; sub(/^[^ \t:]+([ \t]+[^ \t:]+)*:[ \t]+/, "", q)
     return (link(p) || link(q) ||
-            tolower(p) ~ /^(close[sd]?|fix(e[sd])?|resolve[sd]?):?[ \t]+[^ \t]+$/)
+            tolower(p) ~ /^(close[sd]?|fix(e[sd])?|resolve[sd]?):?[ \t]+([^ \t]*#[0-9]+|[a-z][a-z0-9_]*-[0-9]+|<?https?:\/\/[^ \t]+>?)[.,]?$/)
   }
   function emit() {
     if (out == "") return

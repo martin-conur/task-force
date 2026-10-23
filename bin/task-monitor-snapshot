@@ -607,7 +607,7 @@ fi
 DOC=$(jq -s --arg now "$NOW" --arg mode "$([[ "$LOCAL_ONLY" == 1 ]] && echo local || echo full)" \
   '{schema: 1, generated_at: $now, mode: $mode, repos: .}' "$WORK/repos.ndjson")
 if [[ "$BRIEF" == 1 ]]; then
-  printf '%s\n' "$DOC" | tm_board_digest
+  printf '%s\n' "$DOC" | tm_board_digest 40 20
 else
   printf '%s\n' "$DOC"
 fi

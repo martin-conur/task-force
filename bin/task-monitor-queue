@@ -23,6 +23,13 @@ set -euo pipefail
 # `#267` and .../issues/267 are one item, as are tasks/012-x.md and 012-x.md. That is what lets task-work drop the ref it
 # dispatches (`rm --quiet <its ref>`) whatever form the PM queued it in.
 #
+# It also owns the PM's handoff note (#301), the other thing a PM leaves on the
+# board for whoever comes next: ${TASK_FORCE_HOME}/monitor/<repo>/handoff.md, a
+# `---` frontmatter block (written_at, role, agent) and then the note as given.
+# task-monitor-snapshot reads it, and a fresh PM start prints it under the board
+# digest. One note per repo: a write replaces it, and nothing else removes it
+# but `handoff clear`.
+#
 # Must run on /bin/bash 3.2: no associative arrays, no mapfile.
 
 # Resolve own path through symlinks -> AW_ROOT.
@@ -45,6 +52,7 @@ Usage: task-monitor-queue [show]
        task-monitor-queue add <ref>... [--note <ref>=<text>]... [--title <ref>=<text>]...
        task-monitor-queue rm <ref>... [--quiet]
        task-monitor-queue clear
+       task-monitor-queue handoff write|show|clear
        (every form also takes --repo DIR)
 
 The PM's short-term queue for this repo: the "Next" section of task-monitor.
@@ -57,6 +65,12 @@ The PM's short-term queue for this repo: the "Next" section of task-monitor.
           and only takes the new note or title, if one is given
   rm      drop <ref>...; a ref that is not queued is ignored
   clear   empty the queue
+  handoff the note a PM leaves for the next PM in this repo (#301):
+            write  replace it with the note on stdin (5-10 lines)
+            show   print it
+            clear  remove it
+          A fresh PM start prints it under the board digest, with its age,
+          and keeps it until the next write replaces it
 
   --note <ref>=<text>  a one-line note for <ref>, which must be one of the
                        refs given or already queued. An empty text clears it.
@@ -73,14 +87,15 @@ A ref is a tracker ref: an issue number, a URL, a Jira key, a task file.
 `267`, `#267` and .../issues/267 name the same item; a URL's query string
 and fragment are ignored. Put `--` before a ref that starts with `-`.
 
-Writes ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue.
+Writes ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue, and the note
+to handoff.md beside it.
 EOF
   exit "${1:-0}"
 }
 
 CMD=show
 case "${1:-}" in
-  show|set|add|rm|clear) CMD="$1"; shift ;;
+  show|set|add|rm|clear|handoff) CMD="$1"; shift ;;
   -h|--help|help) usage 0 ;;
 esac
 
@@ -113,6 +128,11 @@ done
 case "$CMD" in
   show|clear)
     [[ ${#ARGS[@]} -eq 0 ]] || { echo "Error: $CMD takes no refs" >&2; exit 2; } ;;
+  handoff)
+    case "${ARGS[*]-}" in
+      write|show|clear) ;;
+      *) echo "Error: handoff takes one of write, show or clear" >&2; exit 2 ;;
+    esac ;;
   set|add|rm)
     [[ ${#ARGS[@]} -gt 0 ]] || { echo "Error: $CMD needs at least one ref" >&2; exit 2; } ;;
 esac
@@ -127,7 +147,48 @@ fi
 
 ROOT=$(aw_main_repo_root "${REPO_ARG:-$PWD}") \
   || { echo "Error: not in a git repo: ${REPO_ARG:-$PWD}" >&2; exit 1; }
-QUEUE="${TASK_FORCE_HOME:-$HOME/.task-force}/monitor/$(aw_main_repo_name "$ROOT")/queue"
+REPO_NAME=$(aw_main_repo_name "$ROOT")
+QUEUE="${TASK_FORCE_HOME:-$HOME/.task-force}/monitor/$REPO_NAME/queue"
+HANDOFF="$(dirname "$QUEUE")/handoff.md"
+
+# ----- the handoff note -----------------------------------------------------
+
+# Who is writing: the PM role and the agent its session recorded, so the next
+# PM reads whether the note came from claude or kiro. Either may be empty.
+_handoff_write() {
+  local role="pm-$REPO_NAME" sessions agent="" note tmp lines
+  sessions="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
+  agent=$(grep -E '^AGENT=' "$sessions/$role.info" 2>/dev/null | head -1 | cut -d= -f2-) || agent=""
+  [[ -n "$agent" ]] || agent=$(head -1 "$sessions/$role.agent" 2>/dev/null) || agent=""
+  note=$(cat)
+  # grep, not a ${var//pat/rep}: that is what hung bash 3.2 on a long string (#266).
+  if ! printf '%s' "$note" | grep -q '[^[:space:]]'; then
+    echo "Error: handoff write reads the note on stdin, and it was empty" >&2
+    exit 2
+  fi
+  mkdir -p "$(dirname "$HANDOFF")"
+  tmp="$HANDOFF.tmp.$$"
+  {
+    printf -- '---\nwritten_at: %s\nrole: %s\nagent: %s\n---\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$role" "$agent"
+    printf '%s\n' "$note"
+  } > "$tmp"
+  mv -f "$tmp" "$HANDOFF"
+  lines=$(printf '%s\n' "$note" | grep -c .) || lines=0
+  [[ "$QUIET" == 1 ]] || echo "handoff: $lines line(s) saved; the next PM start prints them"
+}
+
+if [[ "$CMD" == handoff ]]; then
+  case "${ARGS[0]}" in
+    write) _handoff_write ;;
+    show)
+      if [[ -s "$HANDOFF" ]]; then cat "$HANDOFF"; else [[ "$QUIET" == 1 ]] || echo "handoff: (none)"; fi ;;
+    clear)
+      rm -f "$HANDOFF"
+      [[ "$QUIET" == 1 ]] || echo "handoff: (none)" ;;
+  esac
+  exit 0
+fi
 
 # ----- helpers --------------------------------------------------------------
 

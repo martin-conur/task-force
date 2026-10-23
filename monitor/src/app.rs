@@ -73,6 +73,9 @@ pub enum Row {
     InFlight(usize),
     Next(usize),
     Done(usize),
+    /// The previous PM's handoff note (#301), last, and collapsed until
+    /// expanded.
+    Handoff,
 }
 
 pub fn rows(repo: &Repo) -> Vec<Row> {
@@ -80,6 +83,7 @@ pub fn rows(repo: &Repo) -> Vec<Row> {
         .map(Row::InFlight)
         .chain((0..repo.next.items.len()).map(Row::Next))
         .chain((0..repo.done.items.len()).map(Row::Done))
+        .chain(repo.handoff.iter().map(|_| Row::Handoff))
         .collect()
 }
 
@@ -357,6 +361,7 @@ impl App {
                     .and_then(|p| p.number)
                     .unwrap_or(0)
             ),
+            Row::Handoff => "h".to_string(),
         }
     }
 
@@ -595,6 +600,7 @@ impl App {
                     .clone()
                     .or_else(|| item.pr.as_ref().and_then(|p| p.url.clone()))
             }
+            Row::Handoff => None,
         }
     }
 }

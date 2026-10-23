@@ -195,5 +195,8 @@ def status($pr; $last_review; $has_reviewer):
     next: {source: (if ($next_items | length) == 0 then "none" else $next_source end), items: $next_items},
     done: {window_hours: 24, min_items: 10,
            items: [$done_items[] | .label as $l | .title |= strip_label($l)]},
-    attention: {active: ($signals | length > 0), signals: $signals}
+    attention: {active: ($signals | length > 0), signals: $signals},
+    # The previous PM's note (#301), written by `task-monitor-queue handoff
+    # write` and kept until the next one replaces it.
+    handoff: ($handoff[0] // null)
   }

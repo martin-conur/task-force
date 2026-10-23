@@ -51,12 +51,15 @@ source "$AW_ROOT/lib/monitor-text.sh"
 
 usage() {
   cat <<'EOF'
-Usage: task-monitor-snapshot [--json] [--all] [--local] [--repo DIR]
+Usage: task-monitor-snapshot [--json | --brief] [--all] [--local] [--repo DIR]
 
 Print one JSON document (schema 1) describing a repo's in-flight, next and done
 work and its attention signals. See docs/task-monitor-schema.md.
 
-  --json       the output format (the only one; accepted for clarity)
+  --json       the output format (the default; accepted for clarity)
+  --brief      the board digest instead: the repo as at most 40 text lines,
+               then the previous PM's handoff note. What a fresh PM start
+               prints (#301); it describes one repo, so not with --all
   --all        every repo radio knows about (session files' REPO=), plus this one
   --local      no forge calls: read disk only and merge with the last full run
   --repo DIR   describe the repo containing DIR instead of $PWD
@@ -69,10 +72,12 @@ EOF
 
 ALL=0
 LOCAL_ONLY=0
+BRIEF=0
 REPO_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --json)  shift ;;
+    --json)  BRIEF=0; shift ;;
+    --brief) BRIEF=1; shift ;;
     --all)   ALL=1; shift ;;
     --local) LOCAL_ONLY=1; shift ;;
     --repo)
@@ -82,6 +87,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "Error: unknown argument: $1" >&2; usage 2 >&2 ;;
   esac
 done
+
+[[ "$BRIEF" == 1 && "$ALL" == 1 ]] && { echo "Error: --brief describes one repo; it does not take --all" >&2; exit 2; }
 
 command -v jq >/dev/null 2>&1 || { echo "Error: jq is required" >&2; exit 1; }
 
@@ -293,6 +300,32 @@ _pr_object() {
     merged_at: (.mergedAt // null), merge_sha: (.mergeCommit.oid // null)}' <<<"$pr_json"
 }
 
+# The previous PM's handoff note (#301) as {text, written_at, role, agent}, or
+# null. bin/task-monitor-queue owns the file's format: a `---` frontmatter
+# block carrying written_at, role and agent, then the note itself.
+_handoff_json() {
+  local f="$1" text
+  [[ -s "$f" ]] || { echo null; return 0; }
+  # Leading and trailing blank lines dropped; the note's own layout kept.
+  text=$(tm_strip_frontmatter < "$f" | awk '
+    NF { started = 1; for (i = 0; i < blank; i++) print ""; blank = 0; print; next }
+    started { blank++ }
+  ')
+  [[ -n "$text" ]] || { echo null; return 0; }
+  awk '
+    NR == 1 && $0 !~ /^---[ \t\r]*$/ { exit }
+    NR == 1 { next }
+    /^---[ \t\r]*$/ { exit }
+    { k = $0; sub(/:.*/, "", k); v = $0; sub(/^[^:]*:[ \t]*/, "", v); print k "\t" v }
+  ' "$f" | jq -Rsc --arg text "$text" '
+    split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: (.[1:] | join("\t"))})
+    | from_entries as $fm
+    | {text: $text,
+       written_at: ($fm.written_at // null | if . == "" then null else . end),
+       role: ($fm.role // null | if . == "" then null else . end),
+       agent: ($fm.agent // null | if . == "" then null else . end)}'
+}
+
 # ----- one repo -------------------------------------------------------------
 
 # Writes the repo object to stdout. Runs in a subshell per repo, so the tracker
@@ -320,6 +353,7 @@ _snapshot_repo() {
   fi
 
   cache="$MONITOR_HOME/$name"
+  _handoff_json "$cache/handoff.md" > "$w/handoff.json"
   prev='{}'
   [[ -s "$cache/forge.json" ]] && prev=$(jq -c . "$cache/forge.json" 2>/dev/null || echo '{}')
   [[ "$LOCAL_ONLY" == 1 ]] || mkdir -p "$cache/prs"
@@ -518,6 +552,7 @@ _snapshot_repo() {
     --slurpfile orphans "$w/orphans.ndjson" \
     --slurpfile next "$w/next.ndjson" \
     --slurpfile done_items "$w/done.ndjson" \
+    --slurpfile handoff "$w/handoff.json" \
     -f "$AW_ROOT/lib/monitor-assemble.jq"
 }
 
@@ -569,5 +604,10 @@ if [[ "$i" -gt 0 && ! -s "$WORK/repos.ndjson" ]]; then
   exit 1
 fi
 
-jq -s --arg now "$NOW" --arg mode "$([[ "$LOCAL_ONLY" == 1 ]] && echo local || echo full)" \
-  '{schema: 1, generated_at: $now, mode: $mode, repos: .}' "$WORK/repos.ndjson"
+DOC=$(jq -s --arg now "$NOW" --arg mode "$([[ "$LOCAL_ONLY" == 1 ]] && echo local || echo full)" \
+  '{schema: 1, generated_at: $now, mode: $mode, repos: .}' "$WORK/repos.ndjson")
+if [[ "$BRIEF" == 1 ]]; then
+  printf '%s\n' "$DOC" | tm_board_digest
+else
+  printf '%s\n' "$DOC"
+fi

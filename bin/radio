@@ -1625,6 +1625,41 @@ cmd_register() {
       fi
     fi
   fi
+
+  # Board digest (#301), beside the backlog summary above and under the same
+  # fresh=1 / non-alias gate, so /compact and /clear never re-print it. It is
+  # what lets a PM taking over from the other assistant start with the picture
+  # task-monitor already has instead of spending tokens re-reading the
+  # tracker. PM roles only.
+  if (( fresh == 1 )) && [[ -z "$existing_alias" && "$role" == pm-* ]]; then
+    _print_board_digest "$role" "$repo" || true
+  fi
+}
+
+# Print the board digest for <repo>: `task-monitor-snapshot --local --brief`,
+# which reads disk and the last full run's cache and never calls the forge, so
+# a PM start stays fast and works offline. The snapshot lives beside this
+# script. A failed or missing snapshot prints nothing and is only logged: the
+# digest is context, never a reason for register to fail.
+# TASK_FORCE_NO_PM_DIGEST=1 turns it off.
+_print_board_digest() {
+  local role="$1" repo="$2" self dir snap out
+  [[ "${TASK_FORCE_NO_PM_DIGEST:-}" == 1 ]] && return 0
+  [[ -n "$repo" && -d "$repo" ]] || return 0
+  self="${BASH_SOURCE[0]}"
+  while [[ -L "$self" ]]; do
+    dir=$(cd -P "$(dirname "$self")" && pwd)
+    self=$(readlink "$self")
+    [[ "$self" == /* ]] || self="$dir/$self"
+  done
+  snap="$(cd -P "$(dirname "$self")" && pwd)/task-monitor-snapshot"
+  [[ -x "$snap" ]] || { _log "register: no board digest role=$role (no $snap)"; return 0; }
+  if out=$("$snap" --local --brief --repo "$repo" 2>/dev/null) && [[ -n "$out" ]]; then
+    printf '%s\n' "$out"
+    _log "register: printed board digest ($(printf '%s\n' "$out" | wc -l | tr -d ' ') lines) role=$role"
+  else
+    _log "register: no board digest role=$role (task-monitor-snapshot --local --brief failed)"
+  fi
 }
 
 # Register an alias session (#165): `task-pm --also <repo>` points a second

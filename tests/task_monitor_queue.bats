@@ -27,7 +27,7 @@ teardown() {
 nx() { /bin/bash "$NEXT" "$@"; }
 
 # The queue file with tabs made visible.
-queue_file() { sed 's/\t/<TAB>/' "$QUEUE"; }
+queue_file() { sed 's/\t/<TAB>/g' "$QUEUE"; }
 
 @test "show: an empty queue says so and writes nothing" {
   run nx
@@ -119,6 +119,72 @@ queue_file() { sed 's/\t/<TAB>/' "$QUEUE"; }
   assert [ ! -e "$QUEUE" ]
 }
 
+@test "--title: set and add store it after the note's tab, and show prints it" {
+  run nx set 1 2 --title 2='Two things' --note 1=first
+  assert_success
+  assert_output "queue: 1 2"
+  run queue_file
+  assert_output "$(printf '1<TAB>first\n2<TAB><TAB>Two things')"
+  run nx add 3 --title 3=Three --note 3=later
+  assert_output "queue: 1 2 3"
+  run queue_file
+  assert_output "$(printf '1<TAB>first\n2<TAB><TAB>Two things\n3<TAB>later<TAB>Three')"
+  run nx show
+  assert_output "$(printf '1  1  first\n2  2  [Two things]\n3  3  [Three]  later')"
+}
+
+@test "--title: set keeps a surviving ref's title, an empty --title clears it, the note survives" {
+  nx set 1 2 --title 1=One --title 2=Two --note 2=two >/dev/null
+  nx set 2 1 --note 2=still >/dev/null
+  run queue_file
+  assert_output "$(printf '2<TAB>still<TAB>Two\n1<TAB><TAB>One')"
+  nx set 2 1 --title 2= --title 1= >/dev/null
+  run queue_file
+  assert_output "$(printf '2<TAB>still\n1')"
+  nx add 1 --title '#1=One again' >/dev/null
+  run queue_file
+  assert_output "$(printf '2<TAB>still\n1<TAB><TAB>One again')"
+}
+
+@test "--title: rm and a later --note leave the other items' titles alone" {
+  nx set 1 2 3 --title 1=One --title 3=Three >/dev/null
+  nx rm 2 >/dev/null
+  nx add 1 --note 1=n >/dev/null
+  run queue_file
+  assert_output "$(printf '1<TAB>n<TAB>One\n3<TAB><TAB>Three')"
+}
+
+@test "--title is one line, and refused like --note: unqueued ref, no =, not on rm" {
+  nx set 4 --title "4=$(printf 'a\tb\nc')" >/dev/null
+  run queue_file
+  assert_output "4<TAB><TAB>a b c"
+  run nx set 1 --title 9=x
+  assert_failure 2
+  assert_output --partial "--title names 9, which is not in the queue"
+  run nx set 1 --title nothing
+  assert_failure 2
+  run nx set 1 --title
+  assert_failure 2
+  run nx rm 4 --title 4=x
+  assert_failure 2
+  assert_output --partial "--title goes with set or add"
+  run queue_file
+  assert_output "4<TAB><TAB>a b c"
+}
+
+# As documented for --note: the split is on the first `=`, so a ref that itself
+# contains `=` cannot take a title. Its first part names a ref that is not
+# queued, and the rest becomes the would-be title.
+@test "--title splits on the first =, so a ref containing = cannot take a title" {
+  run nx set 'x=y' 2 --title 'x=y=Named'
+  assert_failure 2
+  assert_output --partial "--title names x, which is not in the queue"
+  run nx set 'a=b' x --title 'x=y=z'
+  assert_success
+  run queue_file
+  assert_output "$(printf 'a=b\nx<TAB><TAB>y=z')"
+}
+
 @test "a note is one line: tabs and newlines become spaces" {
   nx set 4 --note "4=$(printf 'a\tb\nc')" >/dev/null
   run queue_file
@@ -176,6 +242,27 @@ queue_file() { sed 's/\t/<TAB>/' "$QUEUE"; }
   assert_equal "$(jq -r '.repos[0].next.items[1].note' <<<"$output")" "after the release"
 }
 
+@test "the snapshot shows the title this command writes, on notion" {
+  mkdir -p .claude
+  touch .claude/notion-workflow.md
+  nx set https://app.notion.com/p/3fdd9a72260f81559d2fdfe4589b5b1c \
+    --title 3fdd9a72260f81559d2fdfe4589b5b1c='Arms schema' >/dev/null
+  run /bin/bash "$SNAP" --local
+  assert_success
+  assert_equal "$(jq -r '.repos[0].next.items[0].title' <<<"$output")" "Arms schema"
+  assert_equal "$(jq -r '.repos[0].next.items[0].label' <<<"$output")" "notion:3fdd9a72…"
+}
+
+@test "task-work keeps the other items' titles when it takes its ref off the queue" {
+  setup_stubs
+  export AW_IMPL=claude-gh
+  nx set 41 42 --title 41=Forty-one --title 42=Forty-two >/dev/null
+  run "$TASK_WORK" "https://github.com/owner/repo/issues/42"
+  assert_success
+  run queue_file
+  assert_output "41<TAB><TAB>Forty-one"
+}
+
 @test "task-work takes the ref it dispatches off the queue, whatever form it was queued in" {
   setup_stubs
   export AW_IMPL=claude-gh
@@ -206,6 +293,17 @@ queue_file() { sed 's/\t/<TAB>/' "$QUEUE"; }
     run jq -r '.prompt | test("task-monitor-queue set .*`task-work` takes it off the queue itself")' "$f"
     assert_output true
   done
+}
+
+@test "the notion and jira PM prompts teach --title, from what is known, never fetched" {
+  local f
+  for f in "$REPO_ROOT_REAL"/claude-notion/commands/pm.md "$REPO_ROOT_REAL"/claude-jira/commands/pm.md; do
+    run grep -c 'task-monitor-queue set .*--title .*never fetch .* to find it.*leave `--title` off' "$f"
+    assert_output 1
+  done
+  run jq -r '.prompt | test("task-monitor-queue set .*--title .*never fetch .* to find it.*leave `--title` off")' \
+    "$REPO_ROOT_REAL"/kiro-notion/agents/pm.json
+  assert_output true
 }
 
 @test "a ref's leading #s are all stripped, so ##5 is stored as 5 and not read back as a comment" {

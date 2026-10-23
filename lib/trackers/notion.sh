@@ -50,3 +50,29 @@ aw_tracker_usage_examples() {
 # Only the noun differs from the default: the spec still passes to /reviewer
 # verbatim, with no PR-body convention to fall back on (#144, #239).
 aw_tracker_review_spec_shape() { echo "a Notion page URL"; }
+
+# ---------------- task-monitor-snapshot hooks ----------------
+#
+# Still the default's title — the slug, or nothing for a queued page — since the
+# shell cannot read Notion (#306). What changes is the label: a page URL is far
+# too long to be one, and the front end falls back to the ref when the label is
+# null, so the board read the raw URL. It reads `notion:3fdd9a72…` instead, the
+# page id's first 8 hex digits; the URL stays the item's url, for `o`. A URL
+# with no page id in it keeps its last path segment.
+aw_tracker_item_describe() {
+  local ref="$1" seg short
+  case "$ref" in
+    *://*) ;;
+    *) _aw_tracker_item_describe_default "$@"; return ;;
+  esac
+  seg="${ref%%\?*}"
+  seg="${seg%%#*}"
+  seg="${seg%/}"
+  seg="${seg##*/}"
+  if [[ "$seg" =~ (^|-)([a-f0-9]{32})$ ]]; then
+    short="notion:${BASH_REMATCH[2]:0:8}…"
+  else
+    short="notion:$seg"
+  fi
+  _aw_tracker_item_describe_default "$@" | jq -c --arg lbl "$short" '.label = $lbl'
+}

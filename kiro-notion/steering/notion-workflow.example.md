@@ -419,11 +419,11 @@ cost. `task-work` takes the ref it dispatches off the queue itself, so nobody
 has to `rm` a dispatched item.
 
 ```bash
-task-monitor-queue set <ref>... [--note <ref>=<text>]   # replace, in order
-task-monitor-queue add <ref>...                         # append
-task-monitor-queue rm <ref>...                          # drop
-task-monitor-queue clear                                # empty
-task-monitor-queue                                      # show it
+task-monitor-queue set <ref>... [--note <ref>=<text>] [--title <ref>=<text>]   # replace, in order
+task-monitor-queue add <ref>...                                                # append
+task-monitor-queue rm <ref>...                                                 # drop
+task-monitor-queue clear                                                       # empty
+task-monitor-queue                                                             # show it
 ```
 
 Refs are compared by their last path segment, ignoring a URL's query string
@@ -431,6 +431,15 @@ and fragment, so `267`, `#267` and an issue URL ending in `/issues/267` are one
 item. `set` keeps the note of a ref that stays queued; `--note <ref>=` clears
 it. `--note` splits on the first `=`, so a ref that contains `=` cannot take a
 note.
+
+`--title <ref>=<text>` gives a queued item its short name (#306), for trackers
+the shell cannot read: on jira and notion a queued row has no title of its own.
+The PM passes the name it already knows from the conversation, never fetching
+anything to find it, and leaves `--title` off when it knows none. It follows
+`--note`'s rules: `set` and `add`, repeatable, kept across a `set`, cleared by
+`--title <ref>=`. The board uses it only where the tracker has no real title,
+so gh and local keep their own. With none, a Notion page reads
+`notion:3fdd9a72…` and a Jira browse URL its key; `o` still opens the URL.
 
 ### PM ↔ worker messaging (radio)
 

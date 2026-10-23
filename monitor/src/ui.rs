@@ -1009,6 +1009,27 @@ mod tests {
         assert!(text.contains("Both whitespace checks use a grep helper"));
     }
 
+    /// A queued notion page (#306): the PM's title and the compact page id
+    /// render, the page URL does not.
+    #[test]
+    fn a_titled_queue_row_renders_the_title_not_the_url() {
+        let url = "https://app.notion.com/p/3fdd9a72260f81559d2fdfe4589b5b1c";
+        let item: NextItem = serde_json::from_value(serde_json::json!({
+            "ref": url, "label": "notion:3fdd9a72…", "number": null,
+            "title": "Arms schema", "description": null, "url": url,
+            "note": "needs sign-off"
+        }))
+        .unwrap();
+        let row: String = next_lines(1, &item, false, 100)[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(row.contains("notion:3fdd9a72… Arms schema"), "{row}");
+        assert!(row.trim_end().ends_with("\"needs sign-off\""), "{row}");
+        assert!(!row.contains("https://"), "{row}");
+    }
+
     #[test]
     fn narrow_terminals_cut_the_title_not_the_status() {
         let mut a = app(MULTI, true);

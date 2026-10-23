@@ -545,6 +545,95 @@ project_page() {
   assert_equal "$(q '.next.items | length')" 0
 }
 
+# queue_line <line>... — the queue file, written as task-monitor-queue would.
+queue_lines() {
+  mkdir -p "$TASK_FORCE_HOME/monitor/$NAME"
+  printf '%s\n' "$@" > "$TASK_FORCE_HOME/monitor/$NAME/queue"
+}
+
+NOTION_A=https://app.notion.com/p/3fdd9a72260f81559d2fdfe4589b5b1c
+NOTION_B=https://www.notion.so/acme/Fix-auth-3fad9a72260f8184be21d483ce5d88d4?pvs=4
+
+@test "next notion: the PM's title is the title, the page URL stays the url, the note is kept" {
+  loadout notion
+  queue_lines "$NOTION_A"$'\tsign-off first\tArms schema' "$NOTION_B"
+  snap
+  assert_equal "$(q '.next.items[0].title')" "Arms schema"
+  assert_equal "$(q '.next.items[0].note')" "sign-off first"
+  assert_equal "$(q '.next.items[0].url')" "$NOTION_A"
+  assert_equal "$(q '.next.items[0].ref')" "$NOTION_A"
+  # No title given: the label is the compact page id, the title is empty, and
+  # the URL is not shown as either.
+  assert_equal "$(q '.next.items[1].label')" "notion:3fad9a72…"
+  assert_equal "$(q '.next.items[1].title')" ""
+  assert_equal "$(q '.next.items[1].url')" "$NOTION_B"
+  assert_equal "$(q '.next.items[0].label')" "notion:3fdd9a72…"
+}
+
+@test "next notion: a blank title cached by an earlier full run does not hide a title set later" {
+  loadout notion
+  queue_lines "$NOTION_A"
+  snap
+  assert_equal "$(jq -r --arg r "$NOTION_A" '.issues[$r].title' "$TASK_FORCE_HOME/monitor/$NAME/forge.json")" ""
+  queue_lines "$NOTION_A"$'\t\tArms schema'
+  snap --local
+  assert_success
+  assert_equal "$(q '.next.items[0].title')" "Arms schema"
+  snap
+  assert_equal "$(q '.next.items[0].title')" "Arms schema"
+  # The PM's title is the queue's, never the cache's.
+  assert_equal "$(jq -r --arg r "$NOTION_A" '.issues[$r].title' "$TASK_FORCE_HOME/monitor/$NAME/forge.json")" ""
+}
+
+@test "next jira: the PM's title replaces the bare key; a browse URL is labelled by its key" {
+  loadout jira
+  queue_lines $'PROJ-7\t\tRotate the keys' https://acme.atlassian.net/browse/PROJ-9 PROJ-8
+  snap
+  assert_equal "$(q '.next.items[0].title')" "Rotate the keys"
+  assert_equal "$(q '.next.items[0].label')" "PROJ-7"
+  assert_equal "$(q '.next.items[1].label')" "PROJ-9"
+  assert_equal "$(q '.next.items[1].url')" https://acme.atlassian.net/browse/PROJ-9
+  assert_equal "$(q '.next.items[2].title')" "PROJ-8"
+}
+
+@test "next gh: the tracker's real title wins over the PM's; one the forge cannot give yields to it" {
+  issue 8 "Eight" "Body eight."
+  queue_lines $'8\t\tPM name for eight' $'9\t\tPM name for nine'
+  snap
+  assert_equal "$(q '.next.items[0].title')" "Eight"
+  assert_equal "$(q '.next.items[1].title')" "PM name for nine"
+}
+
+@test "next: a blank title served from the cache, when the tracker cannot answer, yields to the PM's" {
+  mkdir -p "$TASK_FORCE_HOME/monitor/$NAME"
+  echo '{"issues": {"9": {"ref": "9", "label": "#9", "number": 9, "title": "", "description": null, "url": null}}}' \
+    > "$TASK_FORCE_HOME/monitor/$NAME/forge.json"
+  queue_lines $'9\t\tPM name for nine'
+  snap --local
+  assert_success
+  assert_equal "$(q '.next.items[0].label')" "#9"
+  assert_equal "$(q '.next.items[0].title')" "PM name for nine"
+}
+
+@test "next local: the task file's title wins over the PM's" {
+  loadout local
+  mkdir -p "$MAIN_REPO/tasks"
+  printf -- '---\nid: 004\ntitle: Add logout\nstatus: todo\n---\n\nBody.\n' > "$MAIN_REPO/tasks/004-add-logout.md"
+  queue_lines $'004-add-logout.md\t\tPM name'
+  snap
+  assert_equal "$(q '.next.items[0].title')" "Add logout"
+}
+
+@test "the notion describer: a bare id, a Title-<id> segment, a query string, and a URL with no id" {
+  run /bin/bash -c 'source "$1/lib/trackers/_default.sh"; source "$1/lib/trackers/notion.sh"
+    aw_tracker_item_describe https://app.notion.com/p/3fdd9a72260f81559d2fdfe4589b5b1c "" | jq -r .label
+    aw_tracker_item_describe "https://www.notion.so/My-Task-abc123def456abc123def456abc123de?pvs=4" my-task | jq -r ".label, .title"
+    aw_tracker_item_describe https://www.notion.so/acme/some-page/ "" | jq -r .label
+    aw_tracker_item_describe free-slug "" | jq -r .label' _ "$REPO_ROOT_REAL"
+  assert_success
+  assert_output "$(printf 'notion:3fdd9a72…\nnotion:abc123de…\nmy-task\nnotion:some-page\nfree-slug')"
+}
+
 # ----- done -----------------------------------------------------------------------
 
 @test "done: merged PRs that close an item, with summary, body and merge sha; unlinked ones left out" {

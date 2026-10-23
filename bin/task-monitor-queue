@@ -12,7 +12,10 @@ set -euo pipefail
 # This command owns the queue file's format. The file is
 # ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue, <repo> being the
 # sanitized main-repo name (the same directory the snapshot caches in). One
-# tracker ref per line, in order, with an optional one-line note after a tab.
+# tracker ref per line, in order, with an optional one-line note after a tab
+# and an optional one-line title after a second tab (#306): `ref`,
+# `ref<TAB>note`, `ref<TAB>note<TAB>title` or `ref<TAB><TAB>title`. A line with
+# no title is exactly what the format was before titles existed.
 # Blank lines and `#` comments are ignored on read and never written.
 #
 # Refs are compared by key, not by spelling: leading `#`s, a URL's query
@@ -38,8 +41,8 @@ source "$AW_ROOT/lib/repo-name.sh"
 usage() {
   cat <<'EOF'
 Usage: task-monitor-queue [show]
-       task-monitor-queue set <ref>... [--note <ref>=<text>]...
-       task-monitor-queue add <ref>... [--note <ref>=<text>]...
+       task-monitor-queue set <ref>... [--note <ref>=<text>]... [--title <ref>=<text>]...
+       task-monitor-queue add <ref>... [--note <ref>=<text>]... [--title <ref>=<text>]...
        task-monitor-queue rm <ref>... [--quiet]
        task-monitor-queue clear
        (every form also takes --repo DIR)
@@ -48,9 +51,10 @@ The PM's short-term queue for this repo: the "Next" section of task-monitor.
 
   show    print the queue, one item per line (the default)
   set     replace the queue with <ref>... in that order. A ref that was
-          already queued keeps its note unless --note gives a new one
+          already queued keeps its note and title unless --note or --title
+          gives a new one
   add     append <ref>... to the end; a ref already queued keeps its place
-          and only takes the new note, if one is given
+          and only takes the new note or title, if one is given
   rm      drop <ref>...; a ref that is not queued is ignored
   clear   empty the queue
 
@@ -58,6 +62,10 @@ The PM's short-term queue for this repo: the "Next" section of task-monitor.
                        refs given or already queued. An empty text clears it.
                        It splits on the first `=`, so a ref that itself
                        contains `=` cannot take a note
+  --title <ref>=<text> the item's short name, shown on the board where the
+                       tracker cannot supply one (jira, notion). Same rules
+                       as --note: a queued ref, an empty text clears it, and
+                       it splits on the first `=`
   --quiet              print nothing on success
   --repo DIR           the repo containing DIR instead of $PWD
 
@@ -78,6 +86,7 @@ esac
 
 ARGS=()
 NOTE_ARGS=()
+TITLE_ARGS=()
 QUIET=0
 REPO_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -86,6 +95,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --note requires <ref>=<text>" >&2; exit 2; }
       [[ "$2" == ?*=* ]] || { echo "Error: --note takes <ref>=<text>, got: $2" >&2; exit 2; }
       NOTE_ARGS+=("$2"); shift 2 ;;
+    --title)
+      [[ $# -ge 2 ]] || { echo "Error: --title requires <ref>=<text>" >&2; exit 2; }
+      [[ "$2" == ?*=* ]] || { echo "Error: --title takes <ref>=<text>, got: $2" >&2; exit 2; }
+      TITLE_ARGS+=("$2"); shift 2 ;;
     --quiet) QUIET=1; shift ;;
     --repo)
       [[ $# -ge 2 ]] || { echo "Error: --repo requires a value" >&2; exit 2; }
@@ -105,6 +118,10 @@ case "$CMD" in
 esac
 if [[ ${#NOTE_ARGS[@]} -gt 0 && "$CMD" != set && "$CMD" != add ]]; then
   echo "Error: --note goes with set or add" >&2
+  exit 2
+fi
+if [[ ${#TITLE_ARGS[@]} -gt 0 && "$CMD" != set && "$CMD" != add ]]; then
+  echo "Error: --title goes with set or add" >&2
   exit 2
 fi
 
@@ -144,7 +161,7 @@ _check_ref() {
   esac
 }
 
-# A note is one line: tabs and newlines become spaces.
+# A note or a title is one line: tabs and newlines become spaces.
 _clean_note() {
   printf '%s' "$1" | tr '\t\n\r' '   '
 }
@@ -152,11 +169,15 @@ _clean_note() {
 # The current queue, as parallel arrays.
 REFS=()
 NOTES=()
+TITLES=()
 if [[ -f "$QUEUE" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in ''|'#'*) continue ;; esac
     REFS+=("${line%%$'\t'*}")
-    if [[ "$line" == *$'\t'* ]]; then NOTES+=("${line#*$'\t'}"); else NOTES+=(""); fi
+    rest=""
+    [[ "$line" == *$'\t'* ]] && rest="${line#*$'\t'}"
+    NOTES+=("${rest%%$'\t'*}")
+    if [[ "$rest" == *$'\t'* ]]; then TITLES+=("${rest#*$'\t'}"); else TITLES+=(""); fi
   done < "$QUEUE"
 fi
 
@@ -187,7 +208,9 @@ _write() {
   tmp="$QUEUE.tmp.$$"
   : > "$tmp"
   for ((i = 0; i < ${#REFS[@]}; i++)); do
-    if [[ -n "${NOTES[$i]}" ]]; then
+    if [[ -n "${TITLES[$i]}" ]]; then
+      printf '%s\t%s\t%s\n' "${REFS[$i]}" "${NOTES[$i]}" "${TITLES[$i]}" >> "$tmp"
+    elif [[ -n "${NOTES[$i]}" ]]; then
       printf '%s\t%s\n' "${REFS[$i]}" "${NOTES[$i]}" >> "$tmp"
     else
       printf '%s\n' "${REFS[$i]}" >> "$tmp"
@@ -206,17 +229,24 @@ _summary() {
   fi
 }
 
-# Apply every --note to REFS / NOTES. Each must name a queued ref.
+# Index of the queued ref an <option> <ref>=<text> argument names, or an error.
+_named_index() {
+  local ref="${2%%=*}"
+  _index_of "$ref" && return 0
+  echo "Error: $1 names $ref, which is not in the queue" >&2
+  return 2
+}
+
+# Apply every --note to NOTES and every --title to TITLES.
 _apply_notes() {
-  local n ref i
-  [[ ${#NOTE_ARGS[@]} -gt 0 ]] || return 0
-  for n in "${NOTE_ARGS[@]}"; do
-    ref="${n%%=*}"
-    if ! i=$(_index_of "$ref"); then
-      echo "Error: --note names $ref, which is not in the queue" >&2
-      exit 2
-    fi
+  local n i
+  for n in "${NOTE_ARGS[@]+"${NOTE_ARGS[@]}"}"; do
+    i=$(_named_index --note "$n") || exit 2
     NOTES[i]=$(_clean_note "${n#*=}")
+  done
+  for n in "${TITLE_ARGS[@]+"${TITLE_ARGS[@]}"}"; do
+    i=$(_named_index --title "$n") || exit 2
+    TITLES[i]=$(_clean_note "${n#*=}")
   done
 }
 
@@ -229,30 +259,34 @@ case "$CMD" in
       exit 0
     fi
     for ((i = 0; i < ${#REFS[@]}; i++)); do
-      if [[ -n "${NOTES[$i]}" ]]; then
-        printf '%d  %s  %s\n' "$((i + 1))" "${REFS[$i]}" "${NOTES[$i]}"
-      else
-        printf '%d  %s\n' "$((i + 1))" "${REFS[$i]}"
-      fi
+      printf '%d  %s' "$((i + 1))" "${REFS[$i]}"
+      [[ -n "${TITLES[$i]}" ]] && printf '  [%s]' "${TITLES[$i]}"
+      [[ -n "${NOTES[$i]}" ]] && printf '  %s' "${NOTES[$i]}"
+      printf '\n'
     done
     ;;
   set)
     OLD_REFS=("${REFS[@]+"${REFS[@]}"}")
     OLD_NOTES=("${NOTES[@]+"${NOTES[@]}"}")
+    OLD_TITLES=("${TITLES[@]+"${TITLES[@]}"}")
     REFS=()
     NOTES=()
+    TITLES=()
     for ref in "${ARGS[@]}"; do
       _check_ref "$ref"
       _index_of "$ref" >/dev/null && continue
       note=""
+      title=""
       for ((i = 0; i < ${#OLD_REFS[@]}; i++)); do
         if [[ "$(_key "${OLD_REFS[$i]}")" == "$(_key "$ref")" ]]; then
           note="${OLD_NOTES[$i]}"
+          title="${OLD_TITLES[$i]}"
           break
         fi
       done
       REFS+=("$(_strip_hashes "$ref")")
       NOTES+=("$note")
+      TITLES+=("$title")
     done
     _apply_notes
     _write
@@ -264,6 +298,7 @@ case "$CMD" in
       _index_of "$ref" >/dev/null && continue
       REFS+=("$(_strip_hashes "$ref")")
       NOTES+=("")
+      TITLES+=("")
     done
     _apply_notes
     _write
@@ -275,13 +310,16 @@ case "$CMD" in
       i=$(_index_of "$ref") || continue
       KEEP_REFS=()
       KEEP_NOTES=()
+      KEEP_TITLES=()
       for ((j = 0; j < ${#REFS[@]}; j++)); do
         [[ "$j" -eq "$i" ]] && continue
         KEEP_REFS+=("${REFS[$j]}")
         KEEP_NOTES+=("${NOTES[$j]}")
+        KEEP_TITLES+=("${TITLES[$j]}")
       done
       REFS=("${KEEP_REFS[@]+"${KEEP_REFS[@]}"}")
       NOTES=("${KEEP_NOTES[@]+"${KEEP_NOTES[@]}"}")
+      TITLES=("${KEEP_TITLES[@]+"${KEEP_TITLES[@]}"}")
     done
     _write
     _summary
@@ -289,6 +327,7 @@ case "$CMD" in
   clear)
     REFS=()
     NOTES=()
+    TITLES=()
     _write
     _summary
     ;;

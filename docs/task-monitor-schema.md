@@ -156,8 +156,13 @@ that PR:
 
 - `source: "queue"`: the PM's queue, in its order. It is read from
   `${TASK_FORCE_HOME}/monitor/<name>/queue`, one ref per line, with an optional
-  tab-separated note and `#` comments. `task-monitor-queue` (#275) writes this
-  file and owns the format; `task-work` drops the ref it dispatches from it.
+  tab-separated note, an optional title after a second tab, and `#` comments.
+  `task-monitor-queue` (#275) writes this file and owns the format;
+  `task-work` drops the ref it dispatches from it. The PM's title (#306) is the
+  item's `title` when the tracker gave no real one: an empty title, or one
+  that only repeats the `ref` or `label`, as jira and notion always do. gh and
+  local keep the tracker's. On notion the `label` is the compact page id,
+  `notion:3fdd9a72…`, and the page URL stays in `url`.
 - `source: "tracker"`: the queue is empty, so the tracker's fallback is used.
   - **gh**: open issues on the configured project whose status is none of the
     three in the workflow doc (starting work, in review, done), compared

@@ -412,7 +412,7 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   session "reviewer-$NAME-pr9" busy
   session "pm-$NAME" idle
   msg "pm-$NAME" processed 1 "worker-$NAME-issue-5" review-requested 9
-  pr_fixture 9 task/issue-5 "Closes #5" > "$BATS_TEST_TMPDIR/p9"
+  pr_fixture 9 task/issue-5 $'Closes #5\n\nThe fifth fix.' > "$BATS_TEST_TMPDIR/p9"
   open_prs "$BATS_TEST_TMPDIR/p9"
   snap --json
   assert_success
@@ -688,6 +688,52 @@ NOTION_B=https://www.notion.so/acme/Fix-auth-3fad9a72260f8184be21d483ce5d88d4?pv
   assert_equal "$(q '.done.items[0].summary')" "no closes line"
 }
 
+# #299: the board prints the label before the title, and a jira PR title is
+# `<KEY>: …` by convention, so the key would show twice.
+@test "done jira: a PR title that opens with the key drops it, in any of its forms" {
+  loadout jira
+  local n=11 t files=()
+  for t in "PROJ-7: Ship the widget" "[PROJ-7] Ship the widget" "proj-7 - Ship the widget" "PROJ-7 — Ship the widget"; do
+    pr_fixture "$n" task/proj-7 $'## Summary\n\nx' "$((n * 60))" | jq --arg t "$t" '.title = $t' > "$GH_FIX/pr-$n.json"
+    files+=("$GH_FIX/pr-$n.json"); n=$((n + 1))
+  done
+  pr_fixture "$n" task/proj-7 $'## Summary\n\nx' "$((n * 60))" | jq '.title = "PROJ-70: another key"' > "$GH_FIX/pr-$n.json"
+  files+=("$GH_FIX/pr-$n.json")
+  merged_idx "${files[@]}"
+  snap
+  assert_equal "$(q '[.done.items[].title] | join("|")')" \
+    "Ship the widget|Ship the widget|Ship the widget|Ship the widget|PROJ-70: another key"
+  assert_equal "$(q '.done.items[0].label')" PROJ-7
+}
+
+@test "in flight jira: a PR title that opens with the key drops it" {
+  loadout jira
+  sidecar proj-42 JIRA_REF PROJ-42
+  pr_fixture 3 task/proj-42 $'## Summary\n\nJira work.' | jq '.title = "PROJ-42: Add login"' > "$BATS_TEST_TMPDIR/p3"
+  open_prs "$BATS_TEST_TMPDIR/p3"
+  snap
+  assert_equal "$(q '.in_flight[0].title')" "Add login"
+  assert_equal "$(q '.in_flight[0].pr.title')" "PROJ-42: Add login"
+}
+
+@test "done gh: a PR title is left as it is, even one that mentions the issue" {
+  pr_fixture 11 task/x $'Closes #4\n\n## Summary\n\nShipped it.' 3600 | jq '.title = "Fix #4: the widget"' > "$GH_FIX/pr-11.json"
+  merged_idx "$GH_FIX/pr-11.json"
+  snap
+  assert_equal "$(q '.done.items[0].label')" "#4"
+  assert_equal "$(q '.done.items[0].title')" "Fix #4: the widget"
+}
+
+@test "done jira: with no ## Summary the description skips a JIRA: <url> line, and a link-only body has none" {
+  loadout jira
+  pr_fixture 11 task/proj-7 $'JIRA: https://acme.atlassian.net/browse/PROJ-7\n\nThe widget ships.' 3600 > "$GH_FIX/pr-11.json"
+  pr_fixture 12 task/proj-8 $'JIRA: https://acme.atlassian.net/browse/PROJ-8' 1800 > "$GH_FIX/pr-12.json"
+  merged_idx "$GH_FIX/pr-12.json" "$GH_FIX/pr-11.json"
+  snap
+  assert_equal "$(q '.done.items[1].description')" "The widget ships."
+  assert_equal "$(q '.done.items[0].description')" null
+}
+
 # ----- attention ------------------------------------------------------------------
 
 @test "attention: an unread PM inbox lights the repo, with the count in words" {
@@ -942,6 +988,23 @@ SHIM
   assert_output "after"
   run bash -c "source '$lib'; printf '%s\n' 'just this' | tm_pr_summary"
   assert_output "just this"
+}
+
+# #299: a jira PR body closes a key or a browse URL, and often opens with a
+# `JIRA: <url>` line. Neither is a description.
+@test "tm_pr_summary on a jira body: skips link lines, finds the prose after Closes KEY" {
+  local lib="$REPO_ROOT_REAL/lib/monitor-text.sh"
+  run bash -c "source '$lib'; printf '%s\n' 'JIRA: https://acme.atlassian.net/browse/ML-450' '' 'The real change.' | tm_pr_summary"
+  assert_output "The real change."
+  run bash -c "source '$lib'; printf '%s\n' 'intro' '' 'Closes ML-450' '' 'After the key.' | tm_pr_summary"
+  assert_output "After the key."
+  run bash -c "source '$lib'; printf '%s\n' 'intro' '' 'Fixes https://acme.atlassian.net/browse/ML-450' '' 'After the URL.' | tm_pr_summary"
+  assert_output "After the URL."
+  run bash -c "source '$lib'; printf '%s\n' 'https://x.example/a' '' '[ML-450](https://x.example/b)' '' 'Closes ML-450' | tm_pr_summary"
+  assert_output ""
+  # A ## Summary still wins over everything else.
+  run bash -c "source '$lib'; printf '%s\n' 'JIRA: https://x.example/a' '' '## Summary' '' 'sum' | tm_pr_summary"
+  assert_output "sum"
 }
 
 # #278: kiro-cli has no hook for "waiting on the user", so worker-awaiting is

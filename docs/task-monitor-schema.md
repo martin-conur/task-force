@@ -101,7 +101,17 @@ How `title` and `description` are found:
 
 The "first prose paragraph" skips headings, HTML comments, fences and rules. A
 list item starts a paragraph of its own. A PR with no `## Summary` uses the
-first paragraph after its `Closes #N` line, then its first paragraph.
+first prose paragraph after its `Closes #N` line (or `Closes PROJ-42`, or a
+`Closes` with a Jira browse URL), then its first prose paragraph. Here a
+paragraph that is only a link, only `Label: <url>` (a jira body's
+`JIRA: <url>`) or only a `Closes …` line does not count, and with no other
+paragraph the description is null (#299).
+
+A PR title that opens with the item's label loses it, with the separator after
+it: `PROJ-42: Add login`, `[PROJ-42] Add login` and `proj-42 - Add login` all
+become `Add login`, because the board prints the label in front of the title.
+Only a whole label at the start counts, matched ignoring case. A gh title never
+starts with `#N`, so gh titles are unchanged. `pr.title` keeps the raw title.
 
 ### `in_flight[]`
 

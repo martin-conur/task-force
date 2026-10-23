@@ -7,6 +7,23 @@
 
 def nonempty: if . == null or . == "" then null else . end;
 
+# A PR title with the item's label in front of it (#299). On jira the commit
+# and PR-title convention is `<KEY>: …`, and the board prints the label before
+# the title, so the row would read `ML-450 ML-450: …`. Drop a leading
+# `ML-450`, `[ML-450]` or `ml-450` and the `:` / `-` / `—` / space after it.
+# Only a whole label counts (`ML-4500` is not `ML-450`), and a title that is
+# nothing but the label stays as it is. Not `$label`: jq 1.6 reserves it.
+def strip_label($lbl):
+  if . == null or $lbl == null or $lbl == "" then . else
+    (ascii_downcase) as $t | ($lbl | ascii_downcase) as $l
+    | (if ($t | startswith("[" + $l + "]")) then .[($l | length) + 2:]
+       elif ($t | startswith($l)) then .[($l | length):] | (if . == "" or test("^[\\s:—-]") then . else null end)
+       else null end) as $rest
+    | if $rest == null then . else
+        ($rest | sub("^[\\s:—-]+"; "")) as $r | if $r == "" then . else $r end
+      end
+  end;
+
 # Whether a radio role belongs to repo <r>. Role names are task-force's own:
 # pm-<repo>, worker-<repo>-<slug>, reviewer-<repo>-pr<N>.
 def role_of($r):
@@ -88,6 +105,7 @@ def status($pr; $last_review; $has_reviewer):
 
 | [ $inflight[]
     | ("worker-" + $name + "-" + .slug) as $wrole
+    | .item.label as $item_label
     # No PR found by head branch: fall back to the PR the worker named in its
     # own review-requested, so a renamed branch still shows its review state.
     | (.pr // ([$msgs[] | select(.from == $wrole and .pr != null)] | last
@@ -101,7 +119,7 @@ def status($pr; $last_review; $has_reviewer):
     | ([$msgs[] | select(.from == $wrole or .to == $wrole or ($prn != null and .pr == $prn))] | last) as $last
     | { slug, ref, branch, base, worktree,
         label: .item.label, number: .item.number, url: .item.url,
-        title: (($pr.title // null) // .item.title),
+        title: (if ($pr.title // null) != null then ($pr.title | strip_label($item_label)) else .item.title end),
         description: (($pr.summary // null) // .item.description),
         item: .item,
         pr: $pr,
@@ -175,6 +193,7 @@ def status($pr; $last_review; $has_reviewer):
     # cleanup can act on them.
     orphans: $orphans,
     next: {source: (if ($next_items | length) == 0 then "none" else $next_source end), items: $next_items},
-    done: {window_hours: 24, min_items: 10, items: $done_items},
+    done: {window_hours: 24, min_items: 10,
+           items: [$done_items[] | .label as $l | .title |= strip_label($l)]},
     attention: {active: ($signals | length > 0), signals: $signals}
   }

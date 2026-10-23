@@ -172,7 +172,8 @@ that PR:
   item's `title` when the tracker gave no real one: an empty title, or one
   that only repeats the `ref` or `label`, as jira and notion always do. gh and
   local keep the tracker's. On notion the `label` is the compact page id,
-  `notion:3fdd9a72…`, and the page URL stays in `url`.
+  `notion:…589b5b1c`, its last 8 hex digits (#317), and the page URL stays in
+  `url`.
 - `source: "tracker"`: the queue is empty, so the tracker's fallback is used.
   - **gh**: open issues on the configured project whose status is none of the
     three in the workflow doc (starting work, in review, done), compared

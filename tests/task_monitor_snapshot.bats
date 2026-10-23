@@ -564,10 +564,10 @@ NOTION_B=https://www.notion.so/acme/Fix-auth-3fad9a72260f8184be21d483ce5d88d4?pv
   assert_equal "$(q '.next.items[0].ref')" "$NOTION_A"
   # No title given: the label is the compact page id, the title is empty, and
   # the URL is not shown as either.
-  assert_equal "$(q '.next.items[1].label')" "notion:3fad9a72…"
+  assert_equal "$(q '.next.items[1].label')" "notion:…ce5d88d4"
   assert_equal "$(q '.next.items[1].title')" ""
   assert_equal "$(q '.next.items[1].url')" "$NOTION_B"
-  assert_equal "$(q '.next.items[0].label')" "notion:3fdd9a72…"
+  assert_equal "$(q '.next.items[0].label')" "notion:…589b5b1c"
 }
 
 @test "next notion: a blank title cached by an earlier full run does not hide a title set later" {
@@ -627,11 +627,24 @@ NOTION_B=https://www.notion.so/acme/Fix-auth-3fad9a72260f8184be21d483ce5d88d4?pv
 @test "the notion describer: a bare id, a Title-<id> segment, a query string, and a URL with no id" {
   run /bin/bash -c 'source "$1/lib/trackers/_default.sh"; source "$1/lib/trackers/notion.sh"
     aw_tracker_item_describe https://app.notion.com/p/3fdd9a72260f81559d2fdfe4589b5b1c "" | jq -r .label
-    aw_tracker_item_describe "https://www.notion.so/My-Task-abc123def456abc123def456abc123de?pvs=4" my-task | jq -r ".label, .title"
+    aw_tracker_item_describe "https://www.notion.so/My-Task-abc123def456abc123def456fed98765?pvs=4" my-task | jq -r ".label, .title"
     aw_tracker_item_describe https://www.notion.so/acme/some-page/ "" | jq -r .label
     aw_tracker_item_describe free-slug "" | jq -r .label' _ "$REPO_ROOT_REAL"
   assert_success
-  assert_output "$(printf 'notion:3fdd9a72…\nnotion:abc123de…\nmy-task\nnotion:some-page\nfree-slug')"
+  assert_output "$(printf 'notion:…589b5b1c\nnotion:…fed98765\nmy-task\nnotion:some-page\nfree-slug')"
+}
+
+# Notion page ids are time-ordered: pages made in one batch share their head, so
+# a label taken from it read `notion:402d9a72…` three times over (#317). These
+# are the real ids from that board.
+@test "the notion describer: pages made together get distinct labels, from the id's tail" {
+  run /bin/bash -c 'source "$1/lib/trackers/_default.sh"; source "$1/lib/trackers/notion.sh"
+    for id in 402d9a72260f81199db4f3906d5dd526 402d9a72260f81eb90d0ceeeb0551492 3fdd9a72260f81559d2fdfe4589b5b1c; do
+      aw_tracker_item_describe "https://app.notion.com/p/$id" "" | jq -r .label
+    done' _ "$REPO_ROOT_REAL"
+  assert_success
+  assert_output "$(printf 'notion:…6d5dd526\nnotion:…b0551492\nnotion:…589b5b1c')"
+  assert_equal "$(sort -u <<<"$output" | wc -l | tr -d ' ')" 3
 }
 
 # ----- done -----------------------------------------------------------------------

@@ -461,7 +461,7 @@ anything to find it, and leaves `--title` off when it knows none. It follows
 `--note`'s rules: `set` and `add`, repeatable, kept across a `set`, cleared by
 `--title <ref>=`. The board uses it only where the tracker has no real title,
 so gh and local keep their own. With none, a Notion page reads
-`notion:3fdd9a72…` and a Jira browse URL its key; `o` still opens the URL.
+`notion:…589b5b1c` and a Jira browse URL its key; `o` still opens the URL.
 
 ### PM ↔ worker messaging (radio)
 

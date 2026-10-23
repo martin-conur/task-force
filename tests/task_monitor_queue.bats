@@ -250,7 +250,7 @@ queue_file() { sed 's/\t/<TAB>/g' "$QUEUE"; }
   run /bin/bash "$SNAP" --local
   assert_success
   assert_equal "$(jq -r '.repos[0].next.items[0].title' <<<"$output")" "Arms schema"
-  assert_equal "$(jq -r '.repos[0].next.items[0].label' <<<"$output")" "notion:3fdd9a72…"
+  assert_equal "$(jq -r '.repos[0].next.items[0].label' <<<"$output")" "notion:…589b5b1c"
 }
 
 @test "task-work keeps the other items' titles when it takes its ref off the queue" {

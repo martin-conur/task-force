@@ -56,9 +56,10 @@ aw_tracker_review_spec_shape() { echo "a Notion page URL"; }
 # Still the default's title — the slug, or nothing for a queued page — since the
 # shell cannot read Notion (#306). What changes is the label: a page URL is far
 # too long to be one, and the front end falls back to the ref when the label is
-# null, so the board read the raw URL. It reads `notion:3fdd9a72…` instead, the
-# page id's first 8 hex digits; the URL stays the item's url, for `o`. A URL
-# with no page id in it keeps its last path segment.
+# null, so the board read the raw URL. It reads `notion:…589b5b1c` instead, the
+# page id's last 8 hex digits; the URL stays the item's url, for `o`. Not the
+# first 8: Notion ids are time-ordered, so pages made in one batch share their
+# head and all read alike (#317). A URL with no page id keeps its last segment.
 aw_tracker_item_describe() {
   local ref="$1" seg short
   case "$ref" in
@@ -70,7 +71,7 @@ aw_tracker_item_describe() {
   seg="${seg%/}"
   seg="${seg##*/}"
   if [[ "$seg" =~ (^|-)([a-f0-9]{32})$ ]]; then
-    short="notion:${BASH_REMATCH[2]:0:8}…"
+    short="notion:…${BASH_REMATCH[2]:24:8}"
   else
     short="notion:$seg"
   fi

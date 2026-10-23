@@ -1015,7 +1015,7 @@ mod tests {
     fn a_titled_queue_row_renders_the_title_not_the_url() {
         let url = "https://app.notion.com/p/3fdd9a72260f81559d2fdfe4589b5b1c";
         let item: NextItem = serde_json::from_value(serde_json::json!({
-            "ref": url, "label": "notion:3fdd9a72…", "number": null,
+            "ref": url, "label": "notion:…589b5b1c", "number": null,
             "title": "Arms schema", "description": null, "url": url,
             "note": "needs sign-off"
         }))
@@ -1025,7 +1025,7 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(row.contains("notion:3fdd9a72… Arms schema"), "{row}");
+        assert!(row.contains("notion:…589b5b1c Arms schema"), "{row}");
         assert!(row.trim_end().ends_with("\"needs sign-off\""), "{row}");
         assert!(!row.contains("https://"), "{row}");
     }

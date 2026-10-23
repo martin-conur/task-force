@@ -37,7 +37,7 @@
           "number": 5,
           "url": "https://github.com/acme/widgets/issues/5",
           "title": "PR title 9",
-          "description": "Closes #5",
+          "description": "The fifth fix.",
           "item": {
             "ref": "https://github.com/acme/widgets/issues/5",
             "label": "#5",
@@ -53,7 +53,7 @@
             "state": "OPEN",
             "is_draft": false,
             "head": "task/issue-5",
-            "summary": "Closes #5",
+            "summary": "The fifth fix.",
             "merged_at": null,
             "merge_sha": null
           },

@@ -481,6 +481,37 @@ anything to find it, and leaves `--title` off when it knows none. It follows
 so gh and local keep their own. With none, a Notion page reads
 `notion:…589b5b1c` and a Jira browse URL its key; `o` still opens the URL.
 
+**Handing the PM off** (#301) — from claude to kiro and back, or to a fresh PM on
+the same one. The address `pm-<reponame>` stays, so the inbox carries over; three
+things carry the rest.
+
+- **The board digest.** A fresh PM register (claude `SessionStart`, kiro
+  `agentSpawn`) prints `task-monitor-snapshot --local --brief` under the
+  offline-backlog summary: attention signals, in flight, the queue with its
+  notes, and what merged in the last 24h with each PR summary's first sentence.
+  It is read from disk with no forge call, capped at 40 lines, and never
+  printed on a `/compact` or `/clear` re-register or for a worker.
+  `TASK_FORCE_NO_PM_DIGEST=1` turns it off.
+- **The handoff note.** Asked to hand off, the PM writes 5–10 lines on what the
+  board cannot show (decisions, questions waiting on you, what is parked and
+  why, what not to redo) to `$TASK_FORCE_HOME/monitor/<repo>/handoff.md`. The
+  next fresh PM start prints it under the digest with its age; it stays until
+  the next write replaces it, and task-monitor shows it collapsed as the repo
+  view's last row.
+- **One live PM.** `task-pm` refuses while this repo's PM session has a
+  heartbeat under an hour old (`radio orphans` does not list it) and a tab that
+  is not the current one, naming the agent in `<role>.agent`; `--force`
+  overrides. A session live in *this* tab is the handoff itself (kiro has no
+  exit hook) and goes through. Whenever it goes ahead over an earlier session
+  file, `task-pm` retires it with `radio unregister --manual`, so the new
+  register is fresh and prints the backlog and the digest.
+
+```bash
+task-monitor-queue handoff write <<'NOTE'    # replace the note, on stdin
+task-monitor-queue handoff show              # print it
+task-monitor-queue handoff clear             # remove it
+```
+
 ### PM ↔ worker messaging (radio)
 
 Radio is the **canonical** coordination channel between the PM and workers — every

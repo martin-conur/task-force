@@ -35,6 +35,18 @@ pub struct Repo {
     pub next: Next,
     pub done: Done,
     pub attention: Attention,
+    /// The previous PM's handoff note (#301), or none.
+    pub handoff: Option<Handoff>,
+}
+
+/// What `task-monitor-queue handoff write` left for the next PM (#301).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Handoff {
+    pub text: Option<String>,
+    pub written_at: Option<String>,
+    pub role: Option<String>,
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

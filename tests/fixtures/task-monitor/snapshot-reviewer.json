@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-22T00:25:04Z",
+  "generated_at": "2026-10-23T14:21:05Z",
   "mode": "full",
   "repos": [
     {
@@ -13,7 +13,7 @@
       "pm": {
         "role": "pm-widgets",
         "state": "idle",
-        "last_heartbeat": "2026-10-22T00:24:04Z",
+        "last_heartbeat": "2026-10-23T14:20:05Z",
         "tab": "pm-widgets",
         "tab_id": "4",
         "zellij_session": "zs",
@@ -23,7 +23,7 @@
       },
       "forge": {
         "available": true,
-        "fetched_at": "2026-10-22T00:25:04Z",
+        "fetched_at": "2026-10-23T14:21:05Z",
         "stale": false
       },
       "in_flight": [
@@ -68,7 +68,7 @@
           "session": {
             "role": "worker-widgets-issue-5",
             "state": "idle",
-            "last_heartbeat": "2026-10-22T00:24:04Z",
+            "last_heartbeat": "2026-10-23T14:20:05Z",
             "tab": "worker-widgets-issue-5",
             "tab_id": "4",
             "zellij_session": "zs",
@@ -82,7 +82,7 @@
               "session": {
                 "role": "reviewer-widgets-pr9",
                 "state": "busy",
-                "last_heartbeat": "2026-10-22T00:24:04Z",
+                "last_heartbeat": "2026-10-23T14:20:05Z",
                 "tab": "reviewer-widgets-pr9",
                 "tab_id": "4",
                 "zellij_session": "zs",
@@ -105,7 +105,8 @@
       "attention": {
         "active": false,
         "signals": []
-      }
+      },
+      "handoff": null
     }
   ]
 }

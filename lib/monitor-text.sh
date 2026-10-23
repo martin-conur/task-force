@@ -15,6 +15,8 @@
 #                              paragraph after its `Closes #N` / `Closes PROJ-42`
 #                              line, else its first prose paragraph
 #   tm_strip_frontmatter    -> the body with a leading `---` … `---` block removed
+#   tm_board_digest         -> a snapshot document as the capped text digest a
+#                              fresh PM start prints (#301)
 
 # What counts as prose: not a heading, not an HTML comment, not a fence, not a
 # horizontal rule. A paragraph ends at a blank line or at the next non-prose line.
@@ -99,4 +101,32 @@ tm_pr_summary() {
     summary=$(printf '%s\n' "$body" | tm_first_prose)
   fi
   printf '%s\n' "$summary"
+}
+
+# The board digest (#301): a snapshot document on stdin, its first repo printed
+# as at most <cap> lines (default 40), then the previous PM's handoff note, if
+# there is one, as at most <note-cap> lines (default 20). The cap is what keeps
+# a big repo from flooding the context a fresh PM opens with. The text itself
+# comes from lib/monitor-digest.jq; this only caps it.
+tm_board_digest() {
+  local cap="${1:-40}" note_cap="${2:-20}" doc jqf
+  jqf="$(dirname "${BASH_SOURCE[0]}")/monitor-digest.jq"
+  doc=$(cat)
+  printf '%s\n' "$doc" | jq -r --arg part board -f "$jqf" | _tm_cap "$cap" \
+    '… %d more line(s): run task-monitor-snapshot --local, or open task-monitor, for the rest.'
+  printf '%s\n' "$doc" | jq -r --arg part handoff -f "$jqf" | _tm_cap "$note_cap" \
+    '  … %d more line(s): task-monitor-queue handoff show prints the whole note.'
+}
+
+# At most <cap> lines of stdin. When there are more, the last line kept is
+# replaced by <format>, which takes the count of lines left out.
+_tm_cap() {
+  awk -v cap="$1" -v fmt="$2" '
+    { line[NR] = $0 }
+    END {
+      if (NR <= cap) { for (i = 1; i <= NR; i++) print line[i]; exit }
+      for (i = 1; i < cap; i++) print line[i]
+      printf fmt "\n", NR - cap + 1
+    }
+  '
 }

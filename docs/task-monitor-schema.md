@@ -11,12 +11,13 @@ worktree sidecars, the tracker, and the forge (`gh`). Nothing is written or
 summarised by a model.
 
 ```
-task-monitor-snapshot [--json] [--all] [--local] [--repo DIR]
+task-monitor-snapshot [--json | --brief] [--all] [--local] [--repo DIR]
 ```
 
 | flag | effect |
 |---|---|
-| `--json` | the output format. It is the only one, and the flag is accepted for clarity |
+| `--json` | the output format: this document. It is the default, and the flag is accepted for clarity |
+| `--brief` | the board digest instead of JSON: the repo as at most 40 lines of text, then its handoff note (see [The board digest](#the-board-digest)). One repo only, so not with `--all` |
 | `--all` | every repo a radio session file names (`REPO=`, resolved to its main checkout), plus the current one |
 | `--local` | no forge calls. Reads disk only and merges with the last full run's cache |
 | `--repo DIR` | describe the repo containing `DIR` instead of `$PWD` |
@@ -62,6 +63,7 @@ ignore fields it does not know.
 | `next` | object | `source` (`queue` \| `tracker` \| `none`) and `items` |
 | `done` | object | `window_hours` (24), `min_items` (10) and `items` |
 | `attention` | object | `active` and `signals` |
+| `handoff` | object \| null | the previous PM's handoff note (see below), or null |
 
 ### `pm`
 
@@ -236,6 +238,36 @@ state on kiro" section has the evidence (#278).
 
 A role belongs to the longest repo name it starts with, so
 `worker-task-force-x` is `task-force`'s even when a repo named `task` exists.
+
+### `handoff`
+
+The note a PM leaves for the next one (#301), written with
+`task-monitor-queue handoff write` on stdin and kept until the next write
+replaces it (or `handoff clear` removes it). The file is
+`${TASK_FORCE_HOME}/monitor/<name>/handoff.md`: a `---` frontmatter block, then
+the note. `task-monitor-queue` owns that format. Read from disk, so `--local`
+has it too.
+
+| field | meaning |
+|---|---|
+| `text` | the note, without its frontmatter or surrounding blank lines |
+| `written_at` | ISO-8601 UTC, when it was written, or null |
+| `role` | the PM role that wrote it, `pm-<name>` |
+| `agent` | that PM's agent (`claude` / `kiro`) as its radio session recorded it, or null |
+
+## The board digest
+
+`--brief` prints the first repo as plain text, for a fresh PM start to put in
+the model's context (#301): `radio register` runs
+`task-monitor-snapshot --local --brief` for a `pm-*` role on a fresh register
+only. In order: a header saying how old the PR state is, the attention signals'
+`text`, in flight (label, title, PR number, status), next (in order, with
+notes), and done (label, title, PR number, the first sentence of the summary).
+Titles past 90 characters and sentences past 160 end in `…`. The digest is at
+most 40 lines; when there are more, the 40th says how many were cut, so the
+oldest news goes first and the signals never do. The handoff note follows under
+a `[handoff]` line that gives its agent, role and age, itself at most 20 lines.
+Every word is a snapshot field (`lib/monitor-digest.jq`).
 
 ## The cache
 

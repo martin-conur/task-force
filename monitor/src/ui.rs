@@ -11,7 +11,7 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{pm_needs_you, rows, worker_needs_you, App, OvRow, Row, View};
-use crate::snapshot::{DoneItem, InFlight, NextItem, Repo};
+use crate::snapshot::{DoneItem, Handoff, InFlight, NextItem, Repo};
 
 /// How long a flash message stays in the footer.
 const FLASH_SECS: i64 = 6;
@@ -487,6 +487,13 @@ fn repo_view(f: &mut Frame, repo: &Repo, selected: usize, area: Rect, now: DateT
         let row = done_lines(item, idx == selected, w, now);
         push(&mut lines, &mut idx, row);
     }
+
+    if let Some(h) = &repo.handoff {
+        lines.push(Line::from(rule(w)));
+        lines.push(section("HANDOFF NOTE".to_string()));
+        let row = handoff_lines(h, idx == selected, w, now);
+        push(&mut lines, &mut idx, row);
+    }
     debug_assert_eq!(idx, rows(repo).len());
 
     let offset = scroll_to(sel_span.0, sel_span.1, area.height as usize);
@@ -697,6 +704,40 @@ fn done_lines(item: &DoneItem, selected: bool, w: usize, now: DateTime<Utc>) -> 
     out
 }
 
+/// The handoff note, collapsed (#301): who left it and when, and its first
+/// line. `⏎` expands it to the whole note.
+fn handoff_lines(h: &Handoff, selected: bool, w: usize, now: DateTime<Utc>) -> Vec<Line<'static>> {
+    let text = h.text.as_deref().unwrap_or("");
+    let n = text.lines().filter(|l| !l.trim().is_empty()).count();
+    let from = match (
+        h.agent.as_deref().filter(|a| !a.is_empty()),
+        h.role.as_deref(),
+    ) {
+        (Some(a), _) => format!("from the {a} PM"),
+        (None, Some(r)) => format!("from {r}"),
+        (None, None) => "from the last PM".to_string(),
+    };
+    let mut meta = vec![from];
+    if let Some(t) = h.written_at.as_deref().and_then(parse_time) {
+        meta.push(format!("{} ago", ago(t, now)));
+    }
+    meta.push(format!("{n} line{}", if n == 1 { "" } else { "s" }));
+    let first = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    vec![fit(
+        Line::from(vec![
+            marker(selected),
+            Span::styled(first, title_style(selected)),
+        ]),
+        Line::from(vec![Span::styled(meta.join(" · "), dim()), Span::raw(" ")]),
+        w,
+    )]
+}
+
 /// The expanded item: its full text, scrollable. A done item shows the whole
 /// PR body; the others show everything the snapshot has on them.
 fn detail_view(f: &mut Frame, app: &mut App, area: Rect, now: DateTime<Utc>) {
@@ -741,6 +782,14 @@ fn detail_view(f: &mut Frame, app: &mut App, area: Rect, now: DateTime<Utc>) {
                 .clone()
                 .or_else(|| item.summary.clone())
                 .unwrap_or_default();
+        }
+        Row::Handoff => {
+            let Some(h) = repo.handoff.as_ref() else {
+                app.detail = None;
+                return;
+            };
+            head.extend(handoff_lines(h, true, w, now));
+            text = h.text.clone().unwrap_or_default();
         }
     }
     if text.trim().is_empty() {
@@ -1028,6 +1077,49 @@ mod tests {
         assert!(row.contains("notion:…589b5b1c Arms schema"), "{row}");
         assert!(row.trim_end().ends_with("\"needs sign-off\""), "{row}");
         assert!(!row.contains("https://"), "{row}");
+    }
+
+    /// The previous PM's note (#301): one collapsed row after Done, saying
+    /// who left it and when; `⏎` shows the whole note.
+    #[test]
+    fn the_handoff_note_renders_collapsed_in_the_repo_view_and_expands() {
+        let mut doc: serde_json::Value = serde_json::from_str(MULTI).unwrap();
+        doc["repos"][0]["handoff"] = serde_json::json!({
+            "text": "Parked #262 until the user picks a model.\nDo not redo #266: merged, cleanup pending.\n\nAsked about #180, no answer yet.",
+            "written_at": "2026-10-20T12:00:00Z", "role": "pm-task-force", "agent": "kiro"
+        });
+        let mut a = app(&doc.to_string(), true);
+        let s = render(&mut a, 100, 40);
+        let text = screen(&s);
+        assert!(text.contains("HANDOFF NOTE"), "{text}");
+        let row = line_with(&s, "Parked #262");
+        assert!(
+            row.ends_with("from the kiro PM · 3h ago · 3 lines"),
+            "{row}"
+        );
+        assert!(
+            !text.contains("Do not redo #266"),
+            "collapsed: only the first line shows\n{text}"
+        );
+
+        // The note is the last row: select it and expand it.
+        for _ in 0..20 {
+            a.key(Key::Down, now());
+        }
+        assert_eq!(a.selected_row(), Some(crate::app::Row::Handoff));
+        assert_eq!(a.selected_url(), None, "a note has nothing to open");
+        a.key(Key::Enter, now());
+        let text = screen(&render(&mut a, 100, 40));
+        assert!(
+            text.contains("Do not redo #266: merged, cleanup pending."),
+            "{text}"
+        );
+        assert!(text.contains("Asked about #180, no answer yet."), "{text}");
+
+        // A repo with no note has no section and no row for one.
+        let mut b = app(MULTI, true);
+        assert!(!screen(&render(&mut b, 100, 40)).contains("HANDOFF NOTE"));
+        assert!(!crate::app::rows(&b.repos()[0]).contains(&crate::app::Row::Handoff));
     }
 
     #[test]

@@ -140,6 +140,12 @@
             "text": "❓ pr-summary-section is asking"
           }
         ]
+      },
+      "handoff": {
+        "text": "Parked #262 until the user picks between the two home-env designs.\nDo not re-review #270: the findings are in, the worker is fixing them.\nAsked the user whether #180 waits for #267; no answer yet.",
+        "written_at": "2026-10-20T11:40:00Z",
+        "role": "pm-task-force",
+        "agent": "kiro"
       }
     }
   ]

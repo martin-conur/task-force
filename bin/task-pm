@@ -29,6 +29,9 @@ source "$AW_ROOT/lib/kiro-agent.sh"
 # AW_KIRO_DEFAULT_MODEL (#259) and aw_kiro_ui_flag (#157).
 # shellcheck source=lib/kiro-launch.sh
 source "$AW_ROOT/lib/kiro-launch.sh"
+# aw_zellij / aw_zellij_reachable, for the live-PM check (#301).
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT/lib/zellij-tab.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 # --agent: this PM on the other installed assistant, for one launch (#293).
@@ -52,6 +55,7 @@ ALSO_REPOS=()
 # auto-submit by default instead (task-work). `--auto-submit` opts back in for
 # a PM left to run unattended.
 AUTO_SUBMIT=""
+FORCE=""
 if ((${#AW_REMAINING_ARGS[@]})); then
   set -- "${AW_REMAINING_ARGS[@]}"
 else
@@ -63,7 +67,7 @@ while [[ $# -gt 0 ]]; do
       cat <<'EOF'
 Usage: task-pm [--impl <name> | --agent <claude|kiro>]
                [--also <repo-path-or-name> ...]
-               [--auto-submit | --no-auto-submit]
+               [--auto-submit | --no-auto-submit] [--force]
 
 Rename the current zellij tab to "pm-<reponame>" and launch the PM agent
 in-place (claude /pm on claude loadouts, kiro-cli chat --agent pm on kiro
@@ -84,6 +88,9 @@ loadouts). Run from inside a task-force-initialized git repo.
 --agent <agent>     Launch the PM on this assistant (claude or kiro) instead of
                     the repo's active one, for this launch only. Both loadouts
                     must be installed (task-config add assistant, #293).
+--force             Launch even though this repo's PM looks live in another
+                    tab (#301). Without it task-pm refuses, so a claude PM and
+                    a kiro PM never split one inbox's wakes.
 
 Environment:
   TASK_WORK_MODEL   kiro only: the model the PM launches on. Unset means
@@ -110,6 +117,7 @@ EOF
     # permission mode (the PM merges PRs; auto-approving that is not ours to do).
     --auto-submit|--auto)       AUTO_SUBMIT=1;  shift ;;
     --no-auto-submit|--no-auto) AUTO_SUBMIT=""; shift ;;
+    --force) FORCE=1; shift ;;
     *) echo "Error: unknown argument '$1' (see task-pm --help)" >&2; exit 1 ;;
   esac
 done
@@ -148,7 +156,61 @@ if [[ "$AGENT" == kiro ]]; then
   aw_require_kiro_agent pm "$REPO_ROOT" "task-init ${IMPL}" || exit 1
 fi
 
+# One live PM per repo (#301). The address pm-<reponame> is the same whichever
+# assistant runs it, so a second PM, the other assistant's included, would
+# share the one inbox and split its wakes. "Live" is what task-recreate-worker
+# means by it: a session file `radio orphans` does not list, so a heartbeat
+# under an hour old. A live session in THIS tab is the PM being replaced in
+# place, the handoff task-pm exists for: kiro has no exit hook, so a kiro PM
+# quit a minute ago still looks live. The check runs before the tab rename,
+# like the fail-fast checks above.
+RADIO="$BIN_DIR/radio"
+PM_SESSIONS="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
+PM_SESSION="$PM_SESSIONS/$PM_ROLE.info"
+_pm_field() { grep -E "^$1=" "$PM_SESSION" 2>/dev/null | head -1 | cut -d= -f2-; }
+PM_PREV_ALIAS=""
+[[ -f "$PM_SESSION" ]] && PM_PREV_ALIAS=$(_pm_field ALIAS || true)
+if [[ -f "$PM_SESSION" && -z "$PM_PREV_ALIAS" && -z "$FORCE" ]]; then
+  _orphans=$("$RADIO" orphans 2>/dev/null || true)
+  if ! grep -q "^${PM_ROLE}[[:space:]]" <<<"$_orphans"; then
+    _prev_tab_id=$(_pm_field TAB_ID || true)
+    _prev_zsession=$(_pm_field ZELLIJ_SESSION || true)
+    _here_tab_id=""
+    if aw_zellij_reachable && command -v jq >/dev/null 2>&1; then
+      _here_tab_id=$(aw_zellij action list-tabs --json 2>/dev/null \
+        | jq -r '[.[] | select(.active) | .tab_id] | .[0] // empty' 2>/dev/null) || _here_tab_id=""
+    fi
+    if [[ -z "$_prev_tab_id" || "$_prev_tab_id" != "$_here_tab_id" \
+          || ( -n "$_prev_zsession" && "$_prev_zsession" != "${ZELLIJ_SESSION_NAME:-}" ) ]]; then
+      _prev_agent=$(head -1 "$PM_SESSIONS/$PM_ROLE.agent" 2>/dev/null || true)
+      [[ -n "$_prev_agent" ]] || _prev_agent=$(_pm_field AGENT || true)
+      _where="tab_id=${_prev_tab_id:-none}"
+      [[ -n "$_prev_zsession" ]] && _where+=" in zellij session $_prev_zsession"
+      _hb=$(_pm_field LAST_HEARTBEAT || true)
+      {
+        echo "Error: $PM_ROLE is already live on ${_prev_agent:-an unknown agent} — refusing to start a second PM for this repo."
+        echo "       Its session file has a heartbeat newer than 1h (${_hb:-none}, $_where), and that is not this tab."
+        echo "       Two PMs on one address split one inbox's wakes between them."
+        echo ""
+        echo "       Close that PM first, then run task-pm again. If it is really gone:"
+        echo "         radio orphans          # what radio thinks is dead"
+        echo "         task-pm --force"
+      } >&2
+      exit 1
+    fi
+  fi
+fi
+
 cd "$REPO_ROOT"
+
+# The PM this one replaces is gone, or is being replaced in this tab, or
+# --force said so: retire its session file now, so the new PM's register is a
+# fresh start. Only a fresh register prints the offline backlog and the board
+# digest (#168, #301), and a kiro PM leaves its file behind when it quits.
+# The inbox, the mailbox and the sidecars are untouched.
+if [[ -f "$PM_SESSION" && -z "$PM_PREV_ALIAS" ]]; then
+  TASK_FORCE_ROLE="$PM_ROLE" "$RADIO" unregister --manual </dev/null >/dev/null 2>&1 || true
+fi
 
 if [[ -n "${ZELLIJ:-}" ]]; then
   zellij action rename-tab "$PM_ROLE" >/dev/null 2>&1 || true

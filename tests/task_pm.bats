@@ -203,7 +203,9 @@ _pm_session_auto_submit() {
 @test "claude task-pm's default overrides a PM that recorded auto-submit under #189 (#254)" {
   setup_task_force_home
   TASK_FORCE_AUTO_SUBMIT=1 "$RADIO" register --role "pm-$PM_REPO_NAME" --tab "pm-$PM_REPO_NAME" --agent claude
-  AW_IMPL=claude-gh run "$TASK_PM"
+  # That PM is still live, in no tab this test knows: --force replaces it
+  # (#301). Its auto-submit sidecar survives the takeover, which is the point.
+  AW_IMPL=claude-gh run "$TASK_PM" --force
   assert_success
   local kv
   kv=$(grep -oE 'TASK_FORCE_AUTO_SUBMIT=[^ ]*' "$STUB_CALLS_DIR/claude.env" | tail -1)

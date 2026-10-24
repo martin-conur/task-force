@@ -6,6 +6,12 @@
 #   <group-label>|<region-name>|<file1> <file2> ...
 #
 # Override the manifest for tests by setting CHECK_DRIFT_MANIFEST to a file path.
+#
+# A region is the lines between `# region:<name>` and `# endregion:<name>`. In a
+# markdown prompt, where a `#` line renders as a heading, the sentinels may be
+# written `<!-- region:<name> -->` / `<!-- endregion:<name> -->` instead. A kiro
+# agent config (*.json) is checked on its `prompt` string, since its lines exist
+# only once the JSON is decoded (#320).
 
 set -euo pipefail
 
@@ -27,16 +33,34 @@ GROUPS_DEFAULT=(
   "tracker-settings-notion|notion-settings-render|claude-notion/bin/task-init kiro-notion/bin/task-init"
   "tracker-settings-gh|tracker-preserve-gh|claude-gh/bin/task-init kiro-gh/bin/task-init"
   "install-shared-symlinks|install-shared-symlinks|claude-gh/install.sh claude-jira/install.sh claude-local/install.sh claude-notion/install.sh kiro-gh/install.sh kiro-local/install.sh kiro-notion/install.sh"
+  "reviewer-contract|reviewer-destruct-summary|.claude/commands/reviewer.md claude-gh/commands/reviewer.md claude-jira/commands/reviewer.md claude-local/commands/reviewer.md claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json"
+  "reviewer-contract|reviewer-post-radio-destruct|.claude/commands/reviewer.md claude-gh/commands/reviewer.md claude-jira/commands/reviewer.md claude-local/commands/reviewer.md claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json"
 )
 # endregion:default-manifest
 
+# The text a file's sentinels live in: a kiro agent config's decoded prompt,
+# otherwise the file itself.
+region_source() {
+  case "$1" in
+    *.json) jq -r '.prompt // empty' "$1" ;;
+    *)      cat "$1" ;;
+  esac
+}
+
 extract_region() {
   local file="$1" region="$2"
-  awk -v r="$region" '
-    $0 == "# region:" r { in_region=1; next }
-    $0 == "# endregion:" r { in_region=0; next }
+  region_source "$file" | awk -v r="$region" '
+    $0 == "# region:" r || $0 == "<!-- region:" r " -->" { in_region=1; next }
+    $0 == "# endregion:" r || $0 == "<!-- endregion:" r " -->" { in_region=0; next }
     in_region { print }
-  ' "$file"
+  '
+}
+
+has_region() {
+  local file="$1" region="$2"
+  # Not a pipe: grep -q exits on the first match, and under pipefail the
+  # writer's SIGPIPE would turn a found region into a missing one.
+  grep -qFx -e "# region:$region" -e "<!-- region:$region -->" <<<"$(region_source "$file")"
 }
 
 # Compare a single (group, region, files...) entry. Returns 0 if all files
@@ -57,7 +81,7 @@ check_group() {
     # both produce empty extract output, but the former is almost always the bug
     # (someone renamed the region or forgot to mark a new file), while the
     # latter is a deliberate placeholder.
-    if ! grep -qFx "# region:$region" "$file"; then
+    if ! has_region "$file" "$region"; then
       echo "FAIL [$group/$region]: region missing in: $file" >&2
       failed=1
       continue

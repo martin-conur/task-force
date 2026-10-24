@@ -148,7 +148,7 @@ teardown() {
   run "$KIRO_LOCAL_TASK_INIT" --commands
   assert_success
   assert [ ! -f "$TARGET_DIR/.kiro/steering/local-workflow.md" ]
-  for agent in pm planner worker; do
+  for agent in pm planner worker reviewer; do
     assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
   done
 }
@@ -174,10 +174,10 @@ teardown() {
 # Project-level agents
 # ---------------------------------------------------------------------------
 
-@test "installs pm/planner/worker into .kiro/agents/ as real files" {
+@test "installs pm/planner/worker/reviewer into .kiro/agents/ as real files" {
   run "$KIRO_LOCAL_TASK_INIT"
   assert_success
-  for agent in pm planner worker; do
+  for agent in pm planner worker reviewer; do
     assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
     assert [ ! -L "$TARGET_DIR/.kiro/agents/$agent.json" ]
   done
@@ -193,6 +193,37 @@ teardown() {
   jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/pm.json" > "$TARGET_DIR/installed.norm"
   jq -S '.'           "$REPO_ROOT_REAL/kiro-local/agents/pm.json" > "$TARGET_DIR/source.norm"
   run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
+  assert_success
+}
+
+@test "installs the reviewer agent kiro-local ships, with its radio register hook (#320)" {
+  # The reviewer is what task-reviewer launches, and the register hook is what
+  # makes its verdict-bearing role reachable (#304).
+  run "$KIRO_LOCAL_TASK_INIT"
+  assert_success
+  jq -S 'del(.hooks)' "$TARGET_DIR/.kiro/agents/reviewer.json" > "$TARGET_DIR/installed.norm"
+  jq -S '.'           "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json" > "$TARGET_DIR/source.norm"
+  run diff -u "$TARGET_DIR/source.norm" "$TARGET_DIR/installed.norm"
+  assert_success
+  run jq -r '.hooks.agentSpawn[0].command' "$TARGET_DIR/.kiro/agents/reviewer.json"
+  assert_output --partial "radio register"
+  assert_output --partial "--loadout \${TASK_FORCE_LOADOUT:-kiro-local}"
+}
+
+@test "the shipped kiro-local reviewer.json is a well-formed reviewer agent (#320)" {
+  local f="$REPO_ROOT_REAL/kiro-local/agents/reviewer.json"
+  run jq -e '.name == "reviewer" and (.prompt | length > 0) and (.description | length > 0) and (.welcomeMessage | length > 0)' "$f"
+  assert_success
+  # It posts and radios through the shell; everything it auto-allows it has.
+  run jq -e '(.tools | index("execute_bash")) and ((.allowedTools - .tools) == [])' "$f"
+  assert_success
+  # Hooks are task-init's to merge (#218), never shipped in the source.
+  run jq -e 'has("hooks")' "$f"
+  assert_failure
+  # The spec is a file under tasks/: no tracker MCP, no @tool.
+  run jq -e '.mcpServers // empty' "$f"
+  assert_failure
+  run jq -e '[.tools[] | select(startswith("@"))] | length == 0' "$f"
   assert_success
 }
 
@@ -259,7 +290,7 @@ teardown() {
   run "$KIRO_LOCAL_TASK_INIT"
   assert_success
   assert [ ! -d "$TARGET_DIR/.kiro/hooks" ]
-  for agent in pm planner worker; do
+  for agent in pm planner worker reviewer; do
     run jq -r '[.hooks.agentSpawn[0].command, .hooks.userPromptSubmit[0].command, .hooks.stop[0].command] | @tsv' \
       "$TARGET_DIR/.kiro/agents/$agent.json"
     assert_success

@@ -13,7 +13,9 @@ You are a single-shot PR reviewer worker. `task-reviewer` spawned this tab with 
 4. Run the `code-review` skill on the diff.
 5. Post **one** substantive PR comment with the full analysis (spec compliance + code-review findings + verdict).
 6. Radio PM back with `review-complete-clean` or `review-complete-with-findings` and a short summary.
+<!-- region:reviewer-destruct-summary -->
 7. **Auto-destruct.** Your analysis lives in the PR comment (durable) — the tab does not need to stay open. Immediately after the PR comment is posted AND PM is radioed, run `task-done --remove-worktree` as your final action to remove this review worktree and close the tab. Do NOT idle.
+<!-- endregion:reviewer-destruct-summary -->
 
 PRs always live in GitHub; specs live in Jira. Refer to the project's `.claude/jira-workflow.md` for Jira project conventions. Use the Atlassian MCP (`mcp__atlassian__getJiraIssue`) for spec lookup and the `gh` CLI for PR I/O: `gh pr view`, `gh pr diff`, `gh pr comment`. Read-only `gh` and the Atlassian read MCPs are pre-allowed in `.claude/settings.json`; mutations stay confirmation-gated.
 
@@ -47,6 +49,7 @@ $ARGUMENTS
    - **Code-review findings** — correctness, security, edge cases, anything substantive from the skill's output.
    - **Verdict** — `clean`, `clean-with-nits`, or `changes-requested`. Be explicit.
 
+<!-- region:reviewer-post-radio-destruct -->
    **Tight-PR norm — prefer fix-in-this-PR over deferral.** Frame every finding as something the worker should fix *in this PR*, not as a follow-up ticket, whenever the fix is feasible within the PR's scope. Do NOT suggest "defer to a follow-up" / "track separately" for anything in-scope — that's a deferral the team is trying to avoid. Only flag a deferral when the work is genuinely out of this PR's scope (a separate subsystem, a large refactor), and say so explicitly — PM will decide whether to groom it into a ticket. Default: tight PR, everything fixed before merge.
 7. Post the comment — **on stdin, never through a double-quoted shell string.** Inside `"…"` the shell command-substitutes every backticked token in your prose: `` `pwd -P` `` posts as your working directory, `` `radio orphans` `` posts as that command's output, and a backticked identifier that names no command — `` `$SOME_VAR` ``, `` `_some_helper()` `` — posts as **nothing at all**, deleting the finding's subject and leaving a sentence that reads as if a word were missing. Findings here name functions, variables and paths in inline code constantly, and this comment is the only thing that outlives your tab, so feed the body in with `--body-file -` and a **quote-delimited** heredoc:
    ```bash
@@ -71,6 +74,7 @@ $ARGUMENTS
 9. **Auto-destruct.** Run `task-done --remove-worktree` as your final action — it removes this review worktree and closes the tab, and `--remove-worktree` skips the confirmation prompt, so it needs no input from you. PM reads your verdict from the PR comment + the radio ping (on its next `radio check`), never from this tab, so there is nothing to keep open. Self-cleaning is mandatory, not optional.
 
    **The one thing that is not in the PR comment** is step 8's delivery outcome. If `radio send` reported anything other than a landed delivery — `WARNING — no session for pm-…`, `WARNING — pm-… looks dead …`, or `queued — pm is idle but wake failed …` — that warning exists nowhere but this tab, and destroying it would strand the verdict unread. In that case only: say so to the user, and hold the tab until they have seen it. Otherwise, destruct.
+<!-- endregion:reviewer-post-radio-destruct -->
 
 ### Authority boundaries
 

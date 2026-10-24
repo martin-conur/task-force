@@ -9,7 +9,7 @@ Usage: task-init [--tasks ID] [--projects ID] [--board ID]
 
 Set up the current repo for the kiro-notion workflow:
   - Create .kiro/steering/notion-workflow.md from the bundled template
-  - Install pm, planner, worker agents into .kiro/agents/
+  - Install pm, planner, worker, reviewer agents into .kiro/agents/
   - Merge radio PM↔worker messaging hooks into .kiro/agents/*.json
 
 Scope (which categories of files to touch):

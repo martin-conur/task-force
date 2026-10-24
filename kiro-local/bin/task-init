@@ -7,7 +7,7 @@ Usage: task-init [--workflow | --commands | --hooks] [--force | --restore]
 
 Set up the current repo for the kiro-local workflow:
   - Create .kiro/steering/local-workflow.md from the bundled template
-  - Install pm, planner, worker agents into .kiro/agents/
+  - Install pm, planner, worker, reviewer agents into .kiro/agents/
   - Create tasks/{README.md, _board.md} with starter content
   - Append .git/task-force/ to .gitignore (create if missing)
   - Merge radio PM↔worker messaging hooks into .kiro/agents/*.json

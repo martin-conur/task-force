@@ -11,7 +11,7 @@ Set up the current repo for the kiro-gh workflow:
   - Create .kiro/steering/gh-workflow.md from the bundled template
   - Substitute owner / repo / project number if provided
     (auto-detected from git remote when possible; missing values prompted interactively)
-  - Install pm, planner, worker agents into .kiro/agents/
+  - Install pm, planner, worker, reviewer agents into .kiro/agents/
   - Merge radio PM↔worker messaging hooks into .kiro/agents/*.json
 
 Scope (which categories of files to touch):

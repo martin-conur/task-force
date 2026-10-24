@@ -9,9 +9,11 @@ set -eEuo pipefail
 # task-reviewer — canonical entry point for all loadouts (#170).
 #
 # One body for every loadout that ships a reviewer: the four claude ones
-# (formerly 4 byte-identical per-loadout copies) and kiro-gh, whose own copy
-# was folded in here (#146). The two agents differ only in their flags, their
-# preflight and the launch line, which branch on AGENT below; spec resolution
+# (formerly 4 byte-identical per-loadout copies) and the three kiro ones —
+# kiro-gh, whose own copy was folded in here (#146), and kiro-local /
+# kiro-notion, which gained a reviewer agent in #320. The two agents differ
+# only in their flags, their preflight and the launch line, which branch on
+# AGENT below; spec resolution
 # is the tracker module's. Impl resolution comes from lib/detect-impl.sh —
 # override with --impl <name> or AW_IMPL=<name>.
 
@@ -141,15 +143,15 @@ fi
 
 AGENT="${IMPL%%-*}"
 
-# A kiro loadout has a reviewer exactly when it ships the agent config:
-# kiro-gh does, kiro-local / kiro-notion do not yet. Keyed on the file rather
-# than an impl list so the loadout that adds one needs no edit here. Surfaced
-# explicitly rather than as aw_require_kiro_agent's "run task-init" remedy —
-# the impl is configured, re-running task-init would install no reviewer.
+# A kiro loadout has a reviewer exactly when it ships the agent config. All
+# three do since #320; keyed on the file rather than an impl list so a new
+# loadout (#92) is covered the day it ships one, and refuses until then.
+# Surfaced explicitly rather than as aw_require_kiro_agent's "run task-init"
+# remedy — the impl is configured, re-running task-init would install no reviewer.
 if [[ "$AGENT" == kiro && ! -f "$AW_ROOT/$IMPL/agents/reviewer.json" ]]; then
-  echo "Error: task-reviewer is not available for impl '$IMPL'." >&2
-  echo "       Reviewer support currently ships for claude-gh, claude-jira," >&2
-  echo "       claude-notion, claude-local, and kiro-gh." >&2
+  echo "Error: task-reviewer is not available for impl '$IMPL':" >&2
+  echo "       it ships no kiro reviewer agent ($IMPL/agents/reviewer.json)." >&2
+  echo "       On a repo with both assistants installed, --agent claude reviews it." >&2
   exit 1
 fi
 

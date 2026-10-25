@@ -161,3 +161,79 @@ EOF
     assert_success
   done
 }
+
+# ---------------------------------------------------------------------------
+# Prompt regions (#320): markdown comment sentinels and kiro agent JSON
+# ---------------------------------------------------------------------------
+
+# A markdown prompt and a kiro agent config carrying the same region.
+make_prompt_pair() {
+  local md="$1" json="$2" json_line="${3:-shared line}"
+  printf '%s\n' intro '<!-- region:shared -->' 'shared line' '<!-- endregion:shared -->' outro >"$md"
+  jq -n --arg l "$json_line" \
+    '{name: "reviewer", prompt: ("kiro intro\n<!-- region:shared -->\n" + $l + "\n<!-- endregion:shared -->\nkiro outro")}' >"$json"
+}
+
+@test "check-drift reads a kiro agent's decoded prompt and the HTML-comment sentinel form" {
+  make_prompt_pair "$TMP_DIR/reviewer.md" "$TMP_DIR/reviewer.json"
+  echo "demo|shared|$TMP_DIR/reviewer.md $TMP_DIR/reviewer.json" >"$TMP_DIR/manifest"
+  CHECK_DRIFT_MANIFEST="$TMP_DIR/manifest" run bash "$CHECK_DRIFT"
+  assert_success
+  assert_output --partial "1 group(s) checked"
+}
+
+@test "check-drift catches a drifted region inside a kiro agent's prompt" {
+  make_prompt_pair "$TMP_DIR/reviewer.md" "$TMP_DIR/reviewer.json" "DRIFTED line"
+  echo "demo|shared|$TMP_DIR/reviewer.md $TMP_DIR/reviewer.json" >"$TMP_DIR/manifest"
+  CHECK_DRIFT_MANIFEST="$TMP_DIR/manifest" run bash "$CHECK_DRIFT"
+  assert_failure
+  assert_output --partial "DRIFT [demo/shared]"
+  assert_output --partial "DRIFTED line"
+}
+
+@test "check-drift reports a kiro agent prompt without the region as missing" {
+  make_prompt_pair "$TMP_DIR/reviewer.md" "$TMP_DIR/reviewer.json"
+  jq -n '{name: "reviewer", prompt: "no region here"}' >"$TMP_DIR/reviewer.json"
+  echo "demo|shared|$TMP_DIR/reviewer.md $TMP_DIR/reviewer.json" >"$TMP_DIR/manifest"
+  CHECK_DRIFT_MANIFEST="$TMP_DIR/manifest" run bash "$CHECK_DRIFT"
+  assert_failure
+  assert_output --partial "region missing in: $TMP_DIR/reviewer.json"
+}
+
+@test "the reviewer contract is drift-guarded across all 8 reviewer prompts (#320)" {
+  # Post on stdin, radio the verdict, self-destruct, hold the tab open only
+  # when the verdict never reached PM: one copy, in every claude and kiro
+  # reviewer. kiro's reviewer once idled with the tab open while claude's
+  # self-destructed, because nothing tied the two together.
+  local rel=(.claude/commands/reviewer.md claude-gh/commands/reviewer.md
+    claude-jira/commands/reviewer.md claude-local/commands/reviewer.md
+    claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json
+    kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json)
+  local f real="" broken=""
+  for f in "${rel[@]}"; do
+    real+=" $REPO_ROOT_REAL/$f"
+    if [[ "$f" == kiro-local/* ]]; then broken+=" $TMP_DIR/$f"; else broken+=" $REPO_ROOT_REAL/$f"; fi
+  done
+  # Both regions are in the default manifest, over exactly these files.
+  local listed="${real//$REPO_ROOT_REAL\//}"; listed="${listed# }"
+  run grep -cF "\"reviewer-contract|reviewer-post-radio-destruct|$listed\"" "$CHECK_DRIFT"
+  assert_output 1
+  run grep -cF "\"reviewer-contract|reviewer-destruct-summary|$listed\"" "$CHECK_DRIFT"
+  assert_output 1
+  # The real copies agree.
+  printf 'reviewer-contract|%s|%s\n' reviewer-post-radio-destruct "$real" reviewer-destruct-summary "$real" >"$TMP_DIR/manifest"
+  CHECK_DRIFT_MANIFEST="$TMP_DIR/manifest" run bash "$CHECK_DRIFT"
+  assert_success
+  assert_output --partial "2 group(s) checked"
+  # Break one kiro copy's region and watch the group go red.
+  mkdir -p "$TMP_DIR/kiro-local/agents"
+  jq '.prompt |= sub("Otherwise, destruct\\."; "Otherwise, idle.")' \
+    "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json" >"$TMP_DIR/kiro-local/agents/reviewer.json"
+  run diff -q "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json" "$TMP_DIR/kiro-local/agents/reviewer.json"
+  assert_failure
+  echo "reviewer-contract|reviewer-post-radio-destruct|$broken" >"$TMP_DIR/manifest"
+  CHECK_DRIFT_MANIFEST="$TMP_DIR/manifest" run bash "$CHECK_DRIFT"
+  assert_failure
+  assert_output --partial "DRIFT [reviewer-contract/reviewer-post-radio-destruct]"
+  assert_output --partial "Otherwise, idle."
+}

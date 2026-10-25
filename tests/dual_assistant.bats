@@ -134,6 +134,9 @@ _sum() {
   # Both blocks carry the same ids, and there is no drift to report.
   assert_equal "$(grep -c 'tasks=collection://t1 projects=collection://p2 board=b3' <<<"$output")" 2
   refute_output --partial "Drift"
+  # The kiro reviewer comes along, hooked, so task-reviewer --agent kiro works (#320).
+  run jq -r '.hooks.agentSpawn[0].command' "$MAIN_REPO/.kiro/agents/reviewer.json"
+  assert_output --partial "radio register"
 }
 
 @test "add assistant kiro on claude-local: the tasks/ backlog and scaffolding are untouched" {
@@ -150,6 +153,9 @@ _sum() {
   assert_success
   assert_output --partial "loadout   : claude-local  (active)"
   assert_output --partial "loadout   : kiro-local"
+  # The kiro reviewer comes along, hooked, so task-reviewer --agent kiro works (#320).
+  run jq -r '.hooks.agentSpawn[0].command' "$MAIN_REPO/.kiro/agents/reviewer.json"
+  assert_output --partial "radio register"
 }
 
 @test "add assistant kiro on claude-jira: refused, naming #92, and nothing is written" {

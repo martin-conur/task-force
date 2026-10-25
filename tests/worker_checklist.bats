@@ -127,7 +127,7 @@ ALL_WORKER_PROMPTS=(
   done
 }
 
-@test "all 5 reviewer prompts apply the same empty-vs-passing distinction" {
+@test "all 8 reviewer prompts apply the same empty-vs-passing distinction" {
   # A reviewer that cross-checks "CI green" off an empty list repeats the bug
   # at one remove.
   local reviewers=(
@@ -137,6 +137,8 @@ ALL_WORKER_PROMPTS=(
     "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md"
     "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"
     "$REPO_ROOT_REAL/kiro-gh/agents/reviewer.json"
+    "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json"
+    "$REPO_ROOT_REAL/kiro-notion/agents/reviewer.json"
   )
   for f in "${reviewers[@]}"; do
     run worker_prompt "$f"
@@ -217,6 +219,8 @@ closes_line_for() {
     "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md"
     "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"
     "$REPO_ROOT_REAL/kiro-gh/agents/reviewer.json"
+    "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json"
+    "$REPO_ROOT_REAL/kiro-notion/agents/reviewer.json"
   )
   for f in "${reviewers[@]}"; do
     run worker_prompt "$f"

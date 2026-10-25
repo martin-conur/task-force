@@ -571,6 +571,30 @@ leaves focus on your tab, because the PM's tab is where you work and nobody
 types in a worker's. The one exception is a worker you step into to steer by
 hand — launch that one with `--no-auto-submit`.
 
+To dispatch a one-shot reviewer worker for a PR, run
+`task-reviewer <pr-url-or-number> [<notion-page-url>]` from any spare tab.
+It spawns a fresh zellij tab + worktree on the PR's head ref, runs the kiro
+`reviewer` agent on `claude-sonnet-5.5` (`-m` to override; an exported
+`$TASK_WORK_MODEL` overrides it too, so a worker override also changes the
+reviewer's model and cost), cross-checks the PR against the Notion spec page
+(passed as the second arg and read through the Notion MCP; PR-body auto-detect
+is GitHub-only, so without it the review is diff-only), reviews the diff, posts a single thorough PR comment via
+`gh pr comment --body-file -`, and radios PM back with `review-complete-clean` or
+`review-complete-with-findings`. PM still owns the merge decision — the
+reviewer never approves, merges, or mutates status. Then it **auto-destructs**:
+`task-done --remove-worktree` removes its worktree and closes its tab. The
+analysis lives in the PR comment; re-read it with `gh pr view <N> --comments`.
+The one exception is a failed radio delivery: when the verdict never reached
+PM, the reviewer holds its tab open to say so, because that outcome is the one
+thing its PR comment does not record. This loadout has shipped a kiro reviewer
+since #320; before it, `task-reviewer` refused here.
+
+The reviewer runs with `--trust-all-tools` by default; `--no-trust-all` (or
+`TASK_WORK_TRUST_ALL=0`) babysits a specific review. Radio auto-submit is a
+separate setting, also on by default, and `--no-trust-all` does not switch it
+off (#146): the supervised review is exactly the one whose verdict should not
+stall on an Enter. `--no-auto-submit` is its own opt-out.
+
 If a worker tab dies unexpectedly, is closed without `task-done`, or kiro
 resumes a session without re-firing the `agentSpawn` hook, the session file's
 `LAST_HEARTBEAT` will go stale. Run `radio orphans` to list any session whose

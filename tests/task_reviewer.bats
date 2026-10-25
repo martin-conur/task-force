@@ -877,6 +877,61 @@ teardown() {
   assert [ ! -d "$WORKTREE_BASE/review-pr42" ]
 }
 
+# kiro-notion and kiro-local ship a reviewer agent since #320; before it they
+# refused. The spec is the tracker's own identifier, passed as the second arg:
+# no Closes #N auto-detect off GitHub.
+@test "kiro-notion task-reviewer: launches the kiro reviewer with the Notion page URL (#320)" {
+  local notion_url="https://www.notion.so/myws/Spec-Page-1234abcd"
+  AW_IMPL=kiro-notion run "$TASK_REVIEWER" 42 "$notion_url"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/review-pr42" ]
+  assert_stub_called zellij "kiro-cli chat --agent reviewer --model claude-sonnet-5.5 "
+  assert_stub_called zellij "Review PR https://github.com/owner/repo/pull/42 against spec $notion_url"
+}
+
+@test "kiro-local task-reviewer: launches the kiro reviewer with the task slug (#320)" {
+  AW_IMPL=kiro-local run "$TASK_REVIEWER" 42 042-add-login
+  assert_success
+  assert [ -d "$WORKTREE_BASE/review-pr42" ]
+  assert_stub_called zellij "kiro-cli chat --agent reviewer --model claude-sonnet-5.5 "
+  assert_stub_called zellij "Review PR https://github.com/owner/repo/pull/42 against spec 042-add-login"
+}
+
+@test "kiro-notion task-reviewer: a GitHub Closes #N is not its spec — diff-only (#320)" {
+  export GH_STUB_PR_BODY="Closes #38"
+  AW_IMPL=kiro-notion run "$TASK_REVIEWER" 42
+  assert_success
+  assert_output --partial "auto-detect is GitHub-only"
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  run grep -F "against spec" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "kiro-local task-reviewer: a GitHub Closes #N is not its spec — diff-only (#320)" {
+  export GH_STUB_PR_BODY="Closes #38"
+  AW_IMPL=kiro-local run "$TASK_REVIEWER" 42
+  assert_success
+  assert_output --partial "auto-detect is GitHub-only"
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  run grep -F "against spec" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+# The guard is keyed on the shipped file, not an impl list, so a kiro loadout
+# without one still refuses. No shipped loadout lacks one now: prove it on a
+# copy of the tree with the agent taken out.
+@test "kiro task-reviewer: a loadout that ships no reviewer.json is refused (#320)" {
+  local root="$BATS_TEST_TMPDIR/aw-root"
+  mkdir -p "$root"
+  cp -R "$REPO_ROOT_REAL/bin" "$REPO_ROOT_REAL/lib" "$REPO_ROOT_REAL/kiro-local" "$root/"
+  rm "$root/kiro-local/agents/reviewer.json"
+  AW_IMPL=kiro-local run "$root/bin/task-reviewer" 42 042-add-login
+  assert_failure
+  assert_output --partial "task-reviewer is not available for impl 'kiro-local'"
+  assert_output --partial "kiro-local/agents/reviewer.json"
+  assert [ ! -d "$WORKTREE_BASE/review-pr42" ]
+}
+
 @test "kiro task-reviewer: claude-only --no-auto is an unknown flag" {
   AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42 --no-auto
   assert_failure
@@ -960,12 +1015,20 @@ teardown() {
   assert_output --partial "no agentic-workflow impl configured"
 }
 
-@test "top-level task-reviewer: errors cleanly for impls without a reviewer variant" {
+@test "top-level task-reviewer: dispatches to kiro-notion variant (#320)" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
   run "$TASK_REVIEWER" 42
-  assert_failure
-  assert_output --partial "task-reviewer is not available for impl"
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+}
+
+@test "top-level task-reviewer: dispatches to kiro-local variant (#320)" {
+  mkdir -p "$MAIN_REPO/.kiro/steering"
+  touch "$MAIN_REPO/.kiro/steering/local-workflow.md"
+  run "$TASK_REVIEWER" 42
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
 }
 
 @test "top-level task-reviewer: forwards positional + flags through to loadout" {

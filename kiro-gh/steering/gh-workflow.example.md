@@ -588,9 +588,13 @@ second arg, or auto-detected from the PR body's first `Closes #N` /
 `Fixes #N` / `Resolves #N` line, case-insensitive), reviews the diff, posts a single thorough PR comment via
 `gh pr comment --body-file -`, and radios PM back with `review-complete-clean` or
 `review-complete-with-findings`. PM still owns the merge decision — the
-reviewer never approves, merges, or mutates status. The reviewer tab stays
-open showing the analysis; clean up with `task-done --remove-worktree` when
-done.
+reviewer never approves, merges, or mutates status. Then it **auto-destructs**:
+`task-done --remove-worktree` removes its worktree and closes its tab, as the
+claude reviewer's does. The analysis lives in the PR comment; re-read it with
+`gh pr view <N> --comments`. The one exception is a failed radio delivery:
+when the verdict never reached PM, the reviewer holds its tab open to say so,
+because that outcome is the one thing its PR comment does not record. Before
+#320 the kiro reviewer idled with its tab open instead.
 
 The reviewer runs with `--trust-all-tools` by default; `--no-trust-all` (or
 `TASK_WORK_TRUST_ALL=0`) babysits a specific review. Radio auto-submit is a

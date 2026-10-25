@@ -171,7 +171,7 @@ teardown() {
   run "$KIRO_GH_TASK_INIT" --commands
   assert_success
   assert [ ! -f "$TARGET_DIR/.kiro/steering/gh-workflow.md" ]
-  for agent in pm planner worker; do
+  for agent in pm planner worker reviewer; do
     assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
   done
 }
@@ -205,10 +205,10 @@ teardown() {
 # Project-level agents
 # ---------------------------------------------------------------------------
 
-@test "installs pm/planner/worker into .kiro/agents/ as real files" {
+@test "installs pm/planner/worker/reviewer into .kiro/agents/ as real files" {
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  for agent in pm planner worker; do
+  for agent in pm planner worker reviewer; do
     assert [ -f "$TARGET_DIR/.kiro/agents/$agent.json" ]
     assert [ ! -L "$TARGET_DIR/.kiro/agents/$agent.json" ]
   done
@@ -524,7 +524,7 @@ teardown() {
 @test "installed kiro-gh agents do not declare GitHub MCP" {
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  for agent in pm planner worker; do
+  for agent in pm planner worker reviewer; do
     local f="$TARGET_DIR/.kiro/agents/$agent.json"
     # jq must parse — guards against any malformed JSON from edits.
     run jq . "$f"

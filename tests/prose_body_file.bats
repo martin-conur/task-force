@@ -152,6 +152,8 @@ ALL_REVIEWER_PROMPTS=(
   "$REPO_ROOT_REAL/claude-notion/commands/reviewer.md"
   "$REPO_ROOT_REAL/claude-local/commands/reviewer.md"
   "$REPO_ROOT_REAL/kiro-gh/agents/reviewer.json"
+  "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json"
+  "$REPO_ROOT_REAL/kiro-notion/agents/reviewer.json"
 )
 
 ALL_PM_PROMPTS=(
@@ -179,20 +181,20 @@ all_prompts() {
     "$REPO_ROOT_REAL"/kiro-notion/agents/*.json
 }
 
-@test "the sweep below covers all 30 shipped prompts — 20 markdown + 10 kiro JSON" {
+@test "the sweep below covers all 32 shipped prompts — 20 markdown + 12 kiro JSON" {
   # Load-bearing: the negative assertions that follow are globs in a loop, so a
   # glob that matched nothing would pass them vacuously. It is also the exact
   # shape of the trap in this bug — `grep -rn -- '-b "'` finds the 20 markdown
-  # prompts and MISSES all 10 kiro agent JSONs, because inside a JSON string the
+  # prompts and MISSES all 12 kiro agent JSONs, because inside a JSON string the
   # quotes are backslash-escaped (`-b \"`). Fix by grep alone and you ship 20 of
-  # 30 files fixed with kiro silently still broken.
+  # 32 files fixed with kiro silently still broken.
   local all md json
   all=$(all_prompts | wc -l | tr -d ' ')
   md=$(all_prompts | grep -c '\.md$')
   json=$(all_prompts | grep -c '\.json$')
-  assert_equal "$all" 30
+  assert_equal "$all" 32
   assert_equal "$md" 20
-  assert_equal "$json" 10
+  assert_equal "$json" 12
   # Every path resolved to a real file (an unexpanded glob would count as 1).
   local f
   while read -r f; do assert [ -f "$f" ]; done < <(all_prompts)

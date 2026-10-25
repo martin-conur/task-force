@@ -28,9 +28,11 @@ KIRO_AGENTS=(
   "$REPO_ROOT_REAL/kiro-gh/agents/worker.json"
   "$REPO_ROOT_REAL/kiro-local/agents/planner.json"
   "$REPO_ROOT_REAL/kiro-local/agents/pm.json"
+  "$REPO_ROOT_REAL/kiro-local/agents/reviewer.json"
   "$REPO_ROOT_REAL/kiro-local/agents/worker.json"
   "$REPO_ROOT_REAL/kiro-notion/agents/planner.json"
   "$REPO_ROOT_REAL/kiro-notion/agents/pm.json"
+  "$REPO_ROOT_REAL/kiro-notion/agents/reviewer.json"
   "$REPO_ROOT_REAL/kiro-notion/agents/worker.json"
 )
 
@@ -61,7 +63,7 @@ poll_block() {
   done
 }
 
-@test "the poll instruction is byte-identical across all 10 kiro agents (#177 loadout-neutral)" {
+@test "the poll instruction is byte-identical across all 12 kiro agents (#177 loadout-neutral)" {
   local ref
   ref=$(poll_block "${KIRO_AGENTS[0]}")
   assert [ -n "$ref" ]

@@ -238,6 +238,10 @@ fi
 mkdir -p "$WORKTREE_BASE"
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
 aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
+# A local-only install (#327) is untracked, so it did not come with the
+# worktree: copy it in before the agent starts, or the worker has no /worker
+# command and no radio hooks.
+tf_local_only_sync "$REPO_ROOT" "$WORKTREE_DIR"
 
 # Write task info so the worker and task-done can read it (stored outside the working tree)
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"

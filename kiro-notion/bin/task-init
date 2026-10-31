@@ -41,6 +41,9 @@ Notion database IDs (#225):
   previously-filled IDs are preserved (this-run flags take precedence).
   `task-config set assistant` passes them across a claude ↔ kiro switch.
 
+  --local-only     Refused: kiro has no untracked hook location (see #327).
+                   Local-only installs are claude-only.
+
 --force and --restore are mutually exclusive.
 
 Other:
@@ -83,6 +86,7 @@ TASKS=""
 PROJECTS=""
 BOARD=""
 FORCE=false
+LOCAL_ONLY=false
 RESTORE=false
 SCOPE="all"
 HELP_IDS=false
@@ -97,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --board)    BOARD="$2";    BOARD_VIA_FLAG=true;    shift 2 ;;
     --force)    FORCE=true; shift ;;
     --restore)  RESTORE=true; shift ;;
+    --local-only) LOCAL_ONLY=true; shift;;
     --workflow) SCOPE="workflow"; shift ;;
     --commands) SCOPE="commands"; shift ;;
     --hooks)    SCOPE="hooks"; shift ;;
@@ -168,6 +173,16 @@ fi
 git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo"; exit 1; }
 REPO_ROOT=$(git rev-parse --show-toplevel)
 TARGET="$REPO_ROOT/.kiro/steering/notion-workflow.md"
+
+# region:kiro-local-only-refuse
+# kiro cannot be installed local-only (#327): its hooks live in
+# .kiro/agents/<role>.json, which has no untracked counterpart. Refused both when
+# asked for and when the repo already records a local-only install, since an
+# install here would write the tracked files that mode exists to keep out.
+# shellcheck source=lib/local-only.sh
+. "$LIB_DIR/local-only.sh"
+tf_local_only_refuse_kiro "$REPO_ROOT" "$LOCAL_ONLY" || exit 1
+# endregion:kiro-local-only-refuse
 
 mkdir -p "$REPO_ROOT/.kiro/steering"
 

@@ -25,6 +25,8 @@ GROUPS_DEFAULT=(
   "kiro-radio-install-hooks|kiro-radio-stray-hook-verify|kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
   "kiro-radio-install-hooks|kiro-radio-legacy-hooks-sweep|kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
   "radio-legacy-hook-guard|radio-legacy-hook-guard|kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init lib/loadout-artifacts.sh"
+  "local-only-install|local-only-setup|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
+  "local-only-install|kiro-local-only-refuse|kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
   "read-only-allow|read-only-allow|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init"
   "managed-region-source|managed-region-source|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
   "require-jq-source|require-jq-source|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"

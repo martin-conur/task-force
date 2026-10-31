@@ -36,6 +36,10 @@ radio hooks and seeded allow-list inside .claude/settings.json, the
 .git/task-force/ entry in .gitignore, and the commit-msg ci-guard hook task-work
 installs (restoring a pre-existing hook the chain-install preserved).
 
+On a local-only install (#327) it also strips CLAUDE.local.md's import and
+.claude/settings.local.json's radio entries, and, with the last loadout, the
+task-force block in .git/info/exclude and git config task-force.install.
+
 Removal is the inverse of task-init's idempotent merge: only task-init's own
 entries come out, and a file is deleted only when nothing else was in it. So a
 CLAUDE.md that predates task-force keeps everything but the import line, a
@@ -183,7 +187,23 @@ _walk() {
     printf '%s\n' "$out"
     WALK_TEXT+="$out"$'\n'
   fi
+  # A local-only install's exclude block and git config (#327) are repo-wide too,
+  # and go only with the last loadout: a pinned run that leaves one behind keeps
+  # the files it still writes out of git status.
+  [[ "$REMOVING_ALL" == true ]] || return 0
+  if [[ "$mode" == plan ]]; then out=$(tf_local_only_plan "$REPO_ROOT"); else out=$(tf_local_only_remove "$REPO_ROOT"); fi
+  if [[ -n "$out" ]]; then
+    printf '\nthe local-only install record (shared by every worktree of this repo):\n'
+    printf '%s\n' "$out"
+    WALK_TEXT+="$out"$'\n'
+  fi
 }
+
+REMOVING_ALL=true
+while IFS= read -r _m; do
+  [[ -n "$_m" ]] || continue
+  _aw_list_has "$_m" "$(printf '%s\n' "${MATCHES[@]}")" || REMOVING_ALL=false
+done < <(aw_detect_matches "$REPO_ROOT")
 
 _footer_untouched() {
   cat <<'EOF'

@@ -32,12 +32,16 @@ The workflow doc is written between <!-- task-init:managed:start --> and
 anything you add below the end marker survives --force. A doc predating those
 markers is backed up to <doc>.bak before the markers are added.
 
+  --local-only     Refused: kiro has no untracked hook location (see #327).
+                   Local-only installs are claude-only.
+
 --force and --restore are mutually exclusive.
 EOF
   exit 1
 }
 
 FORCE=false
+LOCAL_ONLY=false
 RESTORE=false
 SCOPE="all"
 
@@ -45,6 +49,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)    FORCE=true; shift;;
     --restore)  RESTORE=true; shift;;
+    --local-only) LOCAL_ONLY=true; shift;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
     --hooks)    SCOPE="hooks"; shift;;
@@ -102,6 +107,16 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 TARGET="$REPO_ROOT/.kiro/steering/local-workflow.md"
 GITIGNORE="$REPO_ROOT/.gitignore"
 TASKS_DIR="$REPO_ROOT/tasks"
+
+# region:kiro-local-only-refuse
+# kiro cannot be installed local-only (#327): its hooks live in
+# .kiro/agents/<role>.json, which has no untracked counterpart. Refused both when
+# asked for and when the repo already records a local-only install, since an
+# install here would write the tracked files that mode exists to keep out.
+# shellcheck source=lib/local-only.sh
+. "$LIB_DIR/local-only.sh"
+tf_local_only_refuse_kiro "$REPO_ROOT" "$LOCAL_ONLY" || exit 1
+# endregion:kiro-local-only-refuse
 
 mkdir -p "$REPO_ROOT/.kiro/steering"
 

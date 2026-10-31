@@ -278,6 +278,22 @@ On **this** loadout the carried settings are the three Notion database IDs:
 them. `--tasks` / `--projects` accept the `collection://<id>` that
 `task-config show` prints, or the bare id.
 
+**Local-only install** — `task-init claude-<tracker> --local-only` (#327)
+
+For a repo where nothing task-force-related may reach a branch. The same
+artifacts are written untracked: hooks and the allow-list go to
+`.claude/settings.local.json`, the import to `CLAUDE.local.md`, and every path
+task-init writes is listed in a block of `.git/info/exclude`, which every
+worktree shares and nothing commits. `git config task-force.install local-only`
+records the mode, and every later `task-init` (a re-run, a `task-config set`)
+honours it without the flag. `task-work`, `task-reviewer` and
+`task-recreate-worker` copy the set from the main checkout into each worktree
+before the agent starts, missing files only, and #304's hook check accepts a
+`radio register` hook in `settings.local.json`. A worker's PR carries none of
+it. `task-remove` takes it back out, exclude block and git config included.
+claude only: kiro has no untracked hook location, so a kiro install is refused
+on a local-only repo, and `--local-only` on a kiro loadout.
+
 `task-remove` — take task-force back out of this repo (#220)
 
 The same removal walk a `task-config set` performs, with no install after it. Two

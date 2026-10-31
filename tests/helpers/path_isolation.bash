@@ -32,6 +32,7 @@
 AW_TASK_FORCE_COMMANDS=(
   task-init task-work task-done task-board task-pm
   task-reviewer task-config task-remove task-recreate-worker radio ci-guard
+  task-watch
 )
 
 # True when $1 names one of them.

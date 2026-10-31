@@ -1,0 +1,394 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-watch — poll Jira for ai-auto bugs, claim each once, radio the PM (#328).
+#
+# claude-jira only. Shell, zero model tokens: it runs in the foreground in its
+# own tab and does three things per poll.
+#
+#   1. Refresh what is in flight. Every ticket it claimed is recorded in a
+#      ledger, $TASK_FORCE_HOME/watch/<repo>/<KEY>. A ledger entry is
+#      `pending` from the claim until the PM dispatches it, `running` while a
+#      task-work worktree's `.<slug>.info` sidecar names the key, and `done`
+#      once that worktree is gone. A pending ticket the PM bounced (it carries
+#      `<label>:needs-info`, or lost `<label>:claimed`) is `released`.
+#   2. Search the queue through `acli` (#326: a REST search with a lapsed token
+#      returns 200 and zero issues; an `acli` read exits 1). Any non-zero acli
+#      exit stops the watcher and radios the PM that a re-login is needed. No
+#      retry loop.
+#   3. For each hit, while fewer than <max in flight> tickets are pending or
+#      running: claim it (one label swap, `<label>` -> `<label>:claimed`), and
+#      only after the claim succeeded, `radio send --to pm --intent
+#      ticket-filed --issue <KEY>`. Claim before ping, so a crash never
+#      double-dispatches. An acli write exits 0 when it fails, so every write
+#      runs with --json and checks successCount.
+#
+# A ticket that comes back into the queue after a run was dispatched for it
+# means that run failed. Once <failure cap> runs have, the ticket gets
+# `<label>:failed` instead of a claim and is never claimed again.
+#
+# Settings come from .claude/jira-workflow.md in the main checkout, which a
+# local-only install (#327) leaves untracked but in the same place. The LAST
+# matching bullet wins, so an override below the managed-region end marker
+# beats the template's defaults and survives every task-init re-run.
+#
+# Must run on /bin/bash 3.2: no associative arrays, no mapfile.
+
+# Resolve own path through symlinks -> AW_ROOT.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+RADIO="$BIN_DIR/radio"
+
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
+# shellcheck source=lib/tracker-settings.sh
+source "$AW_ROOT/lib/tracker-settings.sh"
+# shellcheck source=lib/require-jq.sh
+source "$AW_ROOT/lib/require-jq.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: task-watch [--once]
+
+Poll Jira for labelled bugs, claim each one once, and radio the PM a
+`ticket-filed` message for it. Run it from the repo (main checkout or any
+worktree), in a tab of its own; it polls until stopped.
+
+  --once   run a single poll and exit
+
+Settings, read from .claude/jira-workflow.md (last matching bullet wins):
+  Watch label           ai-auto   claim swaps it for <label>:claimed; a bounce
+                                  adds <label>:needs-info; the cap <label>:failed
+  Watch issue type      Bug
+  Watch JQL             default   project, issue type and label, minus claimed
+                                  and failed tickets, oldest first
+  Watch poll seconds    300
+  Watch max in flight   2         tickets claimed but not yet finished
+  Watch failure cap     2         dispatched runs before <label>:failed
+
+It reads and writes Jira through acli (acli jira auth login --web). Any
+non-zero acli exit stops it and radios the PM to re-login.
+Its log lines go to the radio log with a `watch:` prefix.
+EOF
+  exit "${1:-1}"
+}
+
+ONCE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --once) ONCE=1; shift ;;
+    -h|--help) usage 0 ;;
+    *) echo "Error: unknown argument '$1'" >&2; usage ;;
+  esac
+done
+
+require_jq_1_6 || exit 1
+command -v acli >/dev/null 2>&1 || {
+  echo "Error: acli not found on PATH. Install the Atlassian CLI and run: acli jira auth login --web" >&2
+  exit 1
+}
+
+MAIN_ROOT=$(aw_main_repo_root "$PWD") || { echo "Error: not in a git repo" >&2; exit 1; }
+DOC="$MAIN_ROOT/.claude/jira-workflow.md"
+if [[ ! -f "$DOC" ]]; then
+  echo "Error: no .claude/jira-workflow.md in $MAIN_ROOT — task-watch is claude-jira only (task-init claude-jira)" >&2
+  exit 1
+fi
+REPO_NAME=$(aw_main_repo_name "$MAIN_ROOT")
+# task-work's own layout: <repo>/../<repo-basename>-worktrees/.<slug>.info
+WORKTREE_BASE="$MAIN_ROOT/../$(basename "$MAIN_ROOT")-worktrees"
+TF_HOME="${TASK_FORCE_HOME:-$HOME/.task-force}"
+LOG_FILE="$TF_HOME/radio/log"
+LEDGER="$TF_HOME/watch/$REPO_NAME"
+WATCH_ROLE="watch-$REPO_NAME"
+PM_ROLE="pm-$REPO_NAME"
+
+_log() {
+  mkdir -p "$(dirname "$LOG_FILE")"
+  printf '%s watch: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE"
+}
+
+# Say it on stdout and in the radio log.
+_say() {
+  printf 'task-watch: %s\n' "$*"
+  _log "$* repo=$REPO_NAME"
+}
+
+# _setting <bullet name> <default>: the last `- **<name>**: `<value>`` in the doc.
+_setting() {
+  local v
+  v=$(sed -nE "s|^- \*\*$1\*\*: \`([^\`]+)\`.*|\1|p" "$DOC" | tail -n 1)
+  [[ -n "$v" && "$v" != default ]] || v="$2"
+  printf '%s' "$v"
+}
+
+_number_setting() {
+  local v
+  v=$(_setting "$1" "$2")
+  if [[ ! "$v" =~ ^[0-9]+$ ]]; then
+    echo "Error: '$1' in $DOC must be a whole number, got '$v'" >&2
+    exit 1
+  fi
+  printf '%s' "$v"
+}
+
+LABEL=$(_setting "Watch label" ai-auto)
+CLAIMED="$LABEL:claimed"
+NEEDS_INFO="$LABEL:needs-info"
+FAILED="$LABEL:failed"
+ISSUE_TYPE=$(_setting "Watch issue type" Bug)
+INTERVAL=$(_number_setting "Watch poll seconds" 300)
+MAX_INFLIGHT=$(_number_setting "Watch max in flight" 2)
+FAIL_CAP=$(_number_setting "Watch failure cap" 2)
+PROJECT_KEY=$(tf_tracker_value "$DOC" jira key)
+SITE=$(tf_tracker_value "$DOC" jira site)
+
+JQL=$(_setting "Watch JQL" "")
+if [[ -z "$JQL" ]]; then
+  if [[ -z "$PROJECT_KEY" ]]; then
+    echo "Error: no project key in $DOC — fill in **Project key(s)**, or set **Watch JQL**" >&2
+    exit 1
+  fi
+  if [[ "$PROJECT_KEY" == *,* ]]; then
+    PROJECT_CLAUSE="project in ($PROJECT_KEY)"
+  else
+    PROJECT_CLAUSE="project = \"$PROJECT_KEY\""
+  fi
+  JQL="$PROJECT_CLAUSE AND issuetype = \"$ISSUE_TYPE\" AND labels = \"$LABEL\" AND labels not in (\"$CLAIMED\", \"$FAILED\") ORDER BY created ASC"
+fi
+
+# ---------------- ledger ----------------
+# One file per claimed key, KEY=VALUE lines: STATE, CLAIMS, RUNS, PINGED, SUMMARY.
+
+_ledger_get() {
+  local f="$LEDGER/$1"
+  [[ -f "$f" ]] || return 0
+  awk -v k="$2" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$f"
+}
+
+_ledger_set() {
+  local f="$LEDGER/$1" k="$2" v="$3"
+  mkdir -p "$LEDGER"
+  v=${v//$'\n'/ }
+  {
+    if [[ -f "$f" ]]; then awk -v k="$k" 'index($0, k "=") != 1' "$f"; fi
+    printf '%s=%s\n' "$k" "$v"
+  } >"$f.tmp.$$"
+  mv -f "$f.tmp.$$" "$f"
+}
+
+_ledger_incr() {
+  local n
+  n=$(_ledger_get "$1" "$2")
+  _ledger_set "$1" "$2" "$(( ${n:-0} + 1 ))"
+}
+
+# One watcher per repo: two would race each other's label swaps.
+LOCK="$LEDGER/.lock"
+mkdir -p "$LEDGER"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+    echo "Error: task-watch is already running for $REPO_NAME (pid $holder)" >&2
+    exit 1
+  fi
+  rm -rf "$LOCK"
+  mkdir "$LOCK"
+fi
+echo "$$" >"$LOCK/pid"
+TMP=$(mktemp -d)
+trap 'rm -rf "$LOCK" "$TMP"' EXIT
+
+# ---------------- radio ----------------
+
+_radio_pm() {
+  # $1 intent, $2 key (may be empty); body on stdin.
+  env TASK_FORCE_ROLE="$WATCH_ROLE" TASK_FORCE_PM_ROLE="$PM_ROLE" \
+    "$RADIO" send --to pm --intent "$1" ${2:+--issue "$2"}
+}
+
+# Stop on a failed acli call: no retry loop (#326). Radios the PM, exits 3.
+_stop() {
+  local what="$1" rc="$2" err="$3"
+  _say "stopped: acli $what exited $rc (${err:-no output}) — re-login with: acli jira auth login --web"
+  _radio_pm watch-stopped "" <<BODY || true
+task-watch for $REPO_NAME stopped: acli $what exited $rc.
+${err:-acli printed nothing.}
+Most likely the acli login lapsed. Re-login, then restart task-watch in its tab:
+  acli jira auth login --web
+BODY
+  exit 3
+}
+
+# ---------------- acli ----------------
+
+# The first non-blank line across the files given: where acli said why.
+_first_line() {
+  cat "$@" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 1 || true
+}
+
+# _search <jql> <outfile>: the matching issues as a JSON array.
+_search() {
+  local rc=0
+  acli jira workitem search --jql "$1" --fields key,labels,status,summary \
+    --paginate --json >"$2" 2>"$TMP/err" || rc=$?
+  if (( rc != 0 )); then
+    _stop search "$rc" "$(_first_line "$TMP/err" "$2")"
+  fi
+  if ! jq -e 'type == "array"' "$2" >/dev/null 2>&1; then
+    _stop search 0 "output was not a JSON array"
+  fi
+}
+
+# _swap <key> <add> <remove>: one label swap. True only when Jira says it
+# happened — a failed acli write exits 0 (#326).
+_swap() {
+  local rc=0 out="$TMP/edit"
+  acli jira workitem edit --key "$1" --labels "$2" --remove-labels "$3" \
+    --yes --json >"$out" 2>"$TMP/err" || rc=$?
+  (( rc == 0 )) || _stop "edit $1" "$rc" "$(_first_line "$TMP/err" "$out")"
+  [[ "$(jq -r '.successCount // 0' "$out" 2>/dev/null || echo 0)" == 1 ]] && return 0
+  _say "label swap on $1 ($3 -> $2) failed: $(jq -r '[.results[]?.message // empty] | first // "no successCount"' "$out" 2>/dev/null || echo 'unreadable output')"
+  return 1
+}
+
+_browse_url() {
+  local s="${SITE%/}"
+  [[ -n "$s" ]] || return 0
+  [[ "$s" == *://* ]] || s="https://$s"
+  [[ "${s#*://}" == *.* ]] || s="$s.atlassian.net"
+  printf '%s/browse/%s' "$s" "$1"
+}
+
+# ---------------- in flight ----------------
+
+# Keys a live task-work worktree is working on, one per line, uppercased.
+_live_keys() {
+  local f ref slug
+  for f in "$WORKTREE_BASE"/.*.info; do
+    [[ -f "$f" ]] || continue
+    ref=$(sed -n 's/^JIRA_REF=//p' "$f" | head -n 1)
+    slug=$(sed -n 's/^SLUG=//p' "$f" | head -n 1)
+    [[ -n "$ref" && -n "$slug" && -d "$WORKTREE_BASE/$slug" ]] || continue
+    printf '%s\n' "$ref" | tr '[:lower:]' '[:upper:]' | grep -oE '[A-Z][A-Z0-9_]+-[0-9]+' | tail -n 1 || true
+  done
+}
+
+_ping() {
+  local key="$1" summary url out claims
+  summary=$(_ledger_get "$key" SUMMARY)
+  claims=$(_ledger_get "$key" CLAIMS)
+  url=$(_browse_url "$key")
+  if out=$(_radio_pm ticket-filed "$key" <<BODY
+$key: $summary
+${url:-$key}
+Claimed by task-watch (claim ${claims:-1}; ${FAIL_CAP} failed run(s) mark it $FAILED). Triage it: dispatch with task-work --auto, or bounce with $NEEDS_INFO.
+BODY
+  ); then
+    _ledger_set "$key" PINGED 1
+    _say "ticket-filed $key → ${out##*$'\n'}"
+  else
+    _say "radio send failed for $key — will retry the ping next poll"
+  fi
+}
+
+# Sets INFLIGHT. Advances every pending / running ledger entry.
+_refresh() {
+  INFLIGHT=0
+  local live f key state pending="" jql_keys=""
+  live=$(_live_keys)
+  for f in "$LEDGER"/*; do
+    [[ -f "$f" ]] || continue
+    key=$(basename "$f")
+    state=$(_ledger_get "$key" STATE)
+    case "$state" in pending|running) ;; *) continue ;; esac
+    if printf '%s\n' "$live" | grep -qxF "$key"; then
+      if [[ "$state" == pending ]]; then
+        _ledger_set "$key" STATE running
+        _ledger_incr "$key" RUNS
+        _say "$key dispatched — run $(_ledger_get "$key" RUNS) in flight"
+      fi
+      INFLIGHT=$((INFLIGHT + 1))
+    elif [[ "$state" == running ]]; then
+      _ledger_set "$key" STATE "done"
+      _say "$key run ended (worktree gone)"
+    else
+      pending+="$key "
+      jql_keys+="${jql_keys:+, }$key"
+    fi
+  done
+  [[ -n "$pending" ]] || return 0
+
+  # Pending: still waiting on the PM, unless the PM bounced it.
+  _search "key in ($jql_keys)" "$TMP/pending.json"
+  local labels
+  for key in $pending; do
+    labels=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .fields.labels // [] | .[]' "$TMP/pending.json")
+    if printf '%s\n' "$labels" | grep -qxF "$NEEDS_INFO" || ! printf '%s\n' "$labels" | grep -qxF "$CLAIMED"; then
+      _ledger_set "$key" STATE released
+      _say "$key released (bounced, or $CLAIMED removed) — no longer in flight"
+      continue
+    fi
+    INFLIGHT=$((INFLIGHT + 1))
+    [[ "$(_ledger_get "$key" PINGED)" == 1 ]] || _ping "$key"
+  done
+}
+
+# ---------------- one poll ----------------
+
+_poll() {
+  _refresh
+  _search "$JQL" "$TMP/queue.json"
+  local claimed=0 left=0 total key summary labels runs i
+  total=$(jq 'length' "$TMP/queue.json")
+  for (( i = 0; i < total; i++ )); do
+    key=$(jq -r --argjson i "$i" '.[$i].key' "$TMP/queue.json")
+    summary=$(jq -r --argjson i "$i" '.[$i].fields.summary // ""' "$TMP/queue.json")
+    labels=$(jq -r --argjson i "$i" '.[$i].fields.labels // [] | .[]' "$TMP/queue.json")
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]+-[0-9]+$ ]] || { _say "skipping malformed key '$key'"; continue; }
+    # A custom JQL may not exclude these; the labels are the source of truth.
+    if printf '%s\n' "$labels" | grep -qxF -e "$CLAIMED" -e "$FAILED"; then
+      continue
+    fi
+    runs=$(_ledger_get "$key" RUNS)
+    if (( ${runs:-0} >= FAIL_CAP )); then
+      if _swap "$key" "$FAILED" "$LABEL"; then
+        _ledger_set "$key" STATE failed
+        _say "$key back in the queue after ${runs} failed run(s) — labelled $FAILED, never claimed again"
+      fi
+      continue
+    fi
+    if (( INFLIGHT >= MAX_INFLIGHT )); then
+      left=$((left + 1))
+      continue
+    fi
+    _swap "$key" "$CLAIMED" "$LABEL" || continue
+    _ledger_set "$key" STATE pending
+    _ledger_set "$key" PINGED 0
+    _ledger_set "$key" SUMMARY "$summary"
+    _ledger_incr "$key" CLAIMS
+    claimed=$((claimed + 1))
+    INFLIGHT=$((INFLIGHT + 1))
+    _ping "$key"
+  done
+  local tail=""
+  (( left == 0 )) || tail=", $left left queued at the cap"
+  _say "poll: claimed $claimed, in flight $INFLIGHT/$MAX_INFLIGHT$tail"
+}
+
+if (( ONCE )); then
+  _poll
+  exit 0
+fi
+
+_say "watching $REPO_NAME every ${INTERVAL}s (label $LABEL, max $MAX_INFLIGHT in flight)"
+while :; do
+  _poll
+  sleep "$INTERVAL"
+done

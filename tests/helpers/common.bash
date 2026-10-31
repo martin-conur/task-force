@@ -301,7 +301,7 @@ setup_stubs() {
   STUB_CALLS_DIR=$(mktemp -d)
   export STUB_BIN STUB_CALLS_DIR
 
-  for stub in zellij gh kiro-cli claude fzf gum; do
+  for stub in zellij gh kiro-cli claude fzf gum acli; do
     cp "$REPO_ROOT_REAL/tests/helpers/stubs/$stub" "$STUB_BIN/$stub"
     chmod +x "$STUB_BIN/$stub"
   done

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Stub for acli (the Atlassian CLI) — records invocations and plays a tiny
+# Jira out of a JSON file, for task-watch (#328).
+#
+# Configurable via env vars:
+#   ACLI_STUB_ISSUES      path to a JSON array of issues, each
+#                         {key, fields: {labels: [...], summary, status: {name}}}.
+#                         `workitem edit` rewrites it, so a second poll sees
+#                         the labels the first one swapped. Missing = no issues.
+#   ACLI_STUB_SEARCH_EXIT non-zero: `workitem search` prints acli's
+#                         unauthorized error and exits with it (a lapsed login).
+#   ACLI_STUB_EDIT_EXIT   non-zero: `workitem edit` exits with it.
+#   ACLI_STUB_EDIT_FAIL   space-separated keys whose edit FAILS the way acli's
+#                         writes do: exit 0, successCount 0 (#326).
+#
+# search understands just the JQL task-watch writes: `labels = "X"` keeps
+# issues carrying X, `labels not in ("A", "B")` drops issues carrying either,
+# `key in (K1, K2)` keeps those keys. Anything else in the JQL is ignored.
+echo "acli $*" >> "${STUB_CALLS_DIR}/acli.calls"
+
+ISSUES="${ACLI_STUB_ISSUES:-}"
+_issues() { if [[ -n "$ISSUES" && -f "$ISSUES" ]]; then cat "$ISSUES"; else echo '[]'; fi; }
+
+_flag() {
+  local want="$1"; shift
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "$want" ]]; then printf '%s' "${2:-}"; return 0; fi
+    shift
+  done
+}
+
+_list() { tr ',' '\n' | sed -e 's/^[[:space:]"]*//' -e 's/[[:space:]"]*$//' | jq -R . | jq -s -c .; }
+
+case "$1 $2 $3" in
+  "jira workitem search")
+    if [[ "${ACLI_STUB_SEARCH_EXIT:-0}" != 0 ]]; then
+      echo "✗ Error: unauthorized: use 'acli [product] auth login' to authenticate"
+      exit "$ACLI_STUB_SEARCH_EXIT"
+    fi
+    jql=$(_flag --jql "$@")
+    want=$(printf '%s' "$jql" | sed -nE 's/.*labels = "([^"]+)".*/\1/p')
+    notin=$(printf '%s' "$jql" | sed -nE 's/.*labels not in \(([^)]*)\).*/\1/p' | _list)
+    keys=$(printf '%s' "$jql" | sed -nE 's/.*key in \(([^)]*)\).*/\1/p' | _list)
+    _issues | jq -c --arg want "$want" --argjson notin "$notin" --argjson keys "$keys" '
+      map(select(
+        ($want == "" or ((.fields.labels // []) | index([$want]) != null))
+        and ([(.fields.labels // [])[] | select(. as $l | $notin | index([$l]) != null)] | length == 0)
+        and (($keys | length) == 0 or (.key as $k | $keys | index([$k]) != null))
+      ))'
+    exit 0
+    ;;
+  "jira workitem edit")
+    [[ "${ACLI_STUB_EDIT_EXIT:-0}" == 0 ]] || { echo "✗ Error: boom"; exit "$ACLI_STUB_EDIT_EXIT"; }
+    key=$(_flag --key "$@"); add=$(_flag --labels "$@"); rm=$(_flag --remove-labels "$@")
+    if [[ " ${ACLI_STUB_EDIT_FAIL:-} " == *" $key "* ]] || ! _issues | jq -e --arg k "$key" 'any(.[]; .key == $k)' >/dev/null; then
+      printf '{"results":[{"key":"%s","status":"FAILURE","message":"Issue does not exist or you do not have permission to see it."}],"successCount":0}\n' "$key"
+      exit 0
+    fi
+    _issues | jq --arg k "$key" --arg add "$add" --arg rm "$rm" '
+      map(if .key == $k then .fields.labels = (((.fields.labels // []) - [$rm]) + (if $add == "" then [] else [$add] end) | unique) else . end)' \
+      >"$ISSUES.tmp" && mv "$ISSUES.tmp" "$ISSUES"
+    printf '{"results":[{"key":"%s","status":"SUCCESS"}],"successCount":1}\n' "$key"
+    exit 0
+    ;;
+esac
+
+exit 0

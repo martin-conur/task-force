@@ -99,6 +99,49 @@ process tree goes with the tab. Run from anywhere else, the PM's tab included, a
 worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
 along: `grep 'stray-procs:' ~/.task-force/radio/log`.
 
+### Auto intake (`task-watch`)
+
+`task-watch [--once]` — poll Jira for labelled bugs, claim each once, radio the PM (#328)
+
+Run it in a tab of its own, from the repo; it polls until you stop it. It costs
+no model tokens: it is shell, and reads and writes Jira through `acli` (log in
+once with `acli jira auth login --web`). Each poll it searches the watch JQL and,
+while fewer than **Watch max in flight** tickets are claimed and unfinished,
+claims each hit with one label swap (`ai-auto` → `ai-auto:claimed`) and only
+then radios the PM `ticket-filed` with the key and summary. Claim before ping,
+so a crash never dispatches a ticket twice. The PM's intake (in `/pm`) triages
+it: it writes the spec and dispatches `task-work <url> --auto`, or comments on
+what is missing and adds `ai-auto:needs-info`.
+
+- **In flight** is a ticket claimed and not yet bounced, or one a live
+  `task-work` worktree is working on. It stops counting when the PM bounces it
+  or the worktree is removed.
+- **Failure cap.** A ticket that comes back into the queue (`ai-auto` put back,
+  `ai-auto:claimed` removed) after a run was dispatched for it counts as a failed
+  run. After **Watch failure cap** of them it gets `ai-auto:failed` instead of a
+  claim, and is never claimed again. A bounce is not a failed run.
+- **Failures stop it.** Any non-zero `acli` exit (a lapsed login reads as
+  `unauthorized`, exit 1) stops the watcher and radios the PM `watch-stopped`;
+  re-login and start it again. It never retries in a loop. A write that fails
+  exits 0 in `acli`, so every claim checks `successCount`, and a failed claim is
+  never followed by a ping.
+- **State** lives outside the repo, in `~/.task-force/watch/<repo>/` (one ledger
+  file per claimed key), so it works on a local-only install. Log lines go to
+  the radio log: `grep 'watch:' ~/.task-force/radio/log`.
+
+Settings. The **last** matching bullet in this file wins, so put an override
+**below the managed-region end marker**, where a `task-init` re-run leaves it
+alone. The default JQL is the project above, the issue type and the label,
+minus claimed and failed tickets, oldest first; a custom one is used as written
+(claimed and failed tickets are skipped either way).
+
+- **Watch label**: `ai-auto`
+- **Watch issue type**: `Bug`
+- **Watch JQL**: `default`
+- **Watch poll seconds**: `300`
+- **Watch max in flight**: `2`
+- **Watch failure cap**: `2`
+
 ### Atlassian MCP
 
 This workflow assumes the Atlassian Remote MCP server is configured. Verify with:
@@ -508,6 +551,8 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 | Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
 | PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
 | PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
+| Watcher | labelled bug claimed            | `radio send --to pm --intent ticket-filed --issue <KEY-N>`             |
+| Watcher | an `acli` call failed; stopped  | `radio send --to pm --intent watch-stopped`                            |
 
 When a worker's turn ends, the `Stop` hook runs `radio stop-hook`
 automatically: with an empty inbox it marks the role idle; if messages queued

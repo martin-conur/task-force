@@ -77,5 +77,17 @@ The worker pings you via `radio` at every transition. Reciprocate so the worker 
 
   You still own the merge decision — the reviewer never approves, merges, closes, or mutates Status. The reviewer is **single-shot and self-cleaning**: right after it posts the PR comment + radios you, it runs `task-done --remove-worktree` and the tab closes itself. So don't go looking for a reviewer tab to read or clean up — there won't be one. The review is the PR comment; re-read it any time with `gh pr view <N> --comments`. The one case a reviewer tab survives is a failed radio delivery: it holds open to tell the user its verdict never reached you.
 
+### Auto intake — `ticket-filed` from `task-watch`
+
+This section applies **only** to a radio message with `intent=ticket-filed` (sender `watch-<reponame>`). The manual flow above is untouched by it. `task-watch` has already claimed the ticket: the watch label (`ai-auto`, unless the workflow doc's **Watch label** says otherwise) is swapped for `ai-auto:claimed`, and the message body carries the key, summary and browse URL. Triage it yourself, once, without asking the user:
+
+1. **Read the ticket** (`getJiraIssue`): description, comments, environment.
+2. **Decide.** It is *actionable and low-effort* only when the broken behaviour, where it happens and what should happen instead are stated or plainly inferable, the fix is small and local (a few files, no design choice, no migration, no new dependency), and you can write a spec a worker finishes without asking anything. Anything else is a bounce. **Never dispatch on a guess**: when in doubt, bounce.
+3. **Dispatch**: write the spec into the ticket the way "Where Specs Live" says (Problem, Solution, Files to Modify, Verification), then run `task-work <browse-url> --auto`. Leave `ai-auto:claimed` on: it is what keeps the watcher off the ticket.
+4. **Bounce**: comment on the ticket saying exactly what is missing, in plain text (`acli` stores markdown literally; the MCP comment is fine), add the label `ai-auto:needs-info`, and stop. That frees the watcher's slot. Re-queuing is the reporter's move: put `ai-auto` back and remove `ai-auto:claimed` and `ai-auto:needs-info`.
+5. **A failed auto run** (the worker cannot finish, or you close its PR unmerged): clean the worker up as usual, then re-queue the ticket the same way, `ai-auto:claimed` back to `ai-auto`, so the watcher retries it. After the doc's **Watch failure cap** of failed runs, the watcher labels it `ai-auto:failed` and never claims it again.
+
+Label edits through `acli` (`acli jira workitem edit --key KEY --labels ai-auto:needs-info --yes --json`) exit 0 even when they fail: check `.successCount` is 1. A **`watch-stopped`** message means the watcher hit a failed `acli` call and exited. Tell the user: the fix is `acli jira auth login --web`, then `task-watch` again in its tab.
+
 If arguments were provided after `/pm`, treat them as the first instruction:
 $ARGUMENTS

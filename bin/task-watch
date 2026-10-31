@@ -10,8 +10,12 @@ set -euo pipefail
 #      ledger, $TASK_FORCE_HOME/watch/<repo>/<KEY>. A ledger entry is
 #      `pending` from the claim until the PM dispatches it, `running` while a
 #      task-work worktree's `.<slug>.info` sidecar names the key, and `done`
-#      once that worktree is gone. A pending ticket the PM bounced (it carries
-#      `<label>:needs-info`, or lost `<label>:claimed`) is `released`.
+#      once that worktree is gone. A pending ticket is resolved from Jira:
+#      it stops holding a slot once its status is done (a run that went start
+#      to finish between two polls, counted as one), it carries
+#      `<label>:needs-info` or `<label>:failed`, or it lost `<label>:claimed`.
+#      One pending past <pending timeout minutes> counts as a failed run and
+#      goes back into the queue, or to `<label>:failed` once that makes the cap.
 #   2. Search the queue through `acli` (#326: a REST search with a lapsed token
 #      returns 200 and zero issues; an `acli` read exits 1). Any non-zero acli
 #      exit stops the watcher and radios the PM that a re-login is needed. No
@@ -71,6 +75,9 @@ Settings, read from .claude/jira-workflow.md (last matching bullet wins):
   Watch poll seconds    300
   Watch max in flight   2         tickets claimed but not yet finished
   Watch failure cap     2         dispatched runs before <label>:failed
+  Watch pending timeout minutes
+                        120       claimed, never seen with a worktree: after
+                                  this it counts as a failed run and is re-queued
 
 It reads and writes Jira through acli (acli jira auth login --web). Any
 non-zero acli exit stops it and radios the PM to re-login.
@@ -146,19 +153,21 @@ ISSUE_TYPE=$(_setting "Watch issue type" Bug)
 INTERVAL=$(_number_setting "Watch poll seconds" 300)
 MAX_INFLIGHT=$(_number_setting "Watch max in flight" 2)
 FAIL_CAP=$(_number_setting "Watch failure cap" 2)
+PENDING_TIMEOUT=$(_number_setting "Watch pending timeout minutes" 120)
 PROJECT_KEY=$(tf_tracker_value "$DOC" jira key)
 SITE=$(tf_tracker_value "$DOC" jira site)
 
+PROJECT_CLAUSE=""
+if [[ "$PROJECT_KEY" == *,* ]]; then
+  PROJECT_CLAUSE="project in ($PROJECT_KEY)"
+elif [[ -n "$PROJECT_KEY" ]]; then
+  PROJECT_CLAUSE="project = \"$PROJECT_KEY\""
+fi
 JQL=$(_setting "Watch JQL" "")
 if [[ -z "$JQL" ]]; then
   if [[ -z "$PROJECT_KEY" ]]; then
     echo "Error: no project key in $DOC — fill in **Project key(s)**, or set **Watch JQL**" >&2
     exit 1
-  fi
-  if [[ "$PROJECT_KEY" == *,* ]]; then
-    PROJECT_CLAUSE="project in ($PROJECT_KEY)"
-  else
-    PROJECT_CLAUSE="project = \"$PROJECT_KEY\""
   fi
   JQL="$PROJECT_CLAUSE AND issuetype = \"$ISSUE_TYPE\" AND labels = \"$LABEL\" AND labels not in (\"$CLAIMED\", \"$FAILED\") ORDER BY created ASC"
 fi
@@ -301,7 +310,7 @@ BODY
 # Sets INFLIGHT. Advances every pending / running ledger entry.
 _refresh() {
   INFLIGHT=0
-  local live f key state pending="" jql_keys=""
+  local live f key state pending=""
   live=$(_live_keys)
   for f in "$LEDGER"/*; do
     [[ -f "$f" ]] || continue
@@ -320,24 +329,69 @@ _refresh() {
       _say "$key run ended (worktree gone)"
     else
       pending+="$key "
-      jql_keys+="${jql_keys:+, }$key"
     fi
   done
   [[ -n "$pending" ]] || return 0
 
-  # Pending: still waiting on the PM, unless the PM bounced it.
-  _search "key in ($jql_keys)" "$TMP/pending.json"
-  local labels
+  # Pending: claimed, and never yet seen with a live worktree. Jira says
+  # whether it still holds a slot. Searched by the claimed label rather than
+  # `key in (...)`, which exits 1 once one of the keys has been deleted (#335).
+  _search "${PROJECT_CLAUSE:+$PROJECT_CLAUSE AND }labels = \"$CLAIMED\"" "$TMP/pending.json"
+  local labels category since now
+  now=$(date +%s)
   for key in $pending; do
     labels=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .fields.labels // [] | .[]' "$TMP/pending.json")
-    if printf '%s\n' "$labels" | grep -qxF "$NEEDS_INFO" || ! printf '%s\n' "$labels" | grep -qxF "$CLAIMED"; then
+    category=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .fields.status.statusCategory.key // ""' "$TMP/pending.json")
+    if ! printf '%s\n' "$labels" | grep -qxF "$CLAIMED"; then
+      # Not claimed any more, or deleted.
       _ledger_set "$key" STATE released
-      _say "$key released (bounced, or $CLAIMED removed) — no longer in flight"
+      _say "$key released ($CLAIMED removed) — no longer in flight"
+      continue
+    fi
+    if [[ "$category" == "done" ]]; then
+      # A run went start to finish between two polls: it still counts as one.
+      _ledger_set "$key" STATE "done"
+      _ledger_incr "$key" RUNS
+      _say "$key released (status done) — no longer in flight"
+      continue
+    fi
+    if printf '%s\n' "$labels" | grep -qxF "$FAILED"; then
+      _ledger_set "$key" STATE failed
+      _say "$key released ($FAILED) — no longer in flight"
+      continue
+    fi
+    if printf '%s\n' "$labels" | grep -qxF "$NEEDS_INFO"; then
+      _ledger_set "$key" STATE released
+      _say "$key released (bounced, $NEEDS_INFO) — no longer in flight"
+      continue
+    fi
+    since=$(_ledger_get "$key" PENDING_SINCE)
+    if [[ ! "$since" =~ ^[0-9]+$ ]]; then since=$now; _ledger_set "$key" PENDING_SINCE "$now"; fi
+    if (( now - since >= PENDING_TIMEOUT * 60 )); then
+      _pending_timeout "$key"
       continue
     fi
     INFLIGHT=$((INFLIGHT + 1))
     [[ "$(_ledger_get "$key" PINGED)" == 1 ]] || _ping "$key"
   done
+}
+
+# A ticket pending past the timeout counts as a failed run. It goes back into
+# the queue for another try, or, once that makes the cap, to <label>:failed.
+_pending_timeout() {
+  local key="$1" runs
+  _ledger_incr "$key" RUNS
+  runs=$(_ledger_get "$key" RUNS)
+  _log "pending timeout $key (${PENDING_TIMEOUT}m, failed run $runs of $FAIL_CAP) repo=$REPO_NAME"
+  if (( runs >= FAIL_CAP )); then
+    _swap "$key" "$FAILED" "$CLAIMED" || return 0
+    _ledger_set "$key" STATE failed
+    _say "$key pending past ${PENDING_TIMEOUT}m — failed run $runs of $FAIL_CAP, labelled $FAILED"
+  else
+    _swap "$key" "$LABEL" "$CLAIMED" || return 0
+    _ledger_set "$key" STATE released
+    _say "$key pending past ${PENDING_TIMEOUT}m — failed run $runs of $FAIL_CAP, back in the queue"
+  fi
 }
 
 # ---------------- one poll ----------------
@@ -371,6 +425,7 @@ _poll() {
     _swap "$key" "$CLAIMED" "$LABEL" || continue
     _ledger_set "$key" STATE pending
     _ledger_set "$key" PINGED 0
+    _ledger_set "$key" PENDING_SINCE "$(date +%s)"
     _ledger_set "$key" SUMMARY "$summary"
     _ledger_incr "$key" CLAIMS
     claimed=$((claimed + 1))

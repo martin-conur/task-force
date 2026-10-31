@@ -114,8 +114,13 @@ it: it writes the spec and dispatches `task-work <url> --auto`, or comments on
 what is missing and adds `ai-auto:needs-info`.
 
 - **In flight** is a ticket claimed and not yet bounced, or one a live
-  `task-work` worktree is working on. It stops counting when the PM bounces it
-  or the worktree is removed.
+  `task-work` worktree is working on. It stops counting when the worktree is
+  removed, or, for a ticket never seen with a worktree, when Jira shows its
+  status done, `ai-auto:needs-info` or `ai-auto:failed`, or no
+  `ai-auto:claimed`. A ticket still claimed and open after **Watch pending
+  timeout minutes** counts as a failed run and goes back into the queue (or to
+  `ai-auto:failed`, once that makes the cap); the radio log says
+  `watch: pending timeout <KEY>`.
 - **Failure cap.** A ticket that comes back into the queue (`ai-auto` put back,
   `ai-auto:claimed` removed) after a run was dispatched for it counts as a failed
   run. After **Watch failure cap** of them it gets `ai-auto:failed` instead of a
@@ -141,6 +146,7 @@ minus claimed and failed tickets, oldest first; a custom one is used as written
 - **Watch poll seconds**: `300`
 - **Watch max in flight**: `2`
 - **Watch failure cap**: `2`
+- **Watch pending timeout minutes**: `120`
 
 ### Atlassian MCP
 

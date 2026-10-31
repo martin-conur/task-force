@@ -46,10 +46,23 @@ issue() {
   local labels
   labels=$(printf '%s\n' "$@" | jq -R . | jq -s -c .)
   jq --arg k "$key" --argjson l "$labels" \
-    '. + [{key: $k, fields: {labels: $l, summary: ("summary of " + $k), status: {name: "To Do"}}}]' \
+    '. + [{key: $k, fields: {labels: $l, summary: ("summary of " + $k), status: {name: "To Do", statusCategory: {key: "new"}}}}]' \
     "$ACLI_STUB_ISSUES" >"$ACLI_STUB_ISSUES.tmp"
   mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
 }
+
+set_done() {
+  jq --arg k "$1" 'map(if .key == $k then .fields.status = {name: "Done", statusCategory: {key: "done"}} else . end)' \
+    "$ACLI_STUB_ISSUES" >"$ACLI_STUB_ISSUES.tmp"
+  mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
+}
+delete_issue() {
+  jq --arg k "$1" 'map(select(.key != $k))' "$ACLI_STUB_ISSUES" >"$ACLI_STUB_ISSUES.tmp"
+  mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
+}
+# Age a pending ledger entry past any timeout.
+age_pending() { sed -i.bak 's/^PENDING_SINCE=.*/PENDING_SINCE=1/' "$LEDGER/$1"; }
+runs_of() { sed -n 's/^RUNS=//p' "$LEDGER/$1"; }
 
 labels_of() { jq -r --arg k "$1" '.[] | select(.key == $k) | .fields.labels | join(",")' "$ACLI_STUB_ISSUES"; }
 set_labels() {
@@ -154,8 +167,90 @@ finish() {
   watch --once >/dev/null
   set_labels PROJ-1 "ai-auto:claimed,ai-auto:needs-info"
   run watch --once
+  assert_output --partial "PROJ-1 released (bounced, ai-auto:needs-info)"
+  assert_output --partial "ticket-filed PROJ-2"
+  assert_equal "$(runs_of PROJ-1)" ""
+}
+
+# The slot leak (#335 review): a worker that starts and finishes between two
+# polls is never seen with a worktree, so its entry stays pending.
+@test "a pending ticket whose status is done frees its slot and counts as a run" {
+  printf -- '- **Watch max in flight**: `1`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto; issue PROJ-2 ai-auto
+  watch --once >/dev/null
+  set_done PROJ-1
+  run watch --once
+  assert_output --partial "PROJ-1 released (status done)"
+  assert_output --partial "ticket-filed PROJ-2"
+  assert_equal "$(runs_of PROJ-1)" 1
+}
+
+@test "a pending ticket labelled failed by hand frees its slot" {
+  printf -- '- **Watch max in flight**: `1`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto; issue PROJ-2 ai-auto
+  watch --once >/dev/null
+  set_labels PROJ-1 "ai-auto:claimed,ai-auto:failed"
+  run watch --once
+  assert_output --partial "PROJ-1 released (ai-auto:failed)"
+  assert_output --partial "ticket-filed PROJ-2"
+}
+
+@test "a pending ticket that lost its claimed label frees its slot" {
+  printf -- '- **Watch max in flight**: `1`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto; issue PROJ-2 ai-auto
+  watch --once >/dev/null
+  set_labels PROJ-1 "triaged-by-hand"
+  run watch --once
+  assert_output --partial "PROJ-1 released (ai-auto:claimed removed)"
+  assert_output --partial "ticket-filed PROJ-2"
+}
+
+@test "a deleted pending ticket frees its slot instead of stopping the watcher" {
+  printf -- '- **Watch max in flight**: `1`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto; issue PROJ-2 ai-auto
+  watch --once >/dev/null
+  delete_issue PROJ-1
+  run watch --once
+  assert_success
   assert_output --partial "PROJ-1 released"
   assert_output --partial "ticket-filed PROJ-2"
+  # Searched by the claimed label: `key in (<deleted>)` exits 1 on real Jira.
+  run grep -c 'key in' "$STUB_CALLS_DIR/acli.calls"
+  assert_output 0
+}
+
+@test "pending timeout: released, counted as a failed run, logged, and back in the queue" {
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  run watch --once
+  assert_output --partial "in flight 1/2"
+  age_pending PROJ-1
+  run watch --once
+  assert_success
+  assert_output --partial "PROJ-1 pending past 120m"
+  assert_output --partial "back in the queue"
+  assert_equal "$(runs_of PROJ-1)" 1
+  run grep 'watch: pending timeout PROJ-1' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+  # Re-queued, so the same poll claims it again for another try.
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed"
+  assert_equal "$(pinged | tr '\n' ' ')" "PROJ-1 PROJ-1 "
+}
+
+@test "pending timeouts count toward the failure cap" {
+  printf -- '- **Watch pending timeout minutes**: `30`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  age_pending PROJ-1
+  watch --once >/dev/null
+  age_pending PROJ-1
+  run watch --once
+  assert_output --partial "PROJ-1 pending past 30m"
+  assert_output --partial "failed run 2 of 2, labelled ai-auto:failed"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:failed"
+  run watch --once
+  assert_output --partial "claimed 0, in flight 0/2"
+  assert_equal "$(pinged | tr '\n' ' ')" "PROJ-1 PROJ-1 "
 }
 
 @test "failure cap: a ticket back in the queue after N dispatched runs is labelled failed, not claimed" {

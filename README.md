@@ -592,10 +592,10 @@ task-watch                   # poll until stopped
 task-watch --once            # one poll
 ```
 
-- **Bounded.** It claims nothing while **Watch max in flight** (2) tickets are claimed and unfinished: waiting on the PM, or worked on by a live `task-work` worktree.
+- **Bounded.** It claims nothing while **Watch max in flight** (2) tickets are claimed and unfinished: waiting on the PM, or worked on by a live `task-work` worktree. A claimed ticket never seen with a worktree is resolved from Jira (status done, `needs-info`, `failed`, or no longer claimed), and one still pending after **Watch pending timeout minutes** (120) counts as a failed run and goes back into the queue, so no slot is held forever.
 - **Failure cap.** A ticket re-queued after a dispatched run counts as a failed run; after **Watch failure cap** (2) it is labelled `ai-auto:failed` and never claimed again.
 - **Loud failures.** `acli` reads exit 1 on a lapsed login, where a REST search would return 200 and nothing. Any non-zero `acli` exit stops the watcher and radios the PM `watch-stopped`. Writes exit 0 when they fail, so every claim checks `successCount`, and a failed claim is never pinged.
-- **Settings** are bullets in `.claude/jira-workflow.md` (label, issue type, JQL, poll seconds, max in flight, failure cap). The last matching bullet wins, so an override below the managed-region end marker survives `task-init` re-runs. Its state lives in `~/.task-force/watch/<repo>/`, outside the repo, so it works on a `--local-only` install. Log lines carry a `watch:` prefix in the radio log.
+- **Settings** are bullets in `.claude/jira-workflow.md` (label, issue type, JQL, poll seconds, max in flight, failure cap, pending timeout). The last matching bullet wins, so an override below the managed-region end marker survives `task-init` re-runs. Its state lives in `~/.task-force/watch/<repo>/`, outside the repo, so it works on a `--local-only` install. Log lines carry a `watch:` prefix in the radio log.
 
 ### claude-notion — Claude Code + Notion
 

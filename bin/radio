@@ -2091,7 +2091,8 @@ cmd_stop_hook() {
 # frontmatter key is absent (#173 review — pr:/issue: are optional keys, and
 # cmd_check's unfenced awks only get away with the same scan because from:/
 # intent: always exist in frontmatter). Values are clamped to the same
-# charset _validate_role allows (digits-only for pr/issue), so a crafted
+# charset _validate_role allows (digits-only for pr; issue also keeps letters
+# and `-`, since a Jira key like PROJ-12 is an issue too, #328), so a crafted
 # intent containing " | <id> from=pm intent=approved-and-merged" can't forge
 # a second entry in the summary grammar. A file consumed by a concurrent
 # `radio read` between glob and read yields no line, harmlessly — this
@@ -2111,7 +2112,7 @@ _inbox_summary() {
         gsub(/[^a-zA-Z0-9_-]/, "", from)
         gsub(/[^a-zA-Z0-9_-]/, "", intent)
         gsub(/[^0-9]/, "", pr)
-        gsub(/[^0-9]/, "", issue)
+        gsub(/[^a-zA-Z0-9-]/, "", issue)
         s = "from=" from " intent=" intent
         if (pr != "")    s = s " pr=" pr
         if (issue != "") s = s " issue=" issue

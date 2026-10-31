@@ -55,6 +55,9 @@ aw_install_monitor "$SCRIPT_DIR/.."
 # endregion:install-shared-symlinks
 ln -sf "$SCRIPT_DIR/../bin/task-reviewer" ~/.local/bin/task-reviewer
 echo "  ✓ Script: task-reviewer (canonical + kiro routing)"; sleep 0.05
+# task-watch is claude-jira's alone (#328): it reads Jira through acli.
+ln -sf "$SCRIPT_DIR/../bin/task-watch" ~/.local/bin/task-watch
+echo "  ✓ Script: task-watch (Jira auto intake)"; sleep 0.05
 
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'

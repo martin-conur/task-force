@@ -582,6 +582,21 @@ This writes `.claude/jira-workflow.md` and references it from `CLAUDE.md` so eve
 | `/planner` | typed in Claude Code |
 | `/worker`  | auto-launched by `task-work PROJ-123` |
 
+#### Auto intake: `task-watch`
+
+A labelled Jira bug can reach the PM without anyone typing (#328). Run `task-watch` in a tab of its own, from the repo. It is shell and costs no model tokens: every poll (300s by default) it searches Jira through [`acli`](docs/jira-acli-vs-mcp.md) for bugs labelled `ai-auto`, claims each one with a single label swap to `ai-auto:claimed`, and only then sends the PM `radio send --to pm --intent ticket-filed --issue PROJ-42` with the summary. The PM's intake section in `/pm` triages it: if it is actionable and small, the PM writes the spec into the ticket and runs `task-work <url> --auto`; otherwise it comments on what is missing, adds `ai-auto:needs-info`, and stops. It never dispatches on a guess.
+
+```bash
+acli jira auth login --web   # once
+task-watch                   # poll until stopped
+task-watch --once            # one poll
+```
+
+- **Bounded.** It claims nothing while **Watch max in flight** (2) tickets are claimed and unfinished: waiting on the PM, or worked on by a live `task-work` worktree. A claimed ticket never seen with a worktree is resolved from Jira (status done, `needs-info`, `failed`, or no longer claimed), and one still pending after **Watch pending timeout minutes** (120) counts as a failed run and goes back into the queue, so no slot is held forever.
+- **Failure cap.** A ticket re-queued after a dispatched run counts as a failed run; after **Watch failure cap** (2) it is labelled `ai-auto:failed` and never claimed again.
+- **Loud failures.** `acli` reads exit 1 on a lapsed login, where a REST search would return 200 and nothing. Any non-zero `acli` exit stops the watcher and radios the PM `watch-stopped`. Writes exit 0 when they fail, so every claim checks `successCount`, and a failed claim is never pinged.
+- **Settings** are bullets in `.claude/jira-workflow.md` (label, issue type, JQL, poll seconds, max in flight, failure cap, pending timeout). The last matching bullet wins, so an override below the managed-region end marker survives `task-init` re-runs. Its state lives in `~/.task-force/watch/<repo>/`, outside the repo, so it works on a `--local-only` install. Log lines carry a `watch:` prefix in the radio log.
+
 ### claude-notion — Claude Code + Notion
 
 **Need:** Claude Code with the Notion MCP added:
@@ -747,6 +762,8 @@ These are the five transitions that make up a full PR cycle. Each one is a singl
 | Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
 | PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
 | PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
+
+On claude-jira, [`task-watch`](#auto-intake-task-watch) adds two more, both to the PM: `ticket-filed --issue <KEY-N>` for a labelled bug it has claimed, and `watch-stopped` when an `acli` call failed and it stopped.
 
 PR review *content* still lives in `gh pr comment` / `gh pr review` (or the equivalent on Jira / Notion / local); radio only carries the routing ping.
 

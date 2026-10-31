@@ -43,6 +43,8 @@ source "$AW_ROOT/lib/detect-impl.sh"
 source "$AW_ROOT/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-create.sh
 source "$AW_ROOT/lib/worktree-create.sh"
+# shellcheck source=lib/local-only.sh
+source "$AW_ROOT/lib/local-only.sh"
 # shellcheck source=lib/repo-name.sh
 source "$AW_ROOT/lib/repo-name.sh"
 
@@ -369,6 +371,9 @@ trap _reviewer_cleanup_partial ERR
 
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
 aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
+# A local-only install (#327) is untracked, so it did not come with the
+# worktree: copy it in, or the reviewer has no /reviewer command and no hooks.
+tf_local_only_sync "$REPO_ROOT" "$WORKTREE_DIR"
 
 # Write info file so task-done can clean up the worktree when the user
 # decides to (the reviewer never auto-removes — the tab stays open showing

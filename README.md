@@ -89,6 +89,27 @@ task-init claude-gh
 
 This writes a workflow config (e.g. `.claude/gh-workflow.md` or `.kiro/steering/notion-workflow.md`) so your agents know which board to read from. After that, `task-work` and `task-done` **auto-detect** the right combo from that file — see [How the dispatchers work](#how-the-dispatchers-work).
 
+#### Local-only install: nothing reaches the repo's branches (#327)
+
+In a repo owned by another team, even the install is a problem: a normal one commits `.claude/settings.json`'s hook merge, `.claude/commands/*.md`, the workflow doc and a `CLAUDE.md` import, and every worker forked from `HEAD` carries them into its PR. `--local-only` writes the same artifacts **untracked**:
+
+```bash
+task-init claude-jira --local-only
+```
+
+| Normal install | Local-only install |
+|---|---|
+| hooks + allow-list in `.claude/settings.json` | in `.claude/settings.local.json` (Claude Code reads both) |
+| `@.claude/<t>-workflow.md` in `CLAUDE.md` | in `CLAUDE.local.md` (auto-loaded the same way) |
+| workflow doc, `.claude/commands/*.md` committed | written as usual, listed in `.git/info/exclude` |
+| `.git/task-force/` appended to `.gitignore` (*-local) | `.gitignore` untouched; `tasks/` excluded instead |
+
+`.git/info/exclude` lives in git's common dir, so one block covers the main checkout and every worktree, and it is never committed (a `.gitignore` line would itself be a tracked change). The mode is recorded in `git config task-force.install local-only`, and every later `task-init` reads it, so a re-run, or a `task-config set`, stays local-only without the flag. A target git already tracks is refused, since excluding a tracked file does nothing.
+
+Untracked files do not follow `git worktree add`, so `task-work`, `task-reviewer` and `task-recreate-worker` copy the set from the main checkout into each worktree before the agent starts. They copy only missing files, so permissions a session approved into its own `settings.local.json` survive a recovery. #304's hook check accepts a `radio register` hook in `settings.local.json`: a worktree with its copy passes, and one with none, and nothing in the main checkout to copy from, is refused with the local-only fix. A worker's `git add -A` stages none of it, so its PR carries none of it. `task-remove` takes it all back out, the exclude block and the git config included, and `task-config show` prints `install   : local-only`.
+
+**claude only.** kiro reads its hooks from `.kiro/agents/<role>.json`, which has no untracked counterpart, so `task-init kiro-* --local-only` is refused, and so is any kiro install, `task-config add assistant kiro` or `set assistant kiro` on a repo already local-only.
+
 #### Re-running `task-init`
 
 `task-init` is safe to re-run any time you want to pull in new template scaffolding or restore deleted files. Two orthogonal axes of control:
@@ -378,6 +399,8 @@ task-remove --impl kiro-gh --yes   # in an ambiguous repo, just that one
 Two situations want it. **The project is done** and the workflow config is dead weight. Or — the one that actually stings — **a PR against a repo that doesn't use task-force**: you `task-init`'d someone else's repo to work in it, and the diff would otherwise carry `.claude/commands/`, a `settings.json` hook merge, a `CLAUDE.md` import line and a workflow doc the upstream maintainer never asked for. The old workaround for that (commit `task-init`'s output as one commit, `git revert` it before opening the PR) is cheap and exact, and still works; it degrades once anything else has touched `.claude/settings.json` since that commit, or when the init was never isolated into a commit in the first place.
 
 It removes exactly what [a switch removes](#what-a-switch-removes-and-what-it-leaves-alone) — same table, same keep-bias, same `<doc>.bak` — plus one artifact a switch has no business touching: the **`commit-msg` ci-guard hook** `task-work` installs (#194). Where the chain-install preserved a pre-existing hook as `commit-msg.local`, that name is put back. Only a hook carrying task-force's own marker is removed, so a `commit-msg` of yours — or husky's, via `core.hooksPath` — is named and left alone. Git shares one hooks directory across every worktree of a repo, so this is a repo-wide removal made from whichever worktree you are standing in, and the run says so.
+
+On a [local-only install](#local-only-install-nothing-reaches-the-repos-branches-327) it also strips the import from `CLAUDE.local.md` and the radio entries from `.claude/settings.local.json` (each deleted only when nothing of yours is left in it), removes its block from `.git/info/exclude` and unsets `git config task-force.install`. Those last two go with the last loadout only.
 
 With no `--impl`, **every** loadout detected in the repo is removed. "Take task-force out" means all of it, and leaving one behind is the multi-match state every dispatcher refuses on. An `--impl` / `$AW_IMPL` naming a loadout that is not configured here is refused: it would otherwise walk a loadout that isn't there, remove nothing, and still print `task-force removed from <root>` — and for the strip-before-a-PR case that success line is the only thing you would check before shipping every artifact you meant to take out (#227).
 

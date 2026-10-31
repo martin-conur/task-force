@@ -218,6 +218,9 @@ _show_one() {
     printf '  tracker   : %s  (unset — fill in %s)\n' "$tracker" "$(_rel "$doc")"
   fi
   printf '  config    : %s\n' "$(_rel "$doc")"
+  if tf_local_only "$REPO_ROOT"; then
+    printf '  install   : local-only  (untracked; listed in .git/info/exclude, git config %s)\n' "$TF_INSTALL_KEY"
+  fi
 
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
@@ -232,6 +235,15 @@ _show_one() {
     fi
     if [[ -f "$REPO_ROOT/.claude/settings.json" ]]; then
       _owns ".claude/settings.json  (radio hooks + seeded allow-list)"
+    fi
+    if tf_local_only "$REPO_ROOT"; then
+      if [[ -f "$REPO_ROOT/CLAUDE.local.md" ]] \
+        && grep -qxF -- "@.claude/$tracker-workflow.md" "$REPO_ROOT/CLAUDE.local.md"; then
+        _owns "CLAUDE.local.md  (the @.claude/$tracker-workflow.md import line)"
+      fi
+      if [[ -f "$REPO_ROOT/.claude/settings.local.json" ]]; then
+        _owns ".claude/settings.local.json  (radio hooks + seeded allow-list)"
+      fi
     fi
   fi
 
@@ -513,6 +525,11 @@ cmd_set() {
 
   local target_init
   target_init=$(_require_target_init "$target") || exit 1
+  # Before the removal, not at the install: kiro's task-init refuses a local-only
+  # repo (#327), and by then the old loadout would already be gone.
+  if [[ "$(la_assistant "$target")" == kiro ]]; then
+    tf_local_only_refuse_kiro "$REPO_ROOT" false || exit 1
+  fi
 
   _carry "$current" "$(la_tracker "$target")"
 
@@ -709,6 +726,9 @@ cmd_add() {
     echo "Error: expected: task-config add assistant <$(IFS='|'; echo "${ASSISTANTS[*]}")>" >&2; exit 1; }
   _in_list "$agent" "${ASSISTANTS[@]}" || {
     echo "Error: unknown assistant '$agent' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
+  if [[ "$agent" == kiro ]]; then
+    tf_local_only_refuse_kiro "$REPO_ROOT" false || exit 1
+  fi
 
   _collect_matches
   aw_require_configured "$REPO_ROOT" "$PIN" || exit 1

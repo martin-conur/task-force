@@ -27,6 +27,10 @@ Implementations:
 
 Global options:
   --force     Overwrite existing config files (passed through to impl)
+  --local-only
+              claude-* only: install untracked — hooks in .claude/settings.local.json,
+              the import in CLAUDE.local.md, every written path in .git/info/exclude
+              (passed through to impl; kiro-* refuses it)
   -h, --help  Show this help
 
 Examples:
@@ -34,6 +38,7 @@ Examples:
   task-init claude-gh
   task-init kiro-gh --force
   task-init claude-jira --site https://acme.atlassian.net --key PROJ --board "My Board"
+  task-init claude-jira --local-only   # nothing task-force reaches the repo's branches
 EOF
   exit 0
 }

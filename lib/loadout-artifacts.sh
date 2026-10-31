@@ -87,6 +87,10 @@ LA_AW_ROOT="$(dirname "$_LA_LIB_DIR")"
 # keeps the two from disagreeing about which file is even in play.
 # shellcheck source=lib/ci-guard.sh
 . "$_LA_LIB_DIR/ci-guard.sh"
+# For tf_local_only — a local-only install (#327) keeps its import line and hooks
+# in CLAUDE.local.md / settings.local.json, which the walk then takes out too.
+# shellcheck source=lib/local-only.sh
+. "$_LA_LIB_DIR/local-only.sh"
 
 # The role files task-init installs. Enumerated by name rather than globbed:
 # `.claude/commands/` and `.kiro/agents/` are shared directories, and a command
@@ -623,14 +627,29 @@ _la_walk() {
 
   # CLAUDE.md and settings.json are claude-side only; kiro's task-init never
   # touches either.
+  # A local-only install (#327) wrote CLAUDE.local.md and settings.local.json
+  # instead; they are walked only then, since on a normal install
+  # settings.local.json holds nothing of ours and is Claude Code's own record of
+  # the permissions approved in this checkout.
   if [[ "$assistant" == claude ]]; then
-    if _la_strip_line "$root" CLAUDE.md "@.claude/$tracker-workflow.md" "$mode" \
-         "@.claude/$tracker-workflow.md import"; then
-      removed+="CLAUDE.md"$'\n'
+    local claude_md settings
+    claude_md=(CLAUDE.md)
+    settings=(.claude/settings.json)
+    if tf_local_only "$root"; then
+      claude_md+=(CLAUDE.local.md)
+      settings+=(.claude/settings.local.json)
     fi
-    if _la_strip_settings "$root" "$loadout" "$mode"; then
-      removed+=".claude/settings.json"$'\n'
-    fi
+    for rel in "${claude_md[@]}"; do
+      if _la_strip_line "$root" "$rel" "@.claude/$tracker-workflow.md" "$mode" \
+           "@.claude/$tracker-workflow.md import"; then
+        removed+="$rel"$'\n'
+      fi
+    done
+    for rel in "${settings[@]}"; do
+      if _la_strip_settings "$root" "$loadout" "$mode" "$rel"; then
+        removed+="$rel"$'\n'
+      fi
+    done
   fi
 
   # The *-local loadouts also append .git/task-force/ to .gitignore, on both
@@ -689,13 +708,14 @@ _la_strip_line() {
 }
 
 # Strip the radio hook entries and the seeded allow-list literals from
-# .claude/settings.json. Radio entries are identified the same way task-init's
+# .claude/settings.json (or the <rel> given: settings.local.json on a local-only
+# install). Radio entries are identified the same way task-init's
 # merge recognises its own work — `(.command // "") | startswith("radio ")` —
 # so a hook of the user's own on the same event survives. Returns 0 only when
 # the whole file goes, as above.
 _la_strip_settings() {
-  local root="$1" loadout="$2" mode="$3"
-  local f="$root/.claude/settings.json" rel=".claude/settings.json"
+  local root="$1" loadout="$2" mode="$3" rel="${4:-.claude/settings.json}"
+  local f="$root/$rel"
   [[ -f "$f" ]] || return 1
   if ! command -v jq >/dev/null 2>&1; then
     echo "Warning: jq not found — leaving $rel alone; remove its radio hooks by hand" >&2

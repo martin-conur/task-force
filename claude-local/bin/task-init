@@ -30,12 +30,21 @@ The workflow doc is written between <!-- task-init:managed:start --> and
 anything you add below the end marker survives --force. A doc predating those
 markers is backed up to <doc>.bak before the markers are added.
 
+Local-only install (#327) — nothing task-force reaches the repo's branches:
+  --local-only     Write hooks + allow-list to .claude/settings.local.json and
+                   the import to CLAUDE.local.md, list every written path in
+                   .git/info/exclude, and record git config task-force.install.
+                   Sticky: once recorded, every re-run installs local-only.
+                   task-work / task-reviewer / task-recreate-worker copy the
+                   untracked set into each worktree they open.
+
 --force and --restore are mutually exclusive.
 EOF
   exit 1
 }
 
 FORCE=false
+LOCAL_ONLY=false
 RESTORE=false
 SCOPE="all"
 
@@ -43,6 +52,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)    FORCE=true; shift;;
     --restore)  RESTORE=true; shift;;
+    --local-only) LOCAL_ONLY=true; shift;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
     --hooks)    SCOPE="hooks"; shift;;
@@ -102,6 +112,36 @@ CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 GITIGNORE="$REPO_ROOT/.gitignore"
 TASKS_DIR="$REPO_ROOT/tasks"
 
+# region:local-only-setup
+# A local-only install (#327) writes the same artifacts untracked: the hooks into
+# .claude/settings.local.json, the import into CLAUDE.local.md, and every path
+# listed in .git/info/exclude. Sticky through git config, so a re-run or a
+# task-config switch cannot drift back to tracked files. See lib/local-only.sh.
+# Recorded before anything is written, so an interrupted run leaves no file
+# showing in git status.
+# shellcheck source=lib/local-only.sh
+. "$LIB_DIR/local-only.sh"
+SETTINGS_FILE="$REPO_ROOT/.claude/settings.json"
+if [[ "$LOCAL_ONLY" == true ]] || tf_local_only "$REPO_ROOT"; then
+  LOCAL_ONLY=true
+  SETTINGS_FILE="$REPO_ROOT/.claude/settings.local.json"
+  CLAUDE_MD="$REPO_ROOT/CLAUDE.local.md"
+  LOCAL_ONLY_PATTERNS=()
+  while IFS= read -r _pat; do LOCAL_ONLY_PATTERNS+=("$_pat"); done \
+    < <(tf_local_only_patterns "$(basename "$(dirname "$SCRIPT_DIR")")")
+  _tracked=$(tf_local_only_tracked "$REPO_ROOT" "${LOCAL_ONLY_PATTERNS[@]}")
+  if [[ -n "$_tracked" ]]; then
+    {
+      echo "Error: a local-only install cannot write these — git already tracks them:"
+      while IFS= read -r _t; do echo "         $_t"; done <<<"$_tracked"
+      echo "       Excluding a tracked file does nothing, so writing it would change the repo."
+    } >&2
+    exit 1
+  fi
+  tf_local_only_record "$REPO_ROOT" "${LOCAL_ONLY_PATTERNS[@]}"
+fi
+# endregion:local-only-setup
+
 mkdir -p "$REPO_ROOT/.claude"
 
 # The local template has no placeholders — just install the raw template.
@@ -111,14 +151,14 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   IMPORT_LINE="@.claude/local-workflow.md"
   if [[ -f "$CLAUDE_MD" ]]; then
     if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
-      echo "✓ CLAUDE.md already references local-workflow.md"
+      echo "✓ $(basename "$CLAUDE_MD") already references local-workflow.md"
     else
       printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
-      echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
+      echo "✓ Appended $IMPORT_LINE to $(basename "$CLAUDE_MD")"
     fi
   else
     printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
-    echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+    echo "✓ Created $(basename "$CLAUDE_MD") with $IMPORT_LINE"
   fi
 fi
 
@@ -214,9 +254,12 @@ EOF
     echo "✓ $BOARD already exists — left alone"
   fi
 
-  # Ensure .git/task-force/ is gitignored
+  # Ensure .git/task-force/ is gitignored. Not on a local-only install (#327):
+  # .gitignore is tracked, and the line would be the one change it exists to avoid.
   IGNORE_LINE=".git/task-force/"
-  if [[ -f "$GITIGNORE" ]]; then
+  if [[ "$LOCAL_ONLY" == true ]]; then
+    :
+  elif [[ -f "$GITIGNORE" ]]; then
     if grep -qxF "$IGNORE_LINE" "$GITIGNORE"; then
       echo "✓ .gitignore already excludes $IGNORE_LINE"
     else
@@ -247,7 +290,7 @@ fi
 # local-only IPC with no external blast radius, so agent-initiated radio calls
 # are auto-allowed to keep PM↔worker coordination from prompting.
 _radio_install_hooks() {
-  local settings_file="$REPO_ROOT/.claude/settings.json"
+  local settings_file="$SETTINGS_FILE"
   local loadout="claude-local"
 
 # region:require-jq-call

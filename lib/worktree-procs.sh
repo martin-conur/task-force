@@ -46,8 +46,6 @@ _aw_proc_table() {
 # process and per descendant of one, minus the self pid's agent tree.
 _aw_proc_candidates() {
   awk -v self="$1" '
-    function base(w) { sub(/.*\//, "", w); return w }
-    function agent_word(w) { w = base(w); return w == "claude" || w ~ /^kiro-cli/ }
     # Judged by what runs, not by any word on the line, so `less docs/claude`
     # is not an agent. Three shapes are: the binary itself (claude,
     # kiro-cli-chat); a bun or node launcher whose script is one (node …/claude,
@@ -56,7 +54,11 @@ _aw_proc_candidates() {
     # it is the outermost agent above the caller, so the self exclusion below
     # drops it, and a stray tab leaves one behind with the rest. A shell -c
     # running `less docs/claude` still counts; the listing shows it, and
-    # --kill-stale asks before it signals.
+    # --kill-stale asks before it signals. bin/radio asks the same question of
+    # its own ancestors (#336), hence the drift-checked region.
+# region:agent-proc-match
+    function base(w) { sub(/.*\//, "", w); return w }
+    function agent_word(w) { w = base(w); return w == "claude" || w ~ /^kiro-cli/ }
     function is_agent(i, a0, s) {
       a0 = base($8)
       if (agent_word(a0)) return 1
@@ -69,6 +71,7 @@ _aw_proc_candidates() {
       }
       return 0
     }
+# endregion:agent-proc-match
     {
       pid = $1; ppid[pid] = $2
       start[pid] = $3 " " $4 " " $5 " " $6 " " $7

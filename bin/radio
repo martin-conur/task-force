@@ -576,19 +576,82 @@ _zellij_tab_id_by_name() {
       ' 2>/dev/null
 }
 
-# Pick a writable pane on the given tab. Prefer the tab's own focused pane
-# (where the user's keyboard sits when they switch over); fall back to any
-# non-plugin pane on that tab. Empty stdout means "no usable pane" — caller
-# must skip rather than write to the focused tab's pane by accident (#102).
+# Pick a writable pane on the given tab, printed as `<pane-id> <src>`. The
+# optional second argument is the agent's own pane as `register` recorded it
+# (PANE_ID=, #336): it wins, src=recorded, only while zellij still lists it as a
+# terminal (not plugin) pane on THIS tab. Pane ids are reused after a zellij
+# restart, and the tab check is what catches a recycled one. Otherwise, as
+# before #336, prefer the tab's own focused pane (where the user's keyboard sits
+# when they switch over), falling back to any non-plugin pane on that tab,
+# src=focused. The focused pane is only the agent's while the agent is alone in
+# its tab: a task-watch, task-monitor or shell pane beside it swallows the wake.
+# Empty stdout means "no usable pane" — caller must skip rather than write to
+# the focused tab's pane by accident (#102).
 _zellij_pane_in_tab() {
-  local target="$1"
+  local target="$1" want="${2:-}"
   case "$target" in *[!0-9]*|"") return 0 ;; esac
+  case "$want" in *[!0-9]*|"") want=-1 ;; esac
   command -v jq >/dev/null 2>&1 || return 0
   zellij action list-panes --json --tab 2>/dev/null \
-    | jq -r --argjson t "$target" '
-        [.[] | select(.tab_id == $t and (.is_plugin // false) == false)]
-        | (map(select(.is_focused == true))[0] // .[0]) | .id // empty
+    | jq -r --argjson t "$target" --argjson w "$want" '
+        [.[] | select(.tab_id == $t and (.is_plugin // false) == false)] as $p
+        | ($p | map(select(.id == $w))[0]) as $r
+        | if $r then "\($r.id) recorded"
+          else ($p | (map(select(.is_focused == true))[0] // .[0]))
+               | if . then "\(.id) focused" else empty end
+          end
       ' 2>/dev/null
+}
+
+# The pane this process runs in, from the ZELLIJ_PANE_ID zellij exports into
+# every terminal pane (#336). A hook inherits it from its agent, so this is the
+# agent's own pane. Bare number on stdout; empty outside zellij or when the
+# value is not a terminal pane id. zellij spells a terminal pane `N` or
+# `terminal_N`, and `write-chars --pane-id N` means the terminal one.
+_env_pane_id() {
+  [[ -n "${ZELLIJ:-}" ]] || return 0
+  local p="${ZELLIJ_PANE_ID:-}"
+  p="${p#terminal_}"
+  case "$p" in *[!0-9]*|"") return 0 ;; esac
+  printf '%s' "$p"
+}
+
+# Exit 0 when this process runs beneath an agent: claude or kiro-cli, or the
+# launcher or `bash -c` wrapper running one (#336). A hand repair typed in the
+# agent's own pane (claude's `!` prefix) passes; one typed in a shell pane
+# beside it does not, and must not record that shell's ZELLIJ_PANE_ID as the
+# agent's. Same judgement, byte for byte, as lib/worktree-procs.sh's scan for
+# stray agents (#305), drift-checked. TASK_FORCE_NO_PROC_SCAN=1 answers "no";
+# AW_PROC_SELF_PID names the pid to start from (default this shell).
+_under_agent_process() {
+  [[ "${TASK_FORCE_NO_PROC_SCAN:-}" != 1 ]] || return 1
+  { ps -A -o pid= -o ppid= -o lstart= -o command= 2>/dev/null || true; } \
+    | awk -v self="${AW_PROC_SELF_PID:-$$}" '
+# region:agent-proc-match
+    function base(w) { sub(/.*\//, "", w); return w }
+    function agent_word(w) { w = base(w); return w == "claude" || w ~ /^kiro-cli/ }
+    function is_agent(i, a0, s) {
+      a0 = base($8)
+      if (agent_word(a0)) return 1
+      if (a0 == "bun" || a0 == "node") {
+        for (i = 9; i <= NF; i++) if ($i !~ /^-/) break
+        return i <= NF && (agent_word($i) || $i ~ /kiro-cli/)
+      }
+      if (a0 ~ /^-?(bash|sh|zsh|dash)$/ && $9 ~ /^-[a-zA-Z]*c[a-zA-Z]*$/) {
+        for (i = 10; i <= NF; i++) if (agent_word($i)) return 1
+      }
+      return 0
+    }
+# endregion:agent-proc-match
+    { ppid[$1] = $2; if (is_agent()) agent[$1] = 1 }
+    END {
+      for (p = self; p != "" && p != "0" && !(p in seen); p = ppid[p]) {
+        seen[p] = 1
+        if (p in agent) exit 0
+        if (!(p in ppid)) break
+      }
+      exit 1
+    }'
 }
 
 # Resolve the visible name of the zellij tab that currently holds a given
@@ -956,6 +1019,11 @@ _ensure_session_file() {
     # `&&` so the brace group exits 0 when the flag is absent — otherwise
     # pipefail would surface a stray exit-1 through `| _atomic_write` and
     # `set -e` would abort the re-seed.
+    # The agent's pane (#336): a re-seed runs from the agent's own hooks, like
+    # register, so the ZELLIJ_PANE_ID it inherits is the one to wake.
+    if [[ -n "$(_env_pane_id)" ]]; then
+      printf 'PANE_ID=%s\n' "$(_env_pane_id)"
+    fi
     if [[ -n "$(_resolve_auto_submit "$TASK_FORCE_ROLE")" ]]; then
       printf 'AUTO_SUBMIT=1\n'
     fi
@@ -1421,6 +1489,28 @@ cmd_register() {
     fi
   fi
 
+  # The agent's own pane (#336). A hook runs inside the agent, so the
+  # ZELLIJ_PANE_ID it inherits is the agent's pane, and cmd_send wakes that pane
+  # instead of whichever one has the tab's focus. A hand repair is different:
+  # typed in a shell pane beside the agent, it would record the shell. So an
+  # explicit repair records its pane only from beneath an agent process (claude's
+  # `!`); otherwise it keeps the PANE_ID already on file while the tab binding is
+  # unchanged. A recorded id that has gone stale is caught at send time.
+  local pane_id="" pane_id_src=none
+  pane_id=$(_env_pane_id)
+  if [[ -n "$pane_id" ]]; then
+    pane_id_src="env"
+    if (( explicit_repair )) && ! _under_agent_process; then
+      _log "register: ZELLIJ_PANE_ID=$pane_id is not the agent's pane (repair run outside the agent) — not recording it for $role"
+      pane_id="" pane_id_src=none
+    fi
+  fi
+  if [[ -z "$pane_id" && -f "$f" ]] \
+       && [[ "$(_session_field "$f" TAB_ID || true)" == "$tab_id" ]]; then
+    pane_id=$(_session_field "$f" PANE_ID || true)
+    [[ -z "$pane_id" ]] || pane_id_src=session-preserved
+  fi
+
   # Persist the loadout and agent sidecars BEFORE the session file (#150
   # round-2 review: Finding 1; extended for AGENT in #151). If the process is
   # killed (OOM, task-done --force, host shutdown) between these writes, the
@@ -1469,6 +1559,9 @@ cmd_register() {
     if [[ -n "$auto_submit" ]]; then
       printf 'AUTO_SUBMIT=1\n'
     fi
+    if [[ -n "$pane_id" ]]; then
+      printf 'PANE_ID=%s\n' "$pane_id"
+    fi
   } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
@@ -1483,7 +1576,7 @@ cmd_register() {
     _reseed_aliases "$role"
   fi
 
-  _log "register role=$role tab=$tab tab_id=$tab_id tab_id_src=$tab_id_src agent=$agent loadout=$loadout repo_name=$repo_name"
+  _log "register role=$role tab=$tab tab_id=$tab_id tab_id_src=$tab_id_src pane_id=$pane_id pane_id_src=$pane_id_src agent=$agent loadout=$loadout repo_name=$repo_name"
   # Same distinct, greppable line the re-seed path emits (#188): an empty
   # TAB_ID is the only outcome that leaves the role unwakeable, so it must not
   # hide inside the generic register line.
@@ -2582,7 +2675,15 @@ cmd_send() {
     _repair_tab_binding "$rs" "$rtab_id"
     _log "send: $to recovered stale tab id by name → tab_id=$rtab_id (id=$id)"
   fi
-  rpane_id=$(_zellij_pane_in_tab "$rtab_id")
+  # The agent's own pane when register recorded one and zellij still has it on
+  # this tab (#336), else the tab's focused pane as before.
+  local rec_pane rpane rpane_src
+  rec_pane=$(_session_field "$rs" PANE_ID || true)
+  rpane=$(_zellij_pane_in_tab "$rtab_id" "$rec_pane")
+  rpane_id="${rpane%% *}" rpane_src="${rpane#* }"
+  if [[ -n "$rec_pane" && -n "$rpane_id" && "$rpane_src" != recorded ]]; then
+    _log "send: recorded PANE_ID=$rec_pane for $to is gone, a plugin pane, or not on tab_id=$rtab_id — falling back to the focused pane $rpane_id (id=$id)"
+  fi
   if [[ -z "$rpane_id" ]]; then
     _log "send: no writable pane on tab_id=$rtab_id for $to — queued (id=$id)"
     _send_outcome_wake_failed "$to" "no writable pane on its tab" "$ragent"
@@ -2614,7 +2715,7 @@ cmd_send() {
     _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"
     _send_outcome_wake_failed "$to" "write-chars failed" "$ragent"
     return 0; }
-  _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (id=$id)"
+  _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (src=$rpane_src) (id=$id)"
   printf 'radio: delivered — woke %s (tab_id=%s)\n' "$to" "$rtab_id"
 }
 

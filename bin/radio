@@ -39,6 +39,11 @@ Usage:
                                          payload names a real-exit reason; --manual
                                          (alias --force) is the explicit opt-in used by
                                          task-done
+  radio clear --to ROLE                  set ROLE's one-shot rotation marker and type /clear
+                                         into its agent's pane (task-watch's PM rotation,
+                                         #334): the re-register that follows prints the
+                                         board digest and handoff note. claude, idle and
+                                         auto-submitting roles only
   radio orphans                          list session files with stale (>1h) heartbeat
   radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
                                          messages (default N=14) and rotate the log.
@@ -446,6 +451,20 @@ _read_hook_payload() {
   if [[ ! -t 0 ]]; then
     HOOK_PAYLOAD=$(cat 2>/dev/null || true)
   fi
+}
+
+# cmd_register's reader: the same, bounded. Hooks pipe one JSON line and close
+# stdin, but register is also typed by hand and run by tests, where stdin can
+# be a pipe nobody writes to.
+_read_register_payload() {
+  HOOK_PAYLOAD=""
+  [[ -t 0 ]] && return 0
+  local line=""
+  while IFS= read -r -t 2 line || [[ -n "$line" ]]; do
+    HOOK_PAYLOAD+="$line"$'\n'
+    line=""
+  done
+  return 0
 }
 
 _hook_payload_field() {
@@ -1420,6 +1439,27 @@ cmd_register() {
   local fresh=1
   [[ -f "$f" && -z "$existing_alias" ]] && fresh=0
 
+  # The Claude session behind this register (#334): the SessionStart payload on
+  # stdin names it and its transcript, which is where task-watch reads the PM's
+  # context size. A `/clear` starts a new session, so a payload always wins; a
+  # register with none (a hand repair, kiro) keeps what the file had while the
+  # file is this role's own. Read with a timeout, so a register run with an
+  # open, silent stdin cannot hang.
+  local session_id="" transcript=""
+  _read_register_payload
+  session_id=$(_hook_payload_field session_id)
+  transcript=$(_hook_payload_field transcript_path)
+  if [[ -z "$session_id" && -f "$f" && -z "$existing_alias" ]]; then
+    session_id=$(_session_field "$f" SESSION_ID || true)
+    transcript=$(_session_field "$f" TRANSCRIPT || true)
+  fi
+  # When this role last came online (#334): stamped by a fresh register and kept
+  # by every re-register, so task-watch tells a new PM from a `/clear` of the
+  # one it is tracking.
+  local registered_at=""
+  (( fresh == 1 )) || registered_at=$(_session_field "$f" REGISTERED_AT || true)
+  [[ -n "$registered_at" ]] || registered_at=$(_now)
+
   # Basename-collision warning (#165): the repo basename IS the PM's identity
   # (role = pm-<reponame>), so two different repos with the same basename
   # (…/a/api and …/b/api) would silently share one pm-api mailbox and address.
@@ -1562,6 +1602,10 @@ cmd_register() {
     if [[ -n "$pane_id" ]]; then
       printf 'PANE_ID=%s\n' "$pane_id"
     fi
+    printf 'REGISTERED_AT=%s\n' "$registered_at"
+    if [[ -n "$session_id" ]]; then
+      printf 'SESSION_ID=%s\nTRANSCRIPT=%s\n' "$session_id" "$transcript"
+    fi
   } | _atomic_write "$f"
 
   mkdir -p "$(_inbox_dir "$role")" "$(_processed_dir "$role")"
@@ -1576,7 +1620,7 @@ cmd_register() {
     _reseed_aliases "$role"
   fi
 
-  _log "register role=$role tab=$tab tab_id=$tab_id tab_id_src=$tab_id_src pane_id=$pane_id pane_id_src=$pane_id_src agent=$agent loadout=$loadout repo_name=$repo_name"
+  _log "register role=$role tab=$tab tab_id=$tab_id tab_id_src=$tab_id_src pane_id=$pane_id pane_id_src=$pane_id_src agent=$agent loadout=$loadout repo_name=$repo_name session_id=$session_id"
   # Same distinct, greppable line the re-seed path emits (#188): an empty
   # TAB_ID is the only outcome that leaves the role unwakeable, so it must not
   # hide inside the generic register line.
@@ -1724,7 +1768,17 @@ cmd_register() {
   # what lets a PM taking over from the other assistant start with the picture
   # task-monitor already has instead of spending tokens re-reading the
   # tracker. PM roles only.
+  # A rotation (#334) is the one re-register that prints it too: task-watch set
+  # the marker just before it typed `/clear`, and the digest carries the handoff
+  # note the outgoing PM wrote for this one. One-shot: consumed here either way.
+  local marker
+  marker=$(_rotate_marker "$role")
   if (( fresh == 1 )) && [[ -z "$existing_alias" && "$role" == pm-* ]]; then
+    _print_board_digest "$role" "$repo" || true
+    rm -f "$marker"
+  elif [[ -f "$marker" && -z "$existing_alias" && "$role" == pm-* ]]; then
+    rm -f "$marker"
+    _log "register: rotation marker consumed, printing the board digest and handoff note role=$role"
     _print_board_digest "$role" "$repo" || true
   fi
 }
@@ -2597,9 +2651,8 @@ cmd_send() {
     printf 'radio: WARNING — no session for %s; message queued but nobody is listening. Verify the role name (ls ~/.task-force/radio/sessions/) or start the recipient.\n' "$to"
     return 0
   fi
-  local rstate rtab ragent
+  local rstate ragent
   rstate=$(_session_field "$rs" STATE || true)
-  rtab=$(_session_field "$rs" TAB || true)
   ragent=$(_session_field "$rs" AGENT || true)
   if [[ "$rstate" != "idle" ]]; then
     # Dead-but-non-idle: a crashed tab leaves STATE=busy/awaiting forever (the
@@ -2637,58 +2690,11 @@ cmd_send() {
   # transient wake miss, not a "nobody home" — the message surfaces on the
   # recipient's next prompt-hook / register (or, for kiro, its next self-driven
   # `radio check`). Report the reason honestly.
-  if [[ -z "${ZELLIJ:-}" ]]; then
-    _log "send: \$ZELLIJ unset — skipping zellij wake (id=$id)"
-    _send_outcome_wake_failed "$to" "sender is not in a zellij session" "$ragent"
+  if ! _resolve_wake_pane "$rs" "$to" send "queued (id=$id)"; then
+    _send_outcome_wake_failed "$to" "$WAKE_FAIL" "$ragent"
     return 0
   fi
-  if [[ -z "$rtab" ]]; then
-    _log "send: $to has no TAB — queued (id=$id)"
-    _send_outcome_wake_failed "$to" "recipient has no tab" "$ragent"
-    return 0
-  fi
-  # Wake-up via per-pane targeting (#102): write to a pane on the recipient's
-  # own tab, never the focused tab. The tab address comes from _live_tab_id
-  # (#167), which trusts the recorded TAB_ID only when the tab still at that id
-  # still bears the recipient's bare name — so a TAB_ID that outlived a zellij
-  # restart, or belongs to a sibling server, can't misdeliver "radio check"
-  # into an unrelated pane. An empty recorded TAB_ID means the recipient
-  # registered in a non-zellij context — nothing to wake, queue and move on.
-  local rtab_id rpane_id rc
-  rtab_id=$(_session_field "$rs" TAB_ID || true)
-  if [[ -z "$rtab_id" ]]; then
-    _log "send: $to has no TAB_ID (not zellij-registered?) — queued (id=$id)"
-    _send_outcome_wake_failed "$to" "not zellij-registered" "$ragent"
-    return 0
-  fi
-  # rc capture guarded against set -e (non-zero rc 1/3 from _live_tab_id).
-  rc=0
-  rtab_id=$(_live_tab_id "$rs" "$(_strip_tab_prefix "$rtab")") || rc=$?
-  if [[ "$rc" -eq 1 || -z "$rtab_id" ]]; then
-    _log "send: $to tab id unresolved — stale/gone or owner alive in another zellij server — queued (id=$id)"
-    _send_outcome_wake_failed "$to" "stale or unreachable tab" "$ragent"
-    return 0
-  fi
-  # Recovered a fresh id by name (recorded id was stale/gone) — repair the file
-  # so subsequent sends are id-driven again (#167).
-  if [[ "$rc" -eq 3 ]]; then
-    _repair_tab_binding "$rs" "$rtab_id"
-    _log "send: $to recovered stale tab id by name → tab_id=$rtab_id (id=$id)"
-  fi
-  # The agent's own pane when register recorded one and zellij still has it on
-  # this tab (#336), else the tab's focused pane as before.
-  local rec_pane rpane rpane_src
-  rec_pane=$(_session_field "$rs" PANE_ID || true)
-  rpane=$(_zellij_pane_in_tab "$rtab_id" "$rec_pane")
-  rpane_id="${rpane%% *}" rpane_src="${rpane#* }"
-  if [[ -n "$rec_pane" && -n "$rpane_id" && "$rpane_src" != recorded ]]; then
-    _log "send: recorded PANE_ID=$rec_pane for $to is gone, a plugin pane, or not on tab_id=$rtab_id — falling back to the focused pane $rpane_id (id=$id)"
-  fi
-  if [[ -z "$rpane_id" ]]; then
-    _log "send: no writable pane on tab_id=$rtab_id for $to — queued (id=$id)"
-    _send_outcome_wake_failed "$to" "no writable pane on its tab" "$ragent"
-    return 0
-  fi
+  local rtab_id="$WAKE_TAB_ID" rpane_id="$WAKE_PANE_ID" rpane_src="$WAKE_PANE_SRC"
   # Only ever write the literal string "radio check<term>" — never the message
   # body or any caller-supplied data. `zellij write-chars` injects directly
   # into the recipient's TUI input buffer; writing anything else risks
@@ -2717,6 +2723,126 @@ cmd_send() {
     return 0; }
   _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (src=$rpane_src) (id=$id)"
   printf 'radio: delivered — woke %s (tab_id=%s)\n' "$to" "$rtab_id"
+}
+
+# The pane a write into <role>'s agent goes to: the wake's path, shared by
+# cmd_send and cmd_clear. Per-pane targeting (#102): a pane on the recipient's
+# own tab, never the focused tab. The tab address comes from _live_tab_id
+# (#167), which trusts the recorded TAB_ID only when the tab still at that id
+# still bears the recipient's bare name — so a TAB_ID that outlived a zellij
+# restart, or belongs to a sibling server, can't misdeliver into an unrelated
+# pane. Then the agent's own pane when register recorded one and zellij still
+# has it on that tab (#336), else the tab's focused pane.
+#
+# _resolve_wake_pane <session file> <role> <log prefix> <log tail>: sets
+# WAKE_TAB_ID, WAKE_PANE_ID and WAKE_PANE_SRC (recorded|focused). On failure it
+# logs, sets WAKE_FAIL to the reason in the words _send_outcome_wake_failed
+# uses, and returns 1.
+_resolve_wake_pane() {
+  local rs="$1" to="$2" pfx="$3" tail="$4" rtab rtab_id rc rec_pane rpane
+  WAKE_TAB_ID="" WAKE_PANE_ID="" WAKE_PANE_SRC="" WAKE_FAIL=""
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    _log "$pfx: \$ZELLIJ unset — skipping zellij wake ${tail#queued }"
+    WAKE_FAIL="sender is not in a zellij session"
+    return 1
+  fi
+  rtab=$(_session_field "$rs" TAB || true)
+  if [[ -z "$rtab" ]]; then
+    _log "$pfx: $to has no TAB — $tail"
+    WAKE_FAIL="recipient has no tab"
+    return 1
+  fi
+  # An empty recorded TAB_ID means the recipient registered in a non-zellij
+  # context — nothing to write to.
+  rtab_id=$(_session_field "$rs" TAB_ID || true)
+  if [[ -z "$rtab_id" ]]; then
+    _log "$pfx: $to has no TAB_ID (not zellij-registered?) — $tail"
+    WAKE_FAIL="not zellij-registered"
+    return 1
+  fi
+  # rc capture guarded against set -e (non-zero rc 1/3 from _live_tab_id).
+  rc=0
+  rtab_id=$(_live_tab_id "$rs" "$(_strip_tab_prefix "$rtab")") || rc=$?
+  if [[ "$rc" -eq 1 || -z "$rtab_id" ]]; then
+    _log "$pfx: $to tab id unresolved — stale/gone or owner alive in another zellij server — $tail"
+    WAKE_FAIL="stale or unreachable tab"
+    return 1
+  fi
+  # Recovered a fresh id by name (recorded id was stale/gone) — repair the file
+  # so subsequent writes are id-driven again (#167).
+  if [[ "$rc" -eq 3 ]]; then
+    _repair_tab_binding "$rs" "$rtab_id"
+    _log "$pfx: $to recovered stale tab id by name → tab_id=$rtab_id ${tail#queued }"
+  fi
+  rec_pane=$(_session_field "$rs" PANE_ID || true)
+  rpane=$(_zellij_pane_in_tab "$rtab_id" "$rec_pane")
+  WAKE_PANE_ID="${rpane%% *}" WAKE_PANE_SRC="${rpane#* }"
+  if [[ -n "$rec_pane" && -n "$WAKE_PANE_ID" && "$WAKE_PANE_SRC" != recorded ]]; then
+    _log "$pfx: recorded PANE_ID=$rec_pane for $to is gone, a plugin pane, or not on tab_id=$rtab_id — falling back to the focused pane $WAKE_PANE_ID ${tail#queued }"
+  fi
+  if [[ -z "$WAKE_PANE_ID" ]]; then
+    _log "$pfx: no writable pane on tab_id=$rtab_id for $to — $tail"
+    WAKE_FAIL="no writable pane on its tab"
+    return 1
+  fi
+  WAKE_TAB_ID="$rtab_id"
+}
+
+# The one-shot rotation marker (#334): task-watch sets it, through cmd_clear,
+# just before it types `/clear` into a PM. The `/clear` re-register is not
+# fresh, so on its own it prints neither the board digest nor the handoff note;
+# with the marker it prints both, once, and removes it.
+_rotate_marker() { printf '%s/%s.rotate' "$SESSIONS_DIR" "$1"; }
+
+# radio clear --to ROLE (#334): set ROLE's rotation marker, then type `/clear`
+# into its agent's pane, down the same path a wake takes. task-watch's PM
+# rotation is the caller, after the PM has written its handoff note. Refuses a
+# role that is not claude (kiro has no `/clear` that was checked), not idle, or
+# not auto-submitting: without AUTO_SUBMIT the box belongs to a person, and a
+# `/clear` typed into it would land on top of whatever they had half-typed.
+# Exit 0 once the write landed; 1, with the reason on stderr, otherwise, and
+# then the marker is gone again.
+cmd_clear() {
+  local to=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --to) [[ $# -ge 2 ]] || { echo "clear: --to needs a value" >&2; exit 2; }
+            to="$2"; shift 2 ;;
+      *) echo "clear: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ -n "$to" ]] || { echo "clear: --to required" >&2; exit 2; }
+  _validate_role "$to" || exit 2
+  local rs why=""
+  rs=$(_session_file "$to")
+  if [[ ! -f "$rs" ]]; then
+    why="no session"
+  elif [[ "$(_session_field "$rs" AGENT || echo claude)" != claude ]]; then
+    why="agent is $(_session_field "$rs" AGENT), not claude"
+  elif [[ "$(_session_field "$rs" STATE || true)" != idle ]]; then
+    why="not idle (state=$(_session_field "$rs" STATE || true))"
+  elif [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" != 1 ]]; then
+    why="not auto-submitting"
+  fi
+  if [[ -z "$why" ]] && ! _resolve_wake_pane "$rs" "$to" clear "not cleared"; then
+    why="$WAKE_FAIL"
+  fi
+  if [[ -n "$why" ]]; then
+    _log "clear: refused for $to: $why"
+    printf 'radio: not clearing %s: %s\n' "$to" "$why" >&2
+    return 1
+  fi
+  local marker
+  marker=$(_rotate_marker "$to")
+  printf '%s\n' "$(_now)" | _atomic_write "$marker"
+  if ! zellij action write-chars --pane-id "$WAKE_PANE_ID" $'/clear\r' >/dev/null 2>&1; then
+    rm -f "$marker"
+    _log "clear: write-chars failed for $to (pane=$WAKE_PANE_ID)"
+    printf 'radio: not clearing %s: write-chars failed\n' "$to" >&2
+    return 1
+  fi
+  _log "clear: typed /clear into $to via tab_id=$WAKE_TAB_ID pane=$WAKE_PANE_ID (src=$WAKE_PANE_SRC), rotation marker set"
+  printf 'radio: cleared %s (tab_id=%s)\n' "$to" "$WAKE_TAB_ID"
 }
 
 cmd_check() {
@@ -3166,6 +3292,7 @@ case "$sub" in
   stop-hook)   cmd_stop_hook ;;
   prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister "$@" ;;
+  clear)       cmd_clear "$@" ;;
   orphans)     cmd_orphans ;;
   gc)          cmd_gc "$@" ;;
   -h|--help)   usage 0 ;;

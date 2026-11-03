@@ -510,6 +510,8 @@ role transition runs through it. The PM / planner / worker agents shell out to
 | Reviewer | review done, blockers/nits posted | `radio send --to pm --intent review-complete-with-findings --pr <N>`             |
 | Watcher  | Jira bug claimed (claude-jira)    | `radio send --to pm --intent ticket-filed --issue <KEY-N>`                       |
 | Watcher  | `acli` failed; watcher stopped    | `radio send --to pm --intent watch-stopped`                                      |
+| Watcher  | PM rotation due (claude-jira)     | `radio send --to pm --intent handoff-requested`                                  |
+| PM       | handoff note written              | `radio send --to watch-<reponame> --intent handoff-done`                         |
 
 When a worker finishes its task and has nothing pending, the `radio ready` step
 runs automatically via the `agentStop` hook — you don't need to invoke it

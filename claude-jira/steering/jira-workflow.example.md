@@ -164,6 +164,45 @@ minus claimed and failed tickets, oldest first; a custom one is used as written
 - **Watch pending timeout minutes**: `120`
 - **Watch bounce cap**: `3`
 
+**PM rotation** (#334). An autonomous PM's context fills with every triage,
+spec and verdict; past a point it is noise. So the watcher recycles the PM,
+in shell, with no model tokens, when one of three caps is crossed (`0` turns
+one off): **Watch rotate context tokens** (the last assistant turn's input +
+cache-read + cache-creation tokens, read from the transcript radio recorded
+at register), **Watch rotate tickets** (`ticket-filed` handed to this PM) and
+**Watch rotate age minutes**. It also rotates before handing over a ticket
+from a different **group** than the PM's: a ticket's group is its parent epic,
+else its first label matching **Watch group labels** (globs allowed, `none`
+by default), else none. The PM's group is the group of the first grouped
+ticket it took; an ungrouped ticket never sets or triggers a group rotation.
+
+- **Quiet point only.** The PM idle, its inbox empty, and no merge gate
+  pending (no reviewer of this repo still running). Otherwise the log says
+  `watch: rotation deferred (<why>)`, once per reason.
+- **Groups stay together.** While tickets handed to this PM in its own group
+  are in flight, a tickets, age or group rotation waits, and a ticket from
+  another group waits unclaimed. The context cap does not wait for them.
+- **Sequence.** The watcher radios the PM `handoff-requested` and holds the
+  queue. The PM writes `task-monitor-queue handoff write` and replies
+  `handoff-done` to `watch-<reponame>`. Once both are in and the PM is idle,
+  `radio clear` sets a one-shot rotation marker and types `/clear` into the
+  PM's pane, down the path a wake takes; the `/clear` re-register then prints
+  the board digest and the handoff note, which a re-register otherwise never
+  does. Log: `watch: rotate pm-<repo> reason=<context|tickets|age|group> (…)`.
+  A group rotation happens before the new group's `ticket-filed` is sent.
+- **Never without a note.** No `handoff-done` with a note newer than the
+  request within **Watch handoff timeout minutes**: logged, and retried at the
+  next quiet point.
+- **claude, auto-submitting PMs only.** A kiro PM (no `/clear` was checked)
+  or one launched without `task-pm --auto-submit` (its prompt box is yours) is
+  never rotated; the log says so once per PM.
+
+- **Watch rotate context tokens**: `150000`
+- **Watch rotate tickets**: `6`
+- **Watch rotate age minutes**: `480`
+- **Watch handoff timeout minutes**: `15`
+- **Watch group labels**: `none`
+
 ### Auto merge (`task-merge-gate`)
 
 `task-merge-gate <pr> <JIRA-KEY> [--no-comment]` — may the PM merge an auto
@@ -607,6 +646,8 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 | PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
 | Watcher | labelled bug claimed            | `radio send --to pm --intent ticket-filed --issue <KEY-N>`             |
 | Watcher | an `acli` call failed; stopped  | `radio send --to pm --intent watch-stopped`                            |
+| Watcher | PM rotation due                 | `radio send --to pm --intent handoff-requested`                        |
+| PM      | handoff note written            | `radio send --to watch-<reponame> --intent handoff-done`               |
 
 When a worker's turn ends, the `Stop` hook runs `radio stop-hook`
 automatically: with an empty inbox it marks the role idle; if messages queued

@@ -37,6 +37,18 @@ set -euo pipefail
 #      double-dispatches. An acli write exits 0 when it fails, so every write
 #      runs with --json and checks successCount.
 #
+# It also rotates the PM (#334). Before the queue, each poll checks the PM's
+# caps: context (the last assistant turn's tokens in the transcript radio
+# recorded at register), tickets handed to it, and age. Before claiming a
+# ticket whose group (its parent epic, else a **Watch group labels** label)
+# differs from the PM's, it rotates too, so the new group starts on a fresh PM.
+# Only at a quiet point (PM idle, inbox empty, no review running), and, but for
+# the context cap, only once nothing of the PM's own group is in flight. A
+# rotation radios `handoff-requested`, waits for `handoff-done` and a fresh
+# handoff note, then `radio clear` types `/clear` with the rotation marker set,
+# so the re-register prints the digest and the note. No note, no rotation: past
+# <handoff timeout minutes> it gives up and tries again at the next quiet point.
+#
 # A ticket that comes back into the queue after a run was dispatched for it
 # means that run failed. Once <failure cap> runs have, the ticket gets
 # `<label>:failed` instead of a claim and is never claimed again.
@@ -94,6 +106,16 @@ Settings, read from .claude/jira-workflow.md (last matching bullet wins):
                                   <label>:needs-info instead of being requeued
                                   when the reporter replies
 
+PM rotation (#334): at a quiet point, the PM is asked for a handoff note and
+then cleared once it crosses a cap (0 turns one off), or before a ticket from
+another group than its own is filed:
+  Watch rotate context tokens   150000
+  Watch rotate tickets          6
+  Watch rotate age minutes      480
+  Watch handoff timeout minutes 15
+  Watch group labels            none    labels (globs allowed) that group a
+                                        ticket with no parent epic
+
 A reply is a comment by anyone but the account acli is logged in as (read from
 acli's jira_config.yaml), or an edit to the description, after the watcher saw
 the bounce.
@@ -134,6 +156,8 @@ LOG_FILE="$TF_HOME/radio/log"
 LEDGER="$TF_HOME/watch/$REPO_NAME"
 WATCH_ROLE="watch-$REPO_NAME"
 PM_ROLE="pm-$REPO_NAME"
+PM_SESSION="$TF_HOME/radio/sessions/$PM_ROLE.info"
+PM_GROUP_NAME=""
 
 _log() {
   mkdir -p "$(dirname "$LOG_FILE")"
@@ -160,6 +184,14 @@ MAX_INFLIGHT=$(_number_setting "Watch max in flight" 2)
 FAIL_CAP=$(_number_setting "Watch failure cap" 2)
 PENDING_TIMEOUT=$(_number_setting "Watch pending timeout minutes" 120)
 BOUNCE_CAP=$(_number_setting "Watch bounce cap" 3)
+ROTATE_CONTEXT=$(_number_setting "Watch rotate context tokens" 150000)
+ROTATE_TICKETS=$(_number_setting "Watch rotate tickets" 6)
+ROTATE_AGE=$(_number_setting "Watch rotate age minutes" 480)
+HANDOFF_TIMEOUT=$(_number_setting "Watch handoff timeout minutes" 15)
+GROUP_LABELS=$(_setting "Watch group labels" none)
+[[ "$GROUP_LABELS" != none ]] || GROUP_LABELS=""
+GROUP_PATTERNS=()
+IFS=', ' read -r -a GROUP_PATTERNS <<<"$GROUP_LABELS" || true
 PROJECT_KEY=$(tf_tracker_value "$DOC" jira key)
 SITE=$(tf_tracker_value "$DOC" jira site)
 
@@ -267,7 +299,7 @@ _first_line() {
 # _search <jql> <outfile>: the matching issues as a JSON array.
 _search() {
   local rc=0
-  acli jira workitem search --jql "$1" --fields key,labels,status,summary \
+  acli jira workitem search --jql "$1" --fields key,labels,status,summary,parent \
     --paginate --json >"$2" 2>"$TMP/err" || rc=$?
   if (( rc != 0 )); then
     _stop search "$rc" "$(_first_line "$TMP/err" "$2")"
@@ -592,12 +624,271 @@ _pending_timeout() {
   fi
 }
 
+# ---------------- PM rotation (#334) ----------------
+# The PM the watcher feeds is tracked in $LEDGER/.pm: GEN (one per PM, and one
+# more per rotation), PM_ID (the radio session's REGISTERED_AT, so a new PM is
+# told from a `/clear` of this one), STARTED, TICKETS (ticket-filed sent to
+# it), GROUP (the group of the first grouped ticket it took), and while a
+# rotation is under way PHASE=requested, REQUESTED_AT, REASON, DETAIL. Each
+# ticket's ledger entry records the GEN and GROUP it was handed with.
+
+_pm_get() { _ledger_get .pm "$1"; }
+_pm_set() { _ledger_set .pm "$1" "$2"; }
+_pm_field() {
+  [[ -f "$PM_SESSION" ]] || return 0
+  sed -n "s/^$1=//p" "$PM_SESSION" | head -n 1
+}
+
+_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+
+# A new PM generation: counters from zero.
+_pm_new() {
+  local gen
+  gen=$(_pm_get GEN)
+  _pm_set GEN "$(( ${gen:-0} + 1 ))"
+  _pm_set STARTED "$(date +%s)"
+  _pm_set TICKETS 0
+  _pm_set GROUP ""
+  _pm_set PHASE ""
+  _pm_set DEFERRED ""
+  _log "tracking $PM_ROLE generation $(_pm_get GEN) ($1) repo=$REPO_NAME"
+}
+
+# Notice a PM started (or restarted by hand) since the last poll.
+_pm_track() {
+  local id
+  [[ -f "$PM_SESSION" ]] || return 0
+  id=$(_pm_field REGISTERED_AT)
+  if [[ -z "$(_pm_get GEN)" ]]; then
+    _pm_set PM_ID "$id"
+    _pm_new "first seen"
+  elif [[ "$id" != "$(_pm_get PM_ID)" ]]; then
+    _pm_set PM_ID "$id"
+    _pm_new "new session"
+  fi
+}
+
+# The PM's current context size in tokens: the last main-thread assistant
+# turn's input + cache-read + cache-creation tokens, from the transcript radio
+# recorded at register (else found by the session id). Nothing when unknown.
+_pm_context() {
+  local tp sid
+  tp=$(_pm_field TRANSCRIPT)
+  if [[ -z "$tp" || ! -f "$tp" ]]; then
+    sid=$(_pm_field SESSION_ID)
+    [[ -n "$sid" ]] || return 0
+    tp=$(find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -n 1)
+  fi
+  [[ -n "$tp" && -f "$tp" ]] || return 0
+  tail -n 500 "$tp" | jq -R -r '
+    fromjson? | select(.type == "assistant" and .isSidechain != true and (.message.usage | type) == "object")
+    | .message.usage | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)' \
+    2>/dev/null | tail -n 1 || true
+}
+
+# A ticket's group, from the search file $1 at index $2: its parent (the epic),
+# else its first label matching **Watch group labels** (globs allowed), else
+# nothing. The watcher's own labels never count.
+_group_of() {
+  local parent l p
+  parent=$(jq -r --argjson i "$2" '.[$i].fields.parent.key // empty' "$1")
+  if [[ -n "$parent" ]]; then printf '%s' "$parent"; return 0; fi
+  (( ${#GROUP_PATTERNS[@]} )) || return 0
+  while IFS= read -r l; do
+    [[ -n "$l" && "$l" != "$LABEL" && "$l" != "$LABEL:"* ]] || continue
+    for p in "${GROUP_PATTERNS[@]}"; do
+      # shellcheck disable=SC2053 # $p is a glob on purpose
+      if [[ "$l" == $p ]]; then printf '%s' "$l"; return 0; fi
+    done
+  done < <(jq -r --argjson i "$2" '.[$i].fields.labels // [] | .[]' "$1")
+}
+
+# Tickets handed to the current PM in its own group that are still in flight.
+_group_inflight() {
+  local f key gen grp n=0
+  gen=$(_pm_get GEN) grp=$(_pm_get GROUP)
+  for f in "$LEDGER"/*; do
+    [[ -f "$f" ]] || continue
+    key=$(basename "$f")
+    case "$(_ledger_get "$key" STATE)" in pending|running) ;; *) continue ;; esac
+    [[ "$(_ledger_get "$key" GEN)" == "$gen" && "$(_ledger_get "$key" GROUP)" == "$grp" ]] || continue
+    n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+
+# Logged once per reason, not once per poll.
+_deferred() {
+  [[ "$(_pm_get DEFERRED)" == "$1" ]] && return 0
+  _pm_set DEFERRED "$1"
+  _say "rotation deferred ($1)"
+}
+
+# Can this PM be rotated at all? claude only (no `/clear` equivalent was checked
+# on kiro), and only auto-submitting: the `/clear` is typed into its box.
+# Refusals are logged once per PM generation.
+_rotatable() {
+  local agent why=""
+  agent=$(_pm_field AGENT)
+  if [[ "${agent:-claude}" != claude ]]; then
+    why="$PM_ROLE runs on $agent, which has no /clear task-watch can type"
+  elif [[ "$(_pm_field AUTO_SUBMIT)" != 1 ]]; then
+    why="$PM_ROLE is not auto-submitting (task-pm --auto-submit): its prompt box is a person's"
+  fi
+  [[ -z "$why" ]] && return 0
+  if [[ "$(_pm_get REFUSED)" != "$(_pm_get GEN)" ]]; then
+    _pm_set REFUSED "$(_pm_get GEN)"
+    _say "rotation refused: $why"
+  fi
+  return 1
+}
+
+# A quiet point: the PM idle, its inbox empty, and no merge gate pending (no
+# review of this repo's PRs still running, whose verdict the PM must act on).
+# Sets QUIET_WHY when it is not one.
+_quiet() {
+  local state f n=0
+  QUIET_WHY=""
+  state=$(_pm_field STATE)
+  if [[ "$state" != idle ]]; then QUIET_WHY="$PM_ROLE is ${state:-in no known state}"; return 1; fi
+  for f in "$TF_HOME/radio/mailbox/$PM_ROLE/inbox"/*.md; do [[ -f "$f" ]] && n=$((n + 1)); done
+  if (( n > 0 )); then QUIET_WHY="$PM_ROLE has $n unread message(s)"; return 1; fi
+  for f in "$TF_HOME/radio/sessions/reviewer-$REPO_NAME-"*.info; do
+    [[ -f "$f" ]] || continue
+    QUIET_WHY="merge gate pending: $(basename "$f" .info) is still reviewing"
+    return 1
+  done
+  return 0
+}
+
+# _rotation_try <reason> <detail>: start a rotation if this is a quiet point.
+# 0 started, 1 deferred, 2 this PM cannot be rotated. Only the context cap gets
+# past tickets of the PM's own group still in flight.
+_rotation_try() {
+  local reason="$1" detail="$2" n out
+  _rotatable || return 2
+  if ! _quiet; then _deferred "$QUIET_WHY"; return 1; fi
+  if [[ "$reason" != context ]]; then
+    n=$(_group_inflight)
+    if (( n > 0 )); then
+      _deferred "$reason: $n ticket(s) of group ${PM_GROUP_NAME:-<none>} still in flight"
+      return 1
+    fi
+  fi
+  if ! out=$(_radio_pm handoff-requested "" <<BODY
+task-watch is rotating this PM ($reason: $detail).
+Write your handoff note now (task-monitor-queue handoff write, 5-10 lines, the usual rules), then reply:
+  radio send --to $WATCH_ROLE --intent handoff-done --body "note written"
+Take no other action. Once the note is written, task-watch types /clear into this session and the next PM starts from the board digest and your note.
+BODY
+  ); then
+    _say "radio send failed for handoff-requested — rotation retried at the next quiet point"
+    return 1
+  fi
+  _pm_set PHASE requested
+  _pm_set REQUESTED_AT "$(date +%s)"
+  _pm_set REASON "$reason"
+  _pm_set DETAIL "$detail"
+  _pm_set DEFERRED ""
+  _say "rotation of $PM_ROLE requested reason=$reason ($detail) → ${out##*$'\n'}"
+  return 0
+}
+
+# The PM replied handoff-done since the request: consume every handoff-done in
+# the watcher's inbox, and say whether one arrived at or after $1.
+_handoff_done_since() {
+  local f got=1 box="$TF_HOME/radio/mailbox/$WATCH_ROLE"
+  for f in "$box/inbox"/*.md; do
+    [[ -f "$f" ]] || continue
+    grep -qx 'intent: handoff-done' "$f" || continue
+    (( $(_mtime "$f") >= $1 )) && got=0
+    mkdir -p "$box/processed"
+    mv -f "$f" "$box/processed/"
+  done
+  return "$got"
+}
+
+# A rotation under way: /clear once the PM said handoff-done and the note is
+# newer than the request; give up after the timeout. 0 when the queue may run
+# this poll, 1 to hold it.
+_rotation_progress() {
+  local req now note out
+  req=$(_pm_get REQUESTED_AT) now=$(date +%s)
+  [[ "$req" =~ ^[0-9]+$ ]] || req=0
+  note="$TF_HOME/monitor/$REPO_NAME/handoff.md"
+  if [[ "$(_pm_get DONE)" == 1 ]] || _handoff_done_since "$req"; then
+    _pm_set DONE 1
+    if [[ ! -s "$note" ]] || (( $(_mtime "$note") < req )); then
+      _deferred "$PM_ROLE said handoff-done, but wrote no handoff note since the request"
+    elif [[ "$(_pm_field STATE)" != idle ]]; then
+      _deferred "handoff written, $PM_ROLE is $(_pm_field STATE): /clear waits for idle"
+    elif out=$(env TASK_FORCE_ROLE="$WATCH_ROLE" "$RADIO" clear --to "$PM_ROLE" 2>&1); then
+      _say "rotate $PM_ROLE reason=$(_pm_get REASON) ($(_pm_get DETAIL)) → $out"
+      _pm_set DONE ""
+      _pm_new "rotated"
+      return 1
+    else
+      _deferred "handoff written, /clear failed: ${out#radio: }"
+    fi
+  fi
+  if (( now - req >= HANDOFF_TIMEOUT * 60 )); then
+    _say "rotation of $PM_ROLE timed out: no handoff-done with a fresh note after ${HANDOFF_TIMEOUT}m — retrying at the next quiet point, never without a note"
+    _pm_set PHASE ""
+    _pm_set DONE ""
+    _pm_set DEFERRED ""
+    return 0
+  fi
+  return 1
+}
+
+# Once per poll, before the queue: track the PM, advance a rotation under way,
+# or start one if a cap is crossed. 0 when the queue may run, 1 to hold it.
+_rotation_step() {
+  [[ -f "$PM_SESSION" ]] || return 0
+  _pm_track
+  PM_GROUP_NAME=$(_pm_get GROUP)
+  if [[ "$(_pm_get PHASE)" == requested ]]; then
+    _rotation_progress
+    return
+  fi
+  local ctx tickets started now reason="" detail=""
+  ctx=$(_pm_context) tickets=$(_pm_get TICKETS) started=$(_pm_get STARTED) now=$(date +%s)
+  if (( ROTATE_CONTEXT > 0 )) && [[ "$ctx" =~ ^[0-9]+$ ]] && (( ctx >= ROTATE_CONTEXT )); then
+    reason=context detail="$ctx tokens, cap $ROTATE_CONTEXT"
+  elif (( ROTATE_TICKETS > 0 && ${tickets:-0} >= ROTATE_TICKETS )); then
+    reason=tickets detail="$tickets ticket(s), cap $ROTATE_TICKETS"
+  elif (( ROTATE_AGE > 0 )) && [[ "$started" =~ ^[0-9]+$ ]] && (( now - started >= ROTATE_AGE * 60 )); then
+    reason=age detail="$(( (now - started) / 60 ))m, cap ${ROTATE_AGE}m"
+  fi
+  [[ -n "$reason" ]] || return 0
+  if _rotation_try "$reason" "$detail"; then return 1; fi
+  return 0
+}
+
+# A claimed ticket was handed to the current PM.
+_pm_handed() {
+  local key="$1" grp="$2" n
+  _ledger_set "$key" GROUP "$grp"
+  _ledger_set "$key" GEN "$(_pm_get GEN)"
+  [[ -f "$PM_SESSION" ]] || return 0
+  n=$(_pm_get TICKETS)
+  _pm_set TICKETS "$(( ${n:-0} + 1 ))"
+  if [[ -n "$grp" && -z "$(_pm_get GROUP)" ]]; then
+    _pm_set GROUP "$grp"
+    PM_GROUP_NAME="$grp"
+  fi
+}
+
 # ---------------- one poll ----------------
 
 _poll() {
   _refresh
+  if ! _rotation_step; then
+    _say "poll: claimed 0, in flight $INFLIGHT/$MAX_INFLIGHT, queue held while $PM_ROLE hands off"
+    return 0
+  fi
   _search "$JQL" "$TMP/queue.json"
-  local claimed=0 left=0 total key summary labels runs i
+  local claimed=0 left=0 waiting=0 hold=0 total key summary labels runs i grp rc
   total=$(jq 'length' "$TMP/queue.json")
   for (( i = 0; i < total; i++ )); do
     key=$(jq -r --argjson i "$i" '.[$i].key' "$TMP/queue.json")
@@ -620,6 +911,16 @@ _poll() {
       left=$((left + 1))
       continue
     fi
+    # A ticket from another group than the PM's: rotate first, so the new
+    # group starts with a fresh PM, or wait while the PM's group is in flight.
+    # An ungrouped ticket never rotates; a PM that cannot rotate takes it as is.
+    grp=$(_group_of "$TMP/queue.json" "$i")
+    if [[ -f "$PM_SESSION" && -n "$grp" && -n "${PM_GROUP_NAME:-}" && "$grp" != "$PM_GROUP_NAME" ]]; then
+      rc=0
+      _rotation_try group "$PM_GROUP_NAME -> $grp" || rc=$?
+      if (( rc == 0 )); then hold=1; break; fi
+      if (( rc == 1 )); then waiting=$((waiting + 1)); continue; fi
+    fi
     _swap "$key" "$CLAIMED" "$LABEL" || continue
     _ledger_set "$key" STATE pending
     _ledger_set "$key" PINGED 0
@@ -629,9 +930,12 @@ _poll() {
     claimed=$((claimed + 1))
     INFLIGHT=$((INFLIGHT + 1))
     _ping "$key"
+    _pm_handed "$key" "$grp"
   done
   local tail=""
   (( left == 0 )) || tail=", $left left queued at the cap"
+  (( waiting == 0 )) || tail+=", $waiting waiting for group ${PM_GROUP_NAME} to finish"
+  (( hold == 0 )) || tail+=", queue held while $PM_ROLE hands off"
   _say "poll: claimed $claimed, in flight $INFLIGHT/$MAX_INFLIGHT$tail"
 }
 

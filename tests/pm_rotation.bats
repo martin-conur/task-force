@@ -154,6 +154,8 @@ cleared() { stub_calls zellij | grep -c 'write-chars --pane-id 700 /clear' || tr
   assert_output --partial "rotate $PM reason=context (160000 tokens, cap 150000)"
   assert_equal "$(cleared)" 1
   [[ -f "$SESS/$PM.rotate" ]]
+  run grep -E '^EXPIRES=[0-9]+$' "$SESS/$PM.rotate"
+  assert_success
   run grep "watch: rotate $PM reason=context" "$LOG"
   assert_success
   # A new generation, counters from zero; the handoff-done was consumed.
@@ -200,11 +202,26 @@ cleared() { stub_calls zellij | grep -c 'write-chars --pane-id 700 /clear' || tr
   watch --once >/dev/null
   pm_reads
   run watch --once
-  assert_output --partial "rotation deferred (tickets: 1 ticket(s) of group <none> still in flight)"
+  assert_output --partial "rotation deferred (tickets: 1 ticket(s) handed to $PM still in flight)"
   assert_equal "$(mail handoff-requested)" ""
   # Logged once, not every poll.
   watch --once >/dev/null
   assert_equal "$(grep -c 'rotation deferred (tickets' "$LOG")" 1
+}
+
+@test "an ungrouped ticket still in flight defers, after the PM took a grouped one (#334)" {
+  setting "Watch rotate tickets" 2
+  issue PROJ-1
+  watch --once >/dev/null
+  pm_reads
+  issue PROJ-2 EPIC-1
+  watch --once >/dev/null
+  assert_equal "$(pm_get GROUP)" EPIC-1
+  pm_reads
+  set_done PROJ-2
+  run watch --once
+  assert_output --partial "rotation deferred (tickets: 1 ticket(s) handed to $PM still in flight)"
+  assert_equal "$(mail handoff-requested)" ""
 }
 
 @test "the context cap overrides that deferral (#334)" {
@@ -296,6 +313,47 @@ cleared() { stub_calls zellij | grep -c 'write-chars --pane-id 700 /clear' || tr
   assert_equal "$(mail handoff-requested)" ""
 }
 
+@test "right after a rotation the old transcript is not read, so the fresh PM is not rotated again (#334)" {
+  context 160000
+  watch --once >/dev/null
+  pm_hands_off
+  run watch --once
+  assert_output --partial "rotate $PM reason=context"
+  # The /clear re-register has not landed: same session, the old transcript.
+  touch -t 202001010000 "$TRANSCRIPT"
+  run watch --once
+  refute_output --partial "rotation"
+  assert_equal "$(mail handoff-requested | wc -l | tr -d ' ')" 1
+  # It lands: a new session and its own, small transcript.
+  local fresh="$BATS_TEST_TMPDIR/fresh.jsonl"
+  TRANSCRIPT="$fresh" context 2000
+  sed -i.bak -e 's/^SESSION_ID=.*/SESSION_ID=sess-2/' -e "s|^TRANSCRIPT=.*|TRANSCRIPT=$fresh|" "$SESS/$PM.info"
+  run watch --once
+  refute_output --partial "rotation"
+  assert_equal "$(pm_get ROTATED_SID)" ""
+  # From here the new transcript counts as usual.
+  TRANSCRIPT="$fresh" context 170000
+  run watch --once
+  assert_output --partial "rotation of $PM requested reason=context (170000 tokens"
+}
+
+@test "a PM registered before REGISTERED_AT existed is adopted at its first re-register, counters kept (#334)" {
+  sed -i.bak '/^REGISTERED_AT=/d' "$SESS/$PM.info"
+  setting "Watch rotate tickets" 9
+  issue PROJ-1
+  watch --once >/dev/null
+  assert_equal "$(pm_get TICKETS)" 1
+  printf 'REGISTERED_AT=2026-11-03T00:00:00Z\n' >>"$SESS/$PM.info"
+  watch --once >/dev/null
+  assert_equal "$(pm_get GEN)" 1
+  assert_equal "$(pm_get TICKETS)" 1
+  assert_equal "$(pm_get PM_ID)" 2026-11-03T00:00:00Z
+  # A later change is a new PM again.
+  sed -i.bak 's/^REGISTERED_AT=.*/REGISTERED_AT=2026-11-04T00:00:00Z/' "$SESS/$PM.info"
+  watch --once >/dev/null
+  assert_equal "$(pm_get GEN)" 2
+}
+
 @test "a PM restarted by hand starts a new generation; its own /clear does not (#334)" {
   setting "Watch rotate tickets" 9
   issue PROJ-1
@@ -331,7 +389,7 @@ cleared() { stub_calls zellij | grep -c 'write-chars --pane-id 700 /clear' || tr
   pm_reads
   issue PROJ-2 EPIC-2
   run watch --once
-  assert_output --partial "rotation deferred (group: 1 ticket(s) of group EPIC-1 still in flight)"
+  assert_output --partial "rotation deferred (group: 1 ticket(s) handed to $PM still in flight)"
   assert_output --partial "1 waiting for group EPIC-1 to finish"
   assert_equal "$(labels_of PROJ-2)" "ai-auto"
   assert_equal "$(mail ticket-filed)" "PROJ-1"
@@ -441,6 +499,28 @@ register_pm() {
   run register_pm </dev/null
   refute_output --partial "[board]"
   refute_output --partial "[handoff]"
+}
+
+@test "an expired rotation marker is dropped and logged, never printed (#334)" {
+  rm -f "$SESS/$PM.info"
+  register_pm </dev/null >/dev/null
+  echo "A note." | "$QUEUE_CMD" handoff write >/dev/null
+  # A /clear that never re-registered, its marker long expired.
+  printf 'CREATED=2026-01-01T00:00:00Z\nEXPIRES=1\n' >"$SESS/$PM.rotate"
+  run register_pm </dev/null
+  assert_success
+  refute_output --partial "[board]"
+  refute_output --partial "[handoff]"
+  [[ ! -e "$SESS/$PM.rotate" ]]
+  run grep "watch: stale rotation marker dropped role=$PM" "$LOG"
+  assert_success
+  # The TTL comes from --ttl-minutes.
+  pm_session
+  run "$RADIO" clear --to "$PM" --ttl-minutes 7
+  assert_success
+  local exp
+  exp=$(sed -n 's/^EXPIRES=//p' "$SESS/$PM.rotate")
+  (( exp - $(date -u +%s) > 6 * 60 && exp - $(date -u +%s) <= 7 * 60 ))
 }
 
 @test "radio clear refuses a busy, kiro or not auto-submitting role, and sets no marker (#334)" {

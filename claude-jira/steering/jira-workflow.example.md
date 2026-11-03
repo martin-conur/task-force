@@ -179,16 +179,22 @@ ticket it took; an ungrouped ticket never sets or triggers a group rotation.
 - **Quiet point only.** The PM idle, its inbox empty, and no merge gate
   pending (no reviewer of this repo still running). Otherwise the log says
   `watch: rotation deferred (<why>)`, once per reason.
-- **Groups stay together.** While tickets handed to this PM in its own group
-  are in flight, a tickets, age or group rotation waits, and a ticket from
-  another group waits unclaimed. The context cap does not wait for them.
+- **Groups stay together.** While any ticket handed to this PM is in flight,
+  whatever its group, a tickets, age or group rotation waits, and a ticket
+  from another group waits unclaimed. Groups decide whether to rotate, never
+  whether to wait. The context cap does not wait for them, and a context
+  reading is ignored until the `/clear` re-register lands, so the old
+  transcript never rotates the fresh PM again.
 - **Sequence.** The watcher radios the PM `handoff-requested` and holds the
   queue. The PM writes `task-monitor-queue handoff write` and replies
   `handoff-done` to `watch-<reponame>`. Once both are in and the PM is idle,
   `radio clear` sets a one-shot rotation marker and types `/clear` into the
   PM's pane, down the path a wake takes; the `/clear` re-register then prints
   the board digest and the handoff note, which a re-register otherwise never
-  does. Log: `watch: rotate pm-<repo> reason=<context|tickets|age|group> (…)`.
+  does. The marker expires after **Watch rotation marker minutes**: one the
+  `/clear` never consumed is dropped (`watch: stale rotation marker dropped`)
+  rather than printed at some later `/compact`.
+  Log: `watch: rotate pm-<repo> reason=<context|tickets|age|group> (…)`.
   A group rotation happens before the new group's `ticket-filed` is sent.
 - **Never without a note.** No `handoff-done` with a note newer than the
   request within **Watch handoff timeout minutes**: logged, and retried at the
@@ -201,6 +207,7 @@ ticket it took; an ungrouped ticket never sets or triggers a group rotation.
 - **Watch rotate tickets**: `6`
 - **Watch rotate age minutes**: `480`
 - **Watch handoff timeout minutes**: `15`
+- **Watch rotation marker minutes**: `5`
 - **Watch group labels**: `none`
 
 ### Auto merge (`task-merge-gate`)

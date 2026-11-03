@@ -113,6 +113,8 @@ another group than its own is filed:
   Watch rotate tickets          6
   Watch rotate age minutes      480
   Watch handoff timeout minutes 15
+  Watch rotation marker minutes 5       a marker the /clear never consumed
+                                        is dropped after this
   Watch group labels            none    labels (globs allowed) that group a
                                         ticket with no parent epic
 
@@ -188,6 +190,7 @@ ROTATE_CONTEXT=$(_number_setting "Watch rotate context tokens" 150000)
 ROTATE_TICKETS=$(_number_setting "Watch rotate tickets" 6)
 ROTATE_AGE=$(_number_setting "Watch rotate age minutes" 480)
 HANDOFF_TIMEOUT=$(_number_setting "Watch handoff timeout minutes" 15)
+MARKER_TTL=$(_number_setting "Watch rotation marker minutes" 5)
 GROUP_LABELS=$(_setting "Watch group labels" none)
 [[ "$GROUP_LABELS" != none ]] || GROUP_LABELS=""
 GROUP_PATTERNS=()
@@ -651,6 +654,7 @@ _pm_new() {
   _pm_set GROUP ""
   _pm_set PHASE ""
   _pm_set DEFERRED ""
+  _pm_set ROTATED_SID ""
   _log "tracking $PM_ROLE generation $(_pm_get GEN) ($1) repo=$REPO_NAME"
 }
 
@@ -662,6 +666,11 @@ _pm_track() {
   if [[ -z "$(_pm_get GEN)" ]]; then
     _pm_set PM_ID "$id"
     _pm_new "first seen"
+  elif [[ -n "$id" && -z "$(_pm_get PM_ID)" ]]; then
+    # A PM registered before REGISTERED_AT existed gets one at its first
+    # re-register: the same PM, adopted with its counters.
+    _pm_set PM_ID "$id"
+    _log "adopted $PM_ROLE's REGISTERED_AT=$id, generation $(_pm_get GEN) kept repo=$REPO_NAME"
   elif [[ "$id" != "$(_pm_get PM_ID)" ]]; then
     _pm_set PM_ID "$id"
     _pm_new "new session"
@@ -686,6 +695,22 @@ _pm_context() {
     2>/dev/null | tail -n 1 || true
 }
 
+# True while the context reading is still the rotated-out session's: the
+# /clear re-register has not recorded a new SESSION_ID, and the transcript is
+# no newer than the rotation. Once either changes, the marker is dropped.
+_context_stale() {
+  local rsid tp started
+  rsid=$(_pm_get ROTATED_SID)
+  [[ -n "$rsid" ]] || return 1
+  tp=$(_pm_field TRANSCRIPT) started=$(_pm_get STARTED)
+  if [[ "$(_pm_field SESSION_ID)" == "$rsid" ]] \
+    && { [[ -z "$tp" || ! -f "$tp" ]] || (( $(_mtime "$tp") <= ${started:-0} )); }; then
+    return 0
+  fi
+  _pm_set ROTATED_SID ""
+  return 1
+}
+
 # A ticket's group, from the search file $1 at index $2: its parent (the epic),
 # else its first label matching **Watch group labels** (globs allowed), else
 # nothing. The watcher's own labels never count.
@@ -703,15 +728,16 @@ _group_of() {
   done < <(jq -r --argjson i "$2" '.[$i].fields.labels // [] | .[]' "$1")
 }
 
-# Tickets handed to the current PM in its own group that are still in flight.
-_group_inflight() {
-  local f key gen grp n=0
-  gen=$(_pm_get GEN) grp=$(_pm_get GROUP)
+# Tickets handed to the current PM that are still in flight, whatever their
+# group: groups decide whether to rotate, never whether to wait.
+_pm_inflight() {
+  local f key gen n=0
+  gen=$(_pm_get GEN)
   for f in "$LEDGER"/*; do
     [[ -f "$f" ]] || continue
     key=$(basename "$f")
     case "$(_ledger_get "$key" STATE)" in pending|running) ;; *) continue ;; esac
-    [[ "$(_ledger_get "$key" GEN)" == "$gen" && "$(_ledger_get "$key" GROUP)" == "$grp" ]] || continue
+    [[ "$(_ledger_get "$key" GEN)" == "$gen" ]] || continue
     n=$((n + 1))
   done
   printf '%s' "$n"
@@ -769,9 +795,9 @@ _rotation_try() {
   _rotatable || return 2
   if ! _quiet; then _deferred "$QUIET_WHY"; return 1; fi
   if [[ "$reason" != context ]]; then
-    n=$(_group_inflight)
+    n=$(_pm_inflight)
     if (( n > 0 )); then
-      _deferred "$reason: $n ticket(s) of group ${PM_GROUP_NAME:-<none>} still in flight"
+      _deferred "$reason: $n ticket(s) handed to $PM_ROLE still in flight"
       return 1
     fi
   fi
@@ -822,10 +848,13 @@ _rotation_progress() {
       _deferred "$PM_ROLE said handoff-done, but wrote no handoff note since the request"
     elif [[ "$(_pm_field STATE)" != idle ]]; then
       _deferred "handoff written, $PM_ROLE is $(_pm_field STATE): /clear waits for idle"
-    elif out=$(env TASK_FORCE_ROLE="$WATCH_ROLE" "$RADIO" clear --to "$PM_ROLE" 2>&1); then
+    elif out=$(env TASK_FORCE_ROLE="$WATCH_ROLE" "$RADIO" clear --to "$PM_ROLE" --ttl-minutes "$MARKER_TTL" 2>&1); then
       _say "rotate $PM_ROLE reason=$(_pm_get REASON) ($(_pm_get DETAIL)) → $out"
       _pm_set DONE ""
       _pm_new "rotated"
+      # The old session's transcript stays on file until the /clear
+      # re-register lands; its context is not the new PM's.
+      _pm_set ROTATED_SID "$(_pm_field SESSION_ID)"
       return 1
     else
       _deferred "handoff written, /clear failed: ${out#radio: }"
@@ -853,6 +882,7 @@ _rotation_step() {
   fi
   local ctx tickets started now reason="" detail=""
   ctx=$(_pm_context) tickets=$(_pm_get TICKETS) started=$(_pm_get STARTED) now=$(date +%s)
+  if _context_stale; then ctx=""; fi
   if (( ROTATE_CONTEXT > 0 )) && [[ "$ctx" =~ ^[0-9]+$ ]] && (( ctx >= ROTATE_CONTEXT )); then
     reason=context detail="$ctx tokens, cap $ROTATE_CONTEXT"
   elif (( ROTATE_TICKETS > 0 && ${tickets:-0} >= ROTATE_TICKETS )); then

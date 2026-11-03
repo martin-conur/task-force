@@ -39,7 +39,9 @@ Usage:
                                          payload names a real-exit reason; --manual
                                          (alias --force) is the explicit opt-in used by
                                          task-done
-  radio clear --to ROLE                  set ROLE's one-shot rotation marker and type /clear
+  radio clear --to ROLE [--ttl-minutes N]
+                                         set ROLE's one-shot rotation marker (expires after
+                                         N minutes, default 5) and type /clear
                                          into its agent's pane (task-watch's PM rotation,
                                          #334): the re-register that follows prints the
                                          board digest and handoff note. claude, idle and
@@ -1776,7 +1778,7 @@ cmd_register() {
   if (( fresh == 1 )) && [[ -z "$existing_alias" && "$role" == pm-* ]]; then
     _print_board_digest "$role" "$repo" || true
     rm -f "$marker"
-  elif [[ -f "$marker" && -z "$existing_alias" && "$role" == pm-* ]]; then
+  elif [[ -z "$existing_alias" && "$role" == pm-* ]] && _rotate_marker_live "$role"; then
     rm -f "$marker"
     _log "register: rotation marker consumed, printing the board digest and handoff note role=$role"
     _print_board_digest "$role" "$repo" || true
@@ -2791,8 +2793,25 @@ _resolve_wake_pane() {
 # The one-shot rotation marker (#334): task-watch sets it, through cmd_clear,
 # just before it types `/clear` into a PM. The `/clear` re-register is not
 # fresh, so on its own it prints neither the board digest nor the handoff note;
-# with the marker it prints both, once, and removes it.
+# with the marker it prints both, once, and removes it. It carries EXPIRES=
+# (epoch, cmd_clear's --ttl-minutes): a `/clear` that never re-registered must
+# not make some later `/compact` print the digest.
 _rotate_marker() { printf '%s/%s.rotate' "$SESSIONS_DIR" "$1"; }
+
+# True when <role>'s marker exists and has not expired; an expired one is
+# removed and logged.
+_rotate_marker_live() {
+  local m exp
+  m=$(_rotate_marker "$1")
+  [[ -f "$m" ]] || return 1
+  exp=$(_session_field "$m" EXPIRES || true)
+  if [[ "$exp" =~ ^[0-9]+$ ]] && (( $(date -u +%s) <= exp )); then
+    return 0
+  fi
+  rm -f "$m"
+  _log "watch: stale rotation marker dropped role=$1 (expired ${exp:-<no EXPIRES>})"
+  return 1
+}
 
 # radio clear --to ROLE (#334): set ROLE's rotation marker, then type `/clear`
 # into its agent's pane, down the same path a wake takes. task-watch's PM
@@ -2803,11 +2822,14 @@ _rotate_marker() { printf '%s/%s.rotate' "$SESSIONS_DIR" "$1"; }
 # Exit 0 once the write landed; 1, with the reason on stderr, otherwise, and
 # then the marker is gone again.
 cmd_clear() {
-  local to=""
+  local to="" ttl=5
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --to) [[ $# -ge 2 ]] || { echo "clear: --to needs a value" >&2; exit 2; }
             to="$2"; shift 2 ;;
+      --ttl-minutes)
+            [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || { echo "clear: --ttl-minutes needs a whole number" >&2; exit 2; }
+            ttl="$2"; shift 2 ;;
       *) echo "clear: unknown flag $1" >&2; exit 2 ;;
     esac
   done
@@ -2834,7 +2856,7 @@ cmd_clear() {
   fi
   local marker
   marker=$(_rotate_marker "$to")
-  printf '%s\n' "$(_now)" | _atomic_write "$marker"
+  printf 'CREATED=%s\nEXPIRES=%s\n' "$(_now)" "$(( $(date -u +%s) + ttl * 60 ))" | _atomic_write "$marker"
   if ! zellij action write-chars --pane-id "$WAKE_PANE_ID" $'/clear\r' >/dev/null 2>&1; then
     rm -f "$marker"
     _log "clear: write-chars failed for $to (pane=$WAKE_PANE_ID)"

@@ -18,7 +18,9 @@
 #                         exit 0, a FAILURE result.
 #
 # `workitem view KEY` prints that issue as {key, fields}, or exits 1 when it is
-# not in the file. `workitem comment create --key KEY --body-file F` appends
+# not in the file; a test puts `fields.comment.comments` and
+# `fields.description` in the file for it to return (#338). `workitem edit`
+# takes a comma-separated --remove-labels list. `workitem comment create --key KEY --body-file F` appends
 # the body to $STUB_CALLS_DIR/acli.comments (for task-merge-gate, #329).
 #
 # search understands just the JQL task-watch writes: `labels = "X"` keeps
@@ -86,7 +88,7 @@ case "$1 $2 $3" in
       exit 0
     fi
     _issues | jq --arg k "$key" --arg add "$add" --arg rm "$rm" '
-      map(if .key == $k then .fields.labels = (((.fields.labels // []) - [$rm]) + (if $add == "" then [] else [$add] end) | unique) else . end)' \
+      map(if .key == $k then .fields.labels = (((.fields.labels // []) - ($rm | split(","))) + (if $add == "" then [] else [$add] end) | unique) else . end)' \
       >"$ISSUES.tmp" && mv "$ISSUES.tmp" "$ISSUES"
     printf '{"results":[{"key":"%s","status":"SUCCESS"}],"successCount":1}\n' "$key"
     exit 0

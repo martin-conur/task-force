@@ -31,6 +31,19 @@ setup() {
 DOC
   export ACLI_STUB_ISSUES="$BATS_TEST_TMPDIR/issues.json"
   echo '[]' >"$ACLI_STUB_ISSUES"
+  # acli's profile file: the account the PM and the watcher post as (#338).
+  export TASK_WATCH_ACLI_CONFIG="$BATS_TEST_TMPDIR/jira_config.yaml"
+  cat >"$TASK_WATCH_ACLI_CONFIG" <<'YAML'
+version: 1
+current_profile: cloud-1:acct:pm-self
+profiles:
+    - site: example
+      cloud_id: cloud-0
+      account_id: acct:someone-else
+    - site: example
+      cloud_id: cloud-1
+      account_id: acct:pm-self
+YAML
   cd "$MAIN_REPO"
 }
 
@@ -84,6 +97,30 @@ pinged() {
 }
 
 edits() { grep -c 'workitem edit' "$STUB_CALLS_DIR/acli.calls" 2>/dev/null || true; }
+
+# comment <key> <author account id> <seconds from now>: a Jira comment, its
+# created time in Jira's own format.
+comment() {
+  jq --arg k "$1" --arg a "$2" --argjson d "$3" '
+    map(if .key == $k then .fields.comment.comments += [{
+      id: ((.fields.comment.comments // []) | length | tostring),
+      author: {accountId: $a},
+      created: (now + $d | floor | strftime("%Y-%m-%dT%H:%M:%S.000+0000")),
+      body: "text"}] else . end)' "$ACLI_STUB_ISSUES" >"$ACLI_STUB_ISSUES.tmp"
+  mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
+}
+set_description() {
+  jq --arg k "$1" --arg d "$2" 'map(if .key == $k then .fields.description = $d else . end)' \
+    "$ACLI_STUB_ISSUES" >"$ACLI_STUB_ISSUES.tmp"
+  mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
+}
+# Claim <key>, then have the PM bounce it and the watcher see the bounce.
+claim_and_bounce() {
+  watch --once >/dev/null
+  set_labels "$1" "ai-auto:claimed,ai-auto:needs-info"
+  watch --once >/dev/null
+}
+state_of() { sed -n 's/^STATE=//p' "$LEDGER/$1"; }
 
 # A task-work worktree working on <key>: the sidecar plus its directory.
 dispatch() {
@@ -286,6 +323,144 @@ finish() {
   run watch --once
   assert_output --partial "ticket-filed PROJ-1"
   assert_equal "$(pinged | wc -l | tr -d ' ')" 4
+}
+
+@test "requeue: a reporter's comment after the bounce puts the ticket back and it is claimed again" {
+  issue PROJ-1 ai-auto
+  set_description PROJ-1 "crashes"
+  comment PROJ-1 acct:reporter -7200   # before the bounce: not a reply
+  claim_and_bounce PROJ-1
+  assert_equal "$(state_of PROJ-1)" bounced
+  comment PROJ-1 acct:reporter 60
+  run watch --once
+  assert_success
+  assert_output --partial "requeued PROJ-1 (reporter replied)"
+  # One edit: the label back, claimed and needs-info off.
+  assert_stub_called acli 'edit --key PROJ-1 --labels ai-auto --remove-labels ai-auto:claimed,ai-auto:needs-info --yes --json'
+  run grep 'watch: requeued PROJ-1 (reporter replied)' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+  # The same poll's queue search claims it, and the PM is pinged again.
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed"
+  assert_equal "$(pinged | tr '\n' ' ')" "PROJ-1 PROJ-1 "
+  # A requeue is not a failed run.
+  assert_equal "$(runs_of PROJ-1)" ""
+}
+
+@test "requeue: a comment by the PM's own acli account is not a reply" {
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  comment PROJ-1 acct:pm-self 60
+  run watch --once
+  assert_success
+  refute_output --partial "requeued"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed,ai-auto:needs-info"
+  assert_equal "$(state_of PROJ-1)" bounced
+}
+
+@test "requeue: no reply, no requeue" {
+  issue PROJ-1 ai-auto
+  set_description PROJ-1 "crashes"
+  comment PROJ-1 acct:reporter -7200
+  claim_and_bounce PROJ-1
+  run watch --once
+  assert_success
+  refute_output --partial "requeued"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed,ai-auto:needs-info"
+  assert_equal "$(pinged)" "PROJ-1"
+}
+
+@test "requeue: a description edited after the bounce is a reply" {
+  issue PROJ-1 ai-auto
+  set_description PROJ-1 "crashes"
+  claim_and_bounce PROJ-1
+  set_description PROJ-1 "crashes on save with an empty title; expected a validation message"
+  run watch --once
+  assert_success
+  assert_output --partial "requeued PROJ-1 (description edited)"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed"
+}
+
+@test "requeue: the half-done swap (needs-info off, claimed left on) is requeued" {
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  set_labels PROJ-1 "ai-auto:claimed"
+  run watch --once
+  assert_success
+  assert_output --partial "requeued PROJ-1 (ai-auto:needs-info removed)"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed"
+  assert_equal "$(pinged | tr '\n' ' ')" "PROJ-1 PROJ-1 "
+}
+
+@test "requeue: a half-done swap with a live worktree is a dispatch, not a retry" {
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  set_labels PROJ-1 "ai-auto:claimed"
+  dispatch PROJ-1
+  run watch --once
+  assert_output --partial "PROJ-1 dispatched"
+  refute_output --partial "requeued"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed"
+}
+
+@test "requeue: a bounce from before the watcher looked is adopted, then requeued on a reply" {
+  issue PROJ-1 ai-auto:claimed ai-auto:needs-info
+  run watch --once
+  assert_output --partial "PROJ-1 released (bounced, ai-auto:needs-info)"
+  comment PROJ-1 acct:reporter 60
+  run watch --once
+  assert_output --partial "requeued PROJ-1 (reporter replied)"
+}
+
+@test "requeue: the bounce cap leaves the ticket on needs-info" {
+  printf -- '- **Watch bounce cap**: `2`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  comment PROJ-1 acct:reporter 60
+  watch --once >/dev/null   # requeued and claimed again
+  set_labels PROJ-1 "ai-auto:claimed,ai-auto:needs-info"
+  run watch --once
+  assert_output --partial "bounce 2 of 2: the cap, left on ai-auto:needs-info"
+  comment PROJ-1 acct:reporter 120
+  set_description PROJ-1 "more detail"
+  run watch --once
+  assert_success
+  refute_output --partial "requeued"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed,ai-auto:needs-info"
+  # Nor does the half-done swap get past it.
+  set_labels PROJ-1 "ai-auto:claimed"
+  run watch --once
+  refute_output --partial "requeued"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed"
+}
+
+@test "requeue: a failed requeue edit changes no state" {
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  comment PROJ-1 acct:reporter 60
+  cp "$LEDGER/PROJ-1" "$BATS_TEST_TMPDIR/ledger.before"
+  ACLI_STUB_EDIT_FAIL=PROJ-1 run watch --once
+  assert_success
+  assert_output --partial "label swap on PROJ-1"
+  refute_output --partial "requeued"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:claimed,ai-auto:needs-info"
+  run diff "$BATS_TEST_TMPDIR/ledger.before" "$LEDGER/PROJ-1"
+  assert_success
+  # The next poll tries again.
+  run watch --once
+  assert_output --partial "requeued PROJ-1 (reporter replied)"
+}
+
+@test "requeue: with no acli account on file, comments are not trusted but a description edit still requeues" {
+  rm "$TASK_WATCH_ACLI_CONFIG"
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  comment PROJ-1 acct:pm-self 60
+  run watch --once
+  refute_output --partial "requeued"
+  assert_output --partial "cannot tell the reporter's comments from the PM's"
+  set_description PROJ-1 "now with steps"
+  run watch --once
+  assert_output --partial "requeued PROJ-1 (description edited)"
 }
 
 @test "a failed claim (acli exits 0, successCount 0) is never followed by a ping" {

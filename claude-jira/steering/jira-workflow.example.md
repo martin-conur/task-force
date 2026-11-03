@@ -148,6 +148,38 @@ minus claimed and failed tickets, oldest first; a custom one is used as written
 - **Watch failure cap**: `2`
 - **Watch pending timeout minutes**: `120`
 
+### Auto merge (`task-merge-gate`)
+
+`task-merge-gate <pr> <JIRA-KEY> [--no-comment]` — may the PM merge an auto
+ticket's PR without asking? (#329)
+
+The PM runs it after every clean review and obeys the first word it prints. It
+is shell, no model, so the rules are never re-derived from memory.
+
+- **`manual: …`** (exit 3): the ticket did not come through `task-watch` — no
+  `ai-auto:claimed` label and no entry in the watch ledger
+  (`~/.task-force/watch/<repo>/<KEY>`). The normal review flow applies.
+- **`merge`** (exit 0): an auto ticket, and all four rules hold: the ticket
+  carries **Merge label** (a label only, never words in a description); the
+  latest review beat for the PR is `review-complete-clean` from its reviewer,
+  newer than the worker's last re-review request and covering the head commit
+  (it names the head SHA, or is newer than the head commit; a tie in the same
+  second counts as not reviewed); the PR targets the base `task-work` recorded
+  for the worker (else the default branch); CI **ran and passed** for the
+  PR's exact head SHA (`gh run list -c <sha>` non-empty, every run success,
+  skipped or neutral); and the diff is within **Merge max changed lines**
+  (additions + deletions) and **Merge max files**. The PM merges as usual.
+- **`ask: <reason>`** (exit 1): anything else, every failing rule listed. The PM
+  tells you why and waits. That is the default for every auto ticket without
+  the merge label, and for anything the gate could not read.
+
+For an auto ticket the gate comments its outcome on the Jira ticket through
+`acli`. Log lines go to the radio log: `grep 'merge-gate:' ~/.task-force/radio/log`.
+
+- **Merge label**: `ai-auto-merge`
+- **Merge max changed lines**: `200`
+- **Merge max files**: `10`
+
 ### Atlassian MCP
 
 This workflow assumes the Atlassian Remote MCP server is configured. Verify with:

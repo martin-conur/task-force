@@ -12,6 +12,14 @@
 #   ACLI_STUB_EDIT_EXIT   non-zero: `workitem edit` exits with it.
 #   ACLI_STUB_EDIT_FAIL   space-separated keys whose edit FAILS the way acli's
 #                         writes do: exit 0, successCount 0 (#326).
+#   ACLI_STUB_VIEW_EXIT   non-zero: `workitem view` prints acli's unauthorized
+#                         error and exits with it.
+#   ACLI_STUB_COMMENT_FAIL non-empty: `comment create` fails the acli way:
+#                         exit 0, a FAILURE result.
+#
+# `workitem view KEY` prints that issue as {key, fields}, or exits 1 when it is
+# not in the file. `workitem comment create --key KEY --body-file F` appends
+# the body to $STUB_CALLS_DIR/acli.comments (for task-merge-gate, #329).
 #
 # search understands just the JQL task-watch writes: `labels = "X"` keeps
 # issues carrying X, `labels not in ("A", "B")` drops issues carrying either,
@@ -47,6 +55,27 @@ case "$1 $2 $3" in
         and ([(.fields.labels // [])[] | select(. as $l | $notin | index([$l]) != null)] | length == 0)
         and (($keys | length) == 0 or (.key as $k | $keys | index([$k]) != null))
       ))'
+    exit 0
+    ;;
+  "jira workitem view")
+    if [[ "${ACLI_STUB_VIEW_EXIT:-0}" != 0 ]]; then
+      echo "✗ Error: unauthorized: use 'acli [product] auth login' to authenticate"
+      exit "$ACLI_STUB_VIEW_EXIT"
+    fi
+    if ! _issues | jq -e --arg k "$4" '.[] | select(.key == $k)' 2>/dev/null; then
+      echo "✗ Error: Issue does not exist or you do not have permission to see it."
+      exit 1
+    fi
+    exit 0
+    ;;
+  "jira workitem comment")
+    key=$(_flag --key "$@"); file=$(_flag --body-file "$@")
+    if [[ -n "${ACLI_STUB_COMMENT_FAIL:-}" ]]; then
+      printf '{"results":[{"key":"%s","status":"FAILURE","message":"no"}]}\n' "$key"
+      exit 0
+    fi
+    { printf '%s: ' "$key"; cat "${file:-/dev/stdin}"; } >> "${STUB_CALLS_DIR}/acli.comments"
+    printf '{"results":[{"key":"%s","status":"SUCCESS"}]}\n' "$key"
     exit 0
     ;;
   "jira workitem edit")

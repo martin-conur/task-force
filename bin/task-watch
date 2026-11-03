@@ -16,6 +16,16 @@ set -euo pipefail
 #      `<label>:needs-info` or `<label>:failed`, or it lost `<label>:claimed`.
 #      One pending past <pending timeout minutes> counts as a failed run and
 #      goes back into the queue, or to `<label>:failed` once that makes the cap.
+#      A ticket released by a bounce (`<label>:needs-info`) is `bounced`: the
+#      ledger keeps the time the watcher saw it and a checksum of its
+#      description. Each poll also searches for `<label>:needs-info`, and a
+#      bounced ticket with a reply since (a comment by anyone but the account
+#      acli is logged in as, which the PM posts as too, or an edited
+#      description) is requeued in one edit: `<label>` added, `<label>:claimed`
+#      and `<label>:needs-info` removed (#338). So is one whose `needs-info` was
+#      removed by hand while `claimed` stayed on: the half-done label swap. A
+#      requeue is not a failed run; after <bounce cap> bounces the ticket is
+#      left on `needs-info` for good.
 #   2. Search the queue through `acli` (#326: a REST search with a lapsed token
 #      returns 200 and zero issues; an `acli` read exits 1). Any non-zero acli
 #      exit stops the watcher and radios the PM that a re-login is needed. No
@@ -80,6 +90,13 @@ Settings, read from .claude/jira-workflow.md (last matching bullet wins):
   Watch pending timeout minutes
                         120       claimed, never seen with a worktree: after
                                   this it counts as a failed run and is re-queued
+  Watch bounce cap      3         bounces before a ticket stays on
+                                  <label>:needs-info instead of being requeued
+                                  when the reporter replies
+
+A reply is a comment by anyone but the account acli is logged in as (read from
+acli's jira_config.yaml), or an edit to the description, after the watcher saw
+the bounce.
 
 It reads and writes Jira through acli (acli jira auth login --web). Any
 non-zero acli exit stops it and radios the PM to re-login.
@@ -142,6 +159,7 @@ INTERVAL=$(_number_setting "Watch poll seconds" 300)
 MAX_INFLIGHT=$(_number_setting "Watch max in flight" 2)
 FAIL_CAP=$(_number_setting "Watch failure cap" 2)
 PENDING_TIMEOUT=$(_number_setting "Watch pending timeout minutes" 120)
+BOUNCE_CAP=$(_number_setting "Watch bounce cap" 3)
 PROJECT_KEY=$(tf_tracker_value "$DOC" jira key)
 SITE=$(tf_tracker_value "$DOC" jira site)
 
@@ -160,8 +178,24 @@ if [[ -z "$JQL" ]]; then
   JQL="$PROJECT_CLAUSE AND issuetype = \"$ISSUE_TYPE\" AND labels = \"$LABEL\" AND labels not in (\"$CLAIMED\", \"$FAILED\") ORDER BY created ASC"
 fi
 
+# The account acli posts as, which the PM's comments come from too: its
+# comments on a bounced ticket are never a reply. acli keeps it in its profile
+# file, `current_profile: <cloud id>:<account id>` and one `account_id:` per
+# profile. Empty when that file is missing or unreadable.
+_self_account() {
+  local cfg="${TASK_WATCH_ACLI_CONFIG:-$HOME/.config/acli/jira_config.yaml}" cp id
+  [[ -f "$cfg" ]] || return 0
+  cp=$(sed -nE 's/^current_profile:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' "$cfg" | head -n 1)
+  [[ -n "$cp" ]] || return 0
+  while IFS= read -r id; do
+    if [[ -n "$id" && "$cp" == *":$id" ]]; then printf '%s' "$id"; return 0; fi
+  done < <(sed -nE 's/^[[:space:]-]*account_id:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/p' "$cfg")
+}
+SELF=$(_self_account)
+
 # ---------------- ledger ----------------
-# One file per claimed key, KEY=VALUE lines: STATE, CLAIMS, RUNS, PINGED, SUMMARY.
+# One file per claimed key, KEY=VALUE lines: STATE, CLAIMS, RUNS, PINGED,
+# SUMMARY, PENDING_SINCE, and for a bounce BOUNCES, BOUNCED_AT, DESC_SUM.
 
 _ledger_get() {
   local f="$LEDGER/$1"
@@ -255,6 +289,60 @@ _swap() {
   return 1
 }
 
+# _view <key> <outfile>: the ticket's comments and description, as JSON.
+_view() {
+  local rc=0
+  acli jira workitem view "$1" --fields comment,description --json >"$2" 2>"$TMP/err" || rc=$?
+  (( rc == 0 )) || _stop "view $1" "$rc" "$(_first_line "$TMP/err" "$2")"
+}
+
+# A checksum of the description in a _view file: an edit changes it.
+_desc_sum() {
+  jq -c '.fields.description // null' "$1" 2>/dev/null | cksum | awk '{ print $1 }'
+}
+
+# jq defs: `epoch` turns a Jira time, `2026-10-30T22:48:06.665-0700`, into
+# seconds since 1970. Plain arithmetic (days from the civil date): jq's
+# fromdateiso8601 goes through mktime, which is an hour off across DST on some
+# platforms.
+# shellcheck disable=SC2016 # jq source: its $vars are jq's, not the shell's
+JQ_EPOCH='
+    def days($y; $m; $d):
+      ($y - (if $m <= 2 then 1 else 0 end)) as $y
+      | ($y / 400 | floor) as $era
+      | ($y - $era * 400) as $yoe
+      | (((153 * ($m + (if $m > 2 then -3 else 9 end)) + 2) / 5 | floor) + $d - 1) as $doy
+      | ($yoe * 365 + ($yoe / 4 | floor) - ($yoe / 100 | floor) + $doy) as $doe
+      | $era * 146097 + $doe - 719468;
+    def epoch:
+      capture("^(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<s>[0-9]{2})(\\.[0-9]+)?(?<z>.*)$")
+      | (days(.y | tonumber; .mo | tonumber; .d | tonumber) * 86400
+         + (.h | tonumber) * 3600 + (.mi | tonumber) * 60 + (.s | tonumber))
+        - (.z | sub(":"; "")
+           | if test("^[+-][0-9]{4}$")
+             then ((.[1:3] | tonumber) * 3600 + (.[3:5] | tonumber) * 60)
+                  * (if .[0:1] == "-" then -1 else 1 end)
+             else 0 end);'
+
+# Comments in a _view file created after epoch $2 by anyone but $SELF.
+_replies_since() {
+  jq --argjson since "$2" --arg self "$SELF" "$JQ_EPOCH"'
+    [(.fields.comment.comments // [])[]
+     | select((.author.accountId // "") != $self)
+     | select((try (.created | epoch) catch 0) > $since)]
+    | length' "$1" 2>/dev/null || echo 0
+}
+
+# The epoch of the newest comment in a _view file by $SELF, or nothing.
+_last_own_comment() {
+  [[ -n "$SELF" ]] || return 0
+  jq -r --arg self "$SELF" "$JQ_EPOCH"'
+    [(.fields.comment.comments // [])[]
+     | select((.author.accountId // "") == $self)
+     | (try (.created | epoch) catch empty)]
+    | max // empty' "$1" 2>/dev/null || true
+}
+
 _browse_url() {
   local s="${SITE%/}"
   [[ -n "$s" ]] || return 0
@@ -295,18 +383,18 @@ BODY
   fi
 }
 
-# Sets INFLIGHT. Advances every pending / running ledger entry.
+# Sets INFLIGHT. Advances every pending / running / bounced ledger entry.
 _refresh() {
   INFLIGHT=0
-  local live f key state pending=""
+  local live f key state pending="" bounced="" fresh=" "
   live=$(_live_keys)
   for f in "$LEDGER"/*; do
     [[ -f "$f" ]] || continue
     key=$(basename "$f")
     state=$(_ledger_get "$key" STATE)
-    case "$state" in pending|running) ;; *) continue ;; esac
+    case "$state" in pending|running|bounced) ;; *) continue ;; esac
     if printf '%s\n' "$live" | grep -qxF "$key"; then
-      if [[ "$state" == pending ]]; then
+      if [[ "$state" != running ]]; then
         _ledger_set "$key" STATE running
         _ledger_incr "$key" RUNS
         _say "$key dispatched — run $(_ledger_get "$key" RUNS) in flight"
@@ -315,11 +403,22 @@ _refresh() {
     elif [[ "$state" == running ]]; then
       _ledger_set "$key" STATE "done"
       _say "$key run ended (worktree gone)"
+    elif [[ "$state" == bounced ]]; then
+      bounced+="$key "
     else
       pending+="$key "
     fi
   done
-  [[ -n "$pending" ]] || return 0
+  if [[ -n "$pending$bounced" ]]; then
+    _resolve_pending "$pending"
+  fi
+  _bounced_pass "$bounced"
+}
+
+# Resolves the pending keys in $1 from Jira, and leaves the claimed search in
+# $TMP/pending.json for _bounced_pass. Adds each key it bounces to $fresh.
+_resolve_pending() {
+  local key pending="$1"
 
   # Pending: claimed, and never yet seen with a live worktree. Jira says
   # whether it still holds a slot. Searched by the claimed label rather than
@@ -349,8 +448,8 @@ _refresh() {
       continue
     fi
     if printf '%s\n' "$labels" | grep -qxF "$NEEDS_INFO"; then
-      _ledger_set "$key" STATE released
-      _say "$key released (bounced, $NEEDS_INFO) — no longer in flight"
+      _record_bounce "$key"
+      fresh+="$key "
       continue
     fi
     since=$(_ledger_get "$key" PENDING_SINCE)
@@ -362,6 +461,117 @@ _refresh() {
     INFLIGHT=$((INFLIGHT + 1))
     [[ "$(_ledger_get "$key" PINGED)" == 1 ]] || _ping "$key"
   done
+}
+
+# The PM bounced <key>: remember when the watcher saw it, and what the
+# description said then, so a reply after it can be told from what came before.
+#
+# The baseline is the PM's bounce comment, the newest by the acli account since
+# the claim, so a reply between that comment and this poll still counts. With
+# none (the comment is not posted yet, or the account is unknown) it is now.
+# A description edit in that window is not caught: the checksum is taken now.
+_record_bounce() {
+  local key="$1" bounces now own claimed
+  _view "$key" "$TMP/view.json"
+  now=$(date +%s)
+  own=$(_last_own_comment "$TMP/view.json")
+  claimed=$(_ledger_get "$key" PENDING_SINCE)
+  [[ "$claimed" =~ ^[0-9]+$ ]] || claimed=0
+  if [[ "$own" =~ ^[0-9]+$ ]] && (( own >= claimed && own <= now )); then
+    now=$own
+  fi
+  _ledger_set "$key" STATE bounced
+  _ledger_set "$key" BOUNCED_AT "$now"
+  _ledger_set "$key" DESC_SUM "$(_desc_sum "$TMP/view.json")"
+  _ledger_incr "$key" BOUNCES
+  bounces=$(_ledger_get "$key" BOUNCES)
+  if (( bounces >= BOUNCE_CAP )); then
+    _say "$key released (bounced, $NEEDS_INFO) — bounce $bounces of $BOUNCE_CAP: the cap, left on $NEEDS_INFO and never requeued"
+  else
+    _say "$key released (bounced, $NEEDS_INFO) — bounce $bounces of $BOUNCE_CAP, requeued once the reporter replies"
+  fi
+}
+
+# Bounced tickets: requeue the ones the reporter answered (#338). $1 is the
+# bounced keys the ledger already had; $fresh the ones bounced this poll,
+# which nobody can have answered yet.
+_bounced_pass() {
+  local bounced="$1" key labels category n since sum why seen=" "
+  _search "${PROJECT_CLAUSE:+$PROJECT_CLAUSE AND }labels = \"$NEEDS_INFO\"" "$TMP/needs.json"
+  n=$(jq 'length' "$TMP/needs.json")
+  local i
+  for (( i = 0; i < n; i++ )); do
+    key=$(jq -r --argjson i "$i" '.[$i].key' "$TMP/needs.json")
+    labels=$(jq -r --argjson i "$i" '.[$i].fields.labels // [] | .[]' "$TMP/needs.json")
+    category=$(jq -r --argjson i "$i" '.[$i].fields.status.statusCategory.key // ""' "$TMP/needs.json")
+    seen+="$key "
+    [[ "$fresh" == *" $key "* ]] && continue
+    if [[ "$category" == "done" ]]; then
+      if [[ "$(_ledger_get "$key" STATE)" == bounced ]]; then
+        _ledger_set "$key" STATE released
+        _say "$key no longer bounced (status done)"
+      fi
+      continue
+    fi
+    printf '%s\n' "$labels" | grep -qxF "$FAILED" && continue
+    if [[ "$(_ledger_get "$key" STATE)" != bounced ]]; then
+      # Bounced before the watcher looked (an older watcher, or between two
+      # polls by hand): adopt it, if it is the watcher's own ticket.
+      if [[ -f "$LEDGER/$key" ]] || printf '%s\n' "$labels" | grep -qxF "$CLAIMED"; then
+        _record_bounce "$key"
+      fi
+      continue
+    fi
+    _under_bounce_cap "$key" || continue
+    _view "$key" "$TMP/view.json"
+    since=$(_ledger_get "$key" BOUNCED_AT)
+    [[ "$since" =~ ^[0-9]+$ ]] || since=0
+    sum=$(_ledger_get "$key" DESC_SUM)
+    why=""
+    if [[ -n "$SELF" ]] && (( $(_replies_since "$TMP/view.json" "$since") > 0 )); then
+      why="reporter replied"
+    elif [[ -n "$sum" && "$(_desc_sum "$TMP/view.json")" != "$sum" ]]; then
+      why="description edited"
+    fi
+    [[ -n "$why" ]] && _requeue "$key" "$why"
+  done
+  if [[ -z "$SELF" && "$seen" != " " && -z "${WARNED_SELF:-}" ]]; then
+    WARNED_SELF=1
+    _say "cannot tell the reporter's comments from the PM's: no account_id in acli's jira_config.yaml — requeueing on description edits only"
+  fi
+
+  # Bounced tickets that lost $NEEDS_INFO.
+  for key in $bounced; do
+    [[ "$seen" == *" $key "* ]] && continue
+    labels=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .fields.labels // [] | .[]' "$TMP/pending.json" 2>/dev/null || true)
+    category=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .fields.status.statusCategory.key // ""' "$TMP/pending.json" 2>/dev/null || true)
+    if printf '%s\n' "$labels" | grep -qxF "$CLAIMED" && [[ "$category" != "done" ]] \
+      && ! printf '%s\n' "$labels" | grep -qxF "$FAILED"; then
+      # The half-done swap: the reporter took $NEEDS_INFO off and left
+      # $CLAIMED on, which keeps the ticket out of the queue.
+      if _under_bounce_cap "$key"; then
+        _requeue "$key" "$NEEDS_INFO removed"
+      fi
+      continue
+    fi
+    # Re-queued in full by hand, closed, or relabelled: no longer bounced.
+    _ledger_set "$key" STATE released
+    _say "$key no longer bounced ($NEEDS_INFO removed)"
+  done
+}
+
+_under_bounce_cap() {
+  local b
+  b=$(_ledger_get "$1" BOUNCES)
+  (( ${b:-0} < BOUNCE_CAP ))
+}
+
+# _requeue <key> <why>: back into the queue in one edit. Not a failed run.
+_requeue() {
+  local key="$1" why="$2"
+  _swap "$key" "$LABEL" "$CLAIMED,$NEEDS_INFO" || return 0
+  _ledger_set "$key" STATE requeued
+  _say "requeued $key ($why)"
 }
 
 # A ticket pending past the timeout counts as a failed run. It goes back into

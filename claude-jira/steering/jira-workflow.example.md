@@ -125,6 +125,21 @@ what is missing and adds `ai-auto:needs-info`.
   `ai-auto:claimed` removed) after a run was dispatched for it counts as a failed
   run. After **Watch failure cap** of them it gets `ai-auto:failed` instead of a
   claim, and is never claimed again. A bounce is not a failed run.
+- **Requeue on a reply** (#338). The reporter only has to answer: when the
+  watcher sees a bounce it records the time and the description's checksum,
+  and each poll it checks tickets on `ai-auto:needs-info` for a comment since
+  by anyone but the account `acli` is logged in as (the PM posts as it too), or
+  an edited description. On one it requeues the ticket in a single edit
+  (`ai-auto` added, `ai-auto:claimed` and `ai-auto:needs-info` removed), logs
+  `watch: requeued <KEY> (reporter replied)`, and claims it again for a fresh
+  triage. A bounced ticket whose `needs-info` was removed while `claimed` stayed
+  on, with no live worktree, is requeued the same way. A requeue is not a
+  failed run. After **Watch bounce cap** bounces the ticket stays on
+  `needs-info`, so a vague ticket cannot loop forever. A comment counts from
+  the PM's bounce comment on, so a quick answer is not missed; a description
+  edit counts once the watcher has seen the bounce. A reporter on the same Jira
+  account as `acli` (a solo user) cannot reply by comment, since it looks like
+  the PM's: edit the description instead.
 - **Failures stop it.** Any non-zero `acli` exit (a lapsed login reads as
   `unauthorized`, exit 1) stops the watcher and radios the PM `watch-stopped`;
   re-login and start it again. It never retries in a loop. A write that fails
@@ -147,6 +162,7 @@ minus claimed and failed tickets, oldest first; a custom one is used as written
 - **Watch max in flight**: `2`
 - **Watch failure cap**: `2`
 - **Watch pending timeout minutes**: `120`
+- **Watch bounce cap**: `3`
 
 ### Auto merge (`task-merge-gate`)
 

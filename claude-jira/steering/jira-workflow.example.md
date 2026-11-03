@@ -162,7 +162,10 @@ is shell, no model, so the rules are never re-derived from memory.
 - **`merge`** (exit 0): an auto ticket, and all four rules hold: the ticket
   carries **Merge label** (a label only, never words in a description); the
   latest review beat for the PR is `review-complete-clean` from its reviewer,
-  newer than the worker's last re-review request; CI **ran and passed** for the
+  newer than the worker's last re-review request and covering the head commit
+  (it names the head SHA, or is newer than the head commit; a tie in the same
+  second counts as not reviewed); the PR targets the base `task-work` recorded
+  for the worker (else the default branch); CI **ran and passed** for the
   PR's exact head SHA (`gh run list -c <sha>` non-empty, every run success,
   skipped or neutral); and the diff is within **Merge max changed lines**
   (additions + deletions) and **Merge max files**. The PM merges as usual.

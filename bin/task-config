@@ -107,6 +107,8 @@ AW_ROOT=$(dirname "$BIN_DIR")
 . "$AW_ROOT/lib/detect-impl.sh"
 # shellcheck source=lib/tracker-settings.sh
 . "$AW_ROOT/lib/tracker-settings.sh"
+# shellcheck source=lib/doc-set.sh
+. "$AW_ROOT/lib/doc-set.sh"
 # shellcheck source=lib/loadout-artifacts.sh
 . "$AW_ROOT/lib/loadout-artifacts.sh"
 # shellcheck source=lib/hook-carrier.sh
@@ -416,11 +418,14 @@ _require_target_init() {
 # _carry <from-loadout> <to-tracker> — fill CARRY with the task-init flags that
 # carry <from-loadout>'s tracker settings, and CARRIED_DESC with what they say.
 # Settings carry only when the tracker is unchanged — see the asymmetry note in
-# the usage text and in lib/tracker-settings.sh.
+# the usage text and in lib/tracker-settings.sh. Every other setting bullet the
+# old doc changed from the template default (status names, Watch settings)
+# travels as a --set (#346); claude and kiro share one template per tracker, so
+# the old loadout's template is the new one's too.
 CARRY=()
 CARRIED_DESC=""
 _carry() {
-  local from="$1" to_tracker="$2" tracker doc tok
+  local from="$1" to_tracker="$2" tracker doc tok sets_desc
   tracker=$(la_tracker "$from")
   doc=$(la_workflow_doc "$REPO_ROOT" "$from")
   CARRY=()
@@ -428,10 +433,14 @@ _carry() {
   if [[ "$to_tracker" == "$tracker" ]]; then
     while IFS= read -r tok; do
       [[ -n "$tok" ]] && CARRY+=("$tok")
-    done < <(tf_tracker_init_flags "$doc" "$tracker")
+    done < <(tf_tracker_init_flags "$doc" "$tracker"
+             tf_set_carry_flags "$doc" "$AW_ROOT/$from/steering/$tracker-workflow.example.md")
     if ((${#CARRY[@]})); then
+      sets_desc=$(tf_set_carry_flags "$doc" "$AW_ROOT/$from/steering/$tracker-workflow.example.md" \
+        | { grep -vxF -- --set || true; } | tr '\n' ';')
       CARRIED_DESC=$(tf_tracker_extract "$doc" "$tracker" | tr '\n' ' ')
-      CARRIED_DESC="${CARRIED_DESC% }"
+      CARRIED_DESC="${CARRIED_DESC% }${sets_desc:+ ${sets_desc%;}}"
+      CARRIED_DESC="${CARRIED_DESC# }"
     elif [[ -n "$(tf_tracker_fields "$tracker")" ]]; then
       CARRIED_DESC="nothing filled in on the old doc"
     fi

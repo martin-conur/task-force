@@ -98,14 +98,17 @@ pinged() {
 
 edits() { grep -c 'workitem edit' "$STUB_CALLS_DIR/acli.calls" 2>/dev/null || true; }
 
-# comment <key> <author account id> <seconds from now>: a Jira comment, its
-# created time in Jira's own format.
+# comment <key> <author account id> <seconds from now> [<utc offset hours>]:
+# a Jira comment, its created time in Jira's own format, milliseconds and a
+# numeric offset: `2026-10-30T22:48:06.665-0700`.
 comment() {
-  jq --arg k "$1" --arg a "$2" --argjson d "$3" '
+  jq --arg k "$1" --arg a "$2" --argjson d "$3" --argjson o "${4:-0}" '
     map(if .key == $k then .fields.comment.comments += [{
       id: ((.fields.comment.comments // []) | length | tostring),
       author: {accountId: $a},
-      created: (now + $d | floor | strftime("%Y-%m-%dT%H:%M:%S.000+0000")),
+      created: ((now + $d + $o * 3600 | floor | strftime("%Y-%m-%dT%H:%M:%S.665"))
+                + (if $o < 0 then "-" else "+" end)
+                + ($o | fabs | tostring | if length < 2 then "0" + . else . end) + "00"),
       body: "text"}] else . end)' "$ACLI_STUB_ISSUES" >"$ACLI_STUB_ISSUES.tmp"
   mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
 }
@@ -344,6 +347,51 @@ finish() {
   assert_equal "$(pinged | tr '\n' ' ')" "PROJ-1 PROJ-1 "
   # A requeue is not a failed run.
   assert_equal "$(runs_of PROJ-1)" ""
+}
+
+@test "requeue: a reply stamped with milliseconds and a non-UTC offset is read in UTC" {
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  # Written an hour ago in -0700: before the bounce, not a reply.
+  comment PROJ-1 acct:reporter -3600 -7
+  run watch --once
+  refute_output --partial "requeued"
+  run jq -r '.[0].fields.comment.comments[0].created' "$ACLI_STUB_ISSUES"
+  assert_output --regexp '^[0-9-]{10}T[0-9:]{8}\.665-0700$'
+  # A minute from now in -0700: a reply.
+  comment PROJ-1 acct:reporter 60 -7
+  run watch --once
+  assert_output --partial "requeued PROJ-1 (reporter replied)"
+}
+
+@test "requeue: a reply between the PM's bounce comment and the next poll still counts" {
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  age_pending PROJ-1                  # claimed long before the bounce
+  set_labels PROJ-1 "ai-auto:claimed,ai-auto:needs-info"
+  comment PROJ-1 acct:pm-self -120    # the bounce comment
+  comment PROJ-1 acct:reporter -60    # answered before the watcher looked
+  watch --once >/dev/null             # sees the bounce
+  run watch --once
+  assert_output --partial "requeued PROJ-1 (reporter replied)"
+}
+
+@test "requeue: an own comment from before the claim is not the baseline" {
+  issue PROJ-1 ai-auto
+  comment PROJ-1 acct:pm-self -7200
+  comment PROJ-1 acct:reporter -3600
+  claim_and_bounce PROJ-1
+  run watch --once
+  refute_output --partial "requeued"
+}
+
+@test "requeue: a bounced ticket closed as done is released, not left bounced" {
+  issue PROJ-1 ai-auto
+  claim_and_bounce PROJ-1
+  set_done PROJ-1
+  run watch --once
+  assert_output --partial "PROJ-1 no longer bounced (status done)"
+  assert_equal "$(state_of PROJ-1)" released
 }
 
 @test "requeue: a comment by the PM's own acli account is not a reply" {

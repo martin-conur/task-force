@@ -301,12 +301,12 @@ _desc_sum() {
   jq -c '.fields.description // null' "$1" 2>/dev/null | cksum | awk '{ print $1 }'
 }
 
-# Comments in a _view file created after epoch $2 by anyone but $SELF.
-# Jira writes `2026-10-31T15:00:00.000+0000`. The epoch is plain arithmetic
-# (days from the civil date): jq's fromdateiso8601 goes through mktime, which
-# is an hour off across DST on some platforms.
-_replies_since() {
-  jq --argjson since "$2" --arg self "$SELF" '
+# jq defs: `epoch` turns a Jira time, `2026-10-30T22:48:06.665-0700`, into
+# seconds since 1970. Plain arithmetic (days from the civil date): jq's
+# fromdateiso8601 goes through mktime, which is an hour off across DST on some
+# platforms.
+# shellcheck disable=SC2016 # jq source: its $vars are jq's, not the shell's
+JQ_EPOCH='
     def days($y; $m; $d):
       ($y - (if $m <= 2 then 1 else 0 end)) as $y
       | ($y / 400 | floor) as $era
@@ -322,11 +322,25 @@ _replies_since() {
            | if test("^[+-][0-9]{4}$")
              then ((.[1:3] | tonumber) * 3600 + (.[3:5] | tonumber) * 60)
                   * (if .[0:1] == "-" then -1 else 1 end)
-             else 0 end);
+             else 0 end);'
+
+# Comments in a _view file created after epoch $2 by anyone but $SELF.
+_replies_since() {
+  jq --argjson since "$2" --arg self "$SELF" "$JQ_EPOCH"'
     [(.fields.comment.comments // [])[]
      | select((.author.accountId // "") != $self)
      | select((try (.created | epoch) catch 0) > $since)]
     | length' "$1" 2>/dev/null || echo 0
+}
+
+# The epoch of the newest comment in a _view file by $SELF, or nothing.
+_last_own_comment() {
+  [[ -n "$SELF" ]] || return 0
+  jq -r --arg self "$SELF" "$JQ_EPOCH"'
+    [(.fields.comment.comments // [])[]
+     | select((.author.accountId // "") == $self)
+     | (try (.created | epoch) catch empty)]
+    | max // empty' "$1" 2>/dev/null || true
 }
 
 _browse_url() {
@@ -451,11 +465,23 @@ _resolve_pending() {
 
 # The PM bounced <key>: remember when the watcher saw it, and what the
 # description said then, so a reply after it can be told from what came before.
+#
+# The baseline is the PM's bounce comment, the newest by the acli account since
+# the claim, so a reply between that comment and this poll still counts. With
+# none (the comment is not posted yet, or the account is unknown) it is now.
+# A description edit in that window is not caught: the checksum is taken now.
 _record_bounce() {
-  local key="$1" bounces
+  local key="$1" bounces now own claimed
   _view "$key" "$TMP/view.json"
+  now=$(date +%s)
+  own=$(_last_own_comment "$TMP/view.json")
+  claimed=$(_ledger_get "$key" PENDING_SINCE)
+  [[ "$claimed" =~ ^[0-9]+$ ]] || claimed=0
+  if [[ "$own" =~ ^[0-9]+$ ]] && (( own >= claimed && own <= now )); then
+    now=$own
+  fi
   _ledger_set "$key" STATE bounced
-  _ledger_set "$key" BOUNCED_AT "$(date +%s)"
+  _ledger_set "$key" BOUNCED_AT "$now"
   _ledger_set "$key" DESC_SUM "$(_desc_sum "$TMP/view.json")"
   _ledger_incr "$key" BOUNCES
   bounces=$(_ledger_get "$key" BOUNCES)
@@ -480,7 +506,13 @@ _bounced_pass() {
     category=$(jq -r --argjson i "$i" '.[$i].fields.status.statusCategory.key // ""' "$TMP/needs.json")
     seen+="$key "
     [[ "$fresh" == *" $key "* ]] && continue
-    [[ "$category" == "done" ]] && continue
+    if [[ "$category" == "done" ]]; then
+      if [[ "$(_ledger_get "$key" STATE)" == bounced ]]; then
+        _ledger_set "$key" STATE released
+        _say "$key no longer bounced (status done)"
+      fi
+      continue
+    fi
     printf '%s\n' "$labels" | grep -qxF "$FAILED" && continue
     if [[ "$(_ledger_get "$key" STATE)" != bounced ]]; then
       # Bounced before the watcher looked (an older watcher, or between two
@@ -503,7 +535,8 @@ _bounced_pass() {
     fi
     [[ -n "$why" ]] && _requeue "$key" "$why"
   done
-  if [[ -z "$SELF" && "$seen" != " " ]]; then
+  if [[ -z "$SELF" && "$seen" != " " && -z "${WARNED_SELF:-}" ]]; then
+    WARNED_SELF=1
     _say "cannot tell the reporter's comments from the PM's: no account_id in acli's jira_config.yaml — requeueing on description edits only"
   fi
 

@@ -135,7 +135,11 @@ what is missing and adds `ai-auto:needs-info`.
   triage. A bounced ticket whose `needs-info` was removed while `claimed` stayed
   on, with no live worktree, is requeued the same way. A requeue is not a
   failed run. After **Watch bounce cap** bounces the ticket stays on
-  `needs-info`, so a vague ticket cannot loop forever.
+  `needs-info`, so a vague ticket cannot loop forever. A comment counts from
+  the PM's bounce comment on, so a quick answer is not missed; a description
+  edit counts once the watcher has seen the bounce. A reporter on the same Jira
+  account as `acli` (a solo user) cannot reply by comment, since it looks like
+  the PM's: edit the description instead.
 - **Failures stop it.** Any non-zero `acli` exit (a lapsed login reads as
   `unauthorized`, exit 1) stops the watcher and radios the PM `watch-stopped`;
   re-login and start it again. It never retries in a loop. A write that fails

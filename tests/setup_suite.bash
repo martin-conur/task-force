@@ -33,6 +33,11 @@ setup_suite() {
   # scan unset this and stub ps, lsof and the signal sender instead.
   export TASK_FORCE_NO_PROC_SCAN=1
 
+  # radio records the agent's pane off ZELLIJ_PANE_ID at register (#336). A run
+  # launched from inside zellij would otherwise record the developer's own pane
+  # into every fixture; tests that exercise it set one per invocation.
+  unset ZELLIJ_PANE_ID
+
   if [[ -n "${TASK_FORCE_HOME:-}" ]]; then
     # Caller supplied one (CI, or a developer pinning a scratch dir): honour
     # it, but only once it has been proven not to be the real home.

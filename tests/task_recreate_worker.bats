@@ -700,8 +700,9 @@ dead_worker_symlinked_base() {
 @test "keeps focus on the calling tab by default (#254)" {
   dead_worker issue-42
   # An active tab that is NOT this slug: the caller is standing somewhere else,
-  # which is the whole reason the snap-back exists.
-  export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":1,"position":0,"active":true}]'
+  # which is the whole reason the snap-back exists. The rebuilt tab is listed,
+  # as zellij would once it opens: the snap-back waits for it (#343).
+  export STUB_ZELLIJ_TABS_JSON='[{"name":"pm","tab_id":1,"position":0,"active":true},{"name":"issue-42","position":1,"active":false}]'
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_success
   assert_stub_called zellij "action go-to-tab"

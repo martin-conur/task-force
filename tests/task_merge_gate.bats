@@ -33,8 +33,13 @@ setup() {
 DOC
   export ACLI_STUB_ISSUES="$BATS_TEST_TMPDIR/issues.json"
   echo '[]' >"$ACLI_STUB_ISSUES"
-  # The all-green baseline: each test breaks one thing.
+  # The all-green baseline: each test breaks one thing. The worker's sidecar
+  # records base main; its head commit lands between request and verdict.
+  mkdir -p "$WORKTREE_BASE"
+  printf 'BASE_BRANCH=main\nSLUG=proj-1\nJIRA_REF=https://acme.atlassian.net/browse/PROJ-1\nAGENT=claude\n' \
+    >"$WORKTREE_BASE/.proj-1.info"
   issue PROJ-1 ai-auto:claimed ai-auto-merge
+  PR_BASE=main PR_HEAD=task/proj-1 PR_COMMITTED=2026-11-03T10:10:00Z
   pr_json 40 2 3
   export GH_STUB_RUNS_JSON='[{"name":"ci","status":"completed","conclusion":"success"},{"name":"docs","status":"completed","conclusion":"skipped"}]'
   msg "worker-$NAME-proj-1" review-requested 2026-11-03T10:00:00Z
@@ -63,18 +68,24 @@ set_labels() {
   mv "$ACLI_STUB_ISSUES.tmp" "$ACLI_STUB_ISSUES"
 }
 
-# pr_json <additions> <deletions> <files> [state]
+# pr_json <additions> <deletions> <files> [state]; base, head ref and the head
+# commit's date from $PR_BASE, $PR_HEAD and $PR_COMMITTED.
 pr_json() {
-  export GH_STUB_PR_JSON="{\"headRefOid\":\"$SHA\",\"additions\":$1,\"deletions\":$2,\"changedFiles\":$3,\"state\":\"${4:-OPEN}\",\"url\":\"https://github.com/o/r/pull/7\"}"
+  GH_STUB_PR_JSON=$(jq -nc --arg sha "$SHA" --argjson a "$1" --argjson d "$2" --argjson f "$3" \
+    --arg state "${4:-OPEN}" --arg base "$PR_BASE" --arg head "$PR_HEAD" --arg date "$PR_COMMITTED" \
+    '{headRefOid: $sha, headRefName: $head, baseRefName: $base, additions: $a, deletions: $d,
+      changedFiles: $f, state: $state, url: "https://github.com/o/r/pull/7",
+      commits: [{oid: "old", committedDate: "2026-11-03T09:00:00Z"}, {oid: $sha, committedDate: $date}]}')
+  export GH_STUB_PR_JSON
 }
 
-# msg <from> <intent> <created_at> [inbox|processed] [pr] — a radio message on disk.
+# msg <from> <intent> <created_at> [inbox|processed] [pr] [body] — a radio message on disk.
 msg() {
   local dir="$TASK_FORCE_HOME/radio/mailbox/pm-$NAME/${4:-inbox}" id
   id="$(printf '%s' "$3" | tr -d ':-')-from-$1-$RANDOM"
   mkdir -p "$dir"
-  printf -- '---\nid: %s\nfrom: %s\nto: pm-%s\nintent: %s\npr: %s\ncreated_at: %s\n---\nbody\n' \
-    "$id" "$1" "$NAME" "$2" "${5:-7}" "$3" >"$dir/$id.md"
+  printf -- '---\nid: %s\nfrom: %s\nto: pm-%s\nintent: %s\npr: %s\ncreated_at: %s\n---\n%s\n' \
+    "$id" "$1" "$NAME" "$2" "${5:-7}" "$3" "${6:-body}" >"$dir/$id.md"
 }
 
 comments() { cat "$STUB_CALLS_DIR/acli.comments" 2>/dev/null || true; }
@@ -147,6 +158,89 @@ comments() { cat "$STUB_CALLS_DIR/acli.comments" 2>/dev/null || true; }
   run gate 7 PROJ-1 --no-comment
   assert_failure 1
   assert_output --partial "no review-complete-clean from reviewer-$NAME-pr7"
+}
+
+# #340 review: a push after the clean verdict, with no re-review request.
+@test "rule 2: a head commit newer than the clean verdict asks: the review is not of this code" {
+  PR_COMMITTED=2026-11-03T10:45:00Z pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output "ask: reviewed code is older than the head commit (clean verdict 2026-11-03T10:20:00Z, head 0123456789ab committed 2026-11-03T10:45:00Z)"
+}
+
+@test "rule 2: a head commit in the verdict's own second asks (fail closed)" {
+  PR_COMMITTED=2026-11-03T10:20:00Z pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output --partial "reviewed code is older than the head commit"
+}
+
+@test "rule 2: a verdict naming the head SHA is bound by the SHA, whatever the commit date" {
+  rm -rf "$TASK_FORCE_HOME/radio/mailbox"
+  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "Clean. Reviewed head ${SHA:0:7}; CI green."
+  PR_COMMITTED=2026-11-03T10:45:00Z pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_success
+  assert_output "merge"
+}
+
+@test "rule 2: a verdict naming another SHA falls back to the commit date" {
+  rm -rf "$TASK_FORCE_HOME/radio/mailbox"
+  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "Clean at abcdef1."
+  PR_COMMITTED=2026-11-03T10:45:00Z pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output --partial "reviewed code is older than the head commit"
+}
+
+@test "rule 2: an unreadable head commit date asks" {
+  PR_COMMITTED=garbage pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output --partial "could not read the head commit's date"
+}
+
+@test "rule 2: a request and a clean verdict in the same second count as not reviewed" {
+  rm -rf "$TASK_FORCE_HOME/radio/mailbox"
+  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z
+  msg "worker-$NAME-proj-1" re-review-requested 2026-11-03T10:20:00Z
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output "ask: PR #7 has a review verdict and another review beat in the same second (re-review-requested review-complete-clean); treating it as not reviewed"
+}
+
+@test "base: a PR that targets another branch than the sidecar's asks" {
+  PR_BASE=main
+  sed -i.bak 's/^BASE_BRANCH=.*/BASE_BRANCH=jira-auto/' "$WORKTREE_BASE/.proj-1.info"
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output "ask: unexpected base main for PR #7 (expected jira-auto)"
+  PR_BASE=jira-auto pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_success
+}
+
+@test "base: a sidecar found by the ticket key when the head ref names no slug" {
+  sed -i.bak 's/^BASE_BRANCH=.*/BASE_BRANCH=release/' "$WORKTREE_BASE/.proj-1.info"
+  PR_HEAD=some-branch pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output "ask: unexpected base main for PR #7 (expected release)"
+}
+
+@test "base: with no sidecar, the repo's default branch (origin/HEAD); with neither, ask" {
+  rm "$WORKTREE_BASE/.proj-1.info"
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output --partial "could not determine the expected base for PR #7"
+  git -C "$MAIN_REPO" update-ref refs/remotes/origin/develop HEAD
+  git -C "$MAIN_REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output "ask: unexpected base main for PR #7 (expected develop)"
+  PR_BASE=develop pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_success
 }
 
 @test "rule 3: no CI run for the head SHA asks (an empty list is not a pass)" {

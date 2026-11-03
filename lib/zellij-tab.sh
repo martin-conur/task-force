@@ -267,38 +267,64 @@ aw_launch_tab() {
 # (#311). Checks the active tab right after the go-to-tab and, while it is
 # not the caller's, issues go-to-tab again: at most AW_TAB_FOCUS_CHECKS checks
 # (default 7), AW_TAB_FOCUS_INTERVAL seconds apart (default 0.25), so the
-# worst case is about 1.5s and the common case is one list-tabs with no sleep.
+# worst case is about 1.5s and the common case is two list-tabs, one sleep
+# apart.
+#
+# "Caller active" counts only once list-tabs shows the new tab <slug> (#343):
+# a list-tabs answered before zellij has processed the new-tab reports the
+# caller active with no new tab yet, and the new tab steals focus right after.
+# Even then it takes two consecutive caller-active checks to return, so a
+# steal landing just after the tab appears is still caught.
+#
 # A list-tabs that answers nothing usable ends the loop quietly: it cannot
 # tell, and a launch never fails over focus. A retry or a final failure
 # writes one `tab-focus:` line to radio's log, to count how often the race
-# actually happens.
-#
-# Known limit: a first list-tabs answered before zellij has processed the
-# new-tab still reports the caller active, so the loop returns and a focus
-# steal that lands after it goes unseen. If a live run ever shows that, the
-# fix is to require two consecutive active observations of the caller.
+# actually happens; a budget spent without the new tab ever being listed
+# says so.
 aw_snap_back_to_tab() {
   local slug="$1" caller_pos="$2"
   local checks="${AW_TAB_FOCUS_CHECKS:-7}" interval="${AW_TAB_FOCUS_INTERVAL:-0.25}"
-  local target=$((caller_pos + 1)) gotos=1 i active=""
+  local target=$((caller_pos + 1)) gotos=1 i state active="" listed=""
+  local seen_new=0 streak=0
 
   aw_zellij action go-to-tab "$target" 2>/dev/null || true
   for (( i = 1; i <= checks; i++ )); do
-    active=$(aw_zellij action list-tabs --json 2>/dev/null \
-      | jq -r '[.[] | select(.active) | .position] | .[0] // empty' 2>/dev/null) || active=""
+    # "<active position> <slug listed?>"; the paint prefixes are stripped as
+    # in aw_zellij_tab_id_by_name, since radio may rename the tab already.
+    state=$(aw_zellij action list-tabs --json 2>/dev/null \
+      | jq -r --arg n "$slug" \
+          '([.[] | select(.active) | .position] | .[0] // empty | tostring)
+           + " "
+           + (any(.[]; (.name // "" | sub("^⏸️ "; "") | sub("^▶️ "; "")
+                        | sub("^❓︎ "; "")) == $n) | tostring)' 2>/dev/null) || state=""
+    active="${state%% *}" listed="${state#* }"
     [[ -n "$active" ]] || return 0
+    [[ "$listed" == true ]] && seen_new=1
     if [[ "$active" == "$caller_pos" ]]; then
-      if (( gotos > 1 )); then
-        aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s' \
-          "$gotos" "$slug" "$caller_pos")"
+      (( seen_new )) && streak=$((streak + 1))
+      if (( streak >= 2 )); then
+        if (( gotos > 1 )); then
+          aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s' \
+            "$gotos" "$slug" "$caller_pos")"
+        fi
+        return 0
       fi
-      return 0
+      (( i < checks )) || break
+      sleep "$interval" 2>/dev/null || true
+      continue
     fi
+    streak=0
     (( i < checks )) || break
     sleep "$interval" 2>/dev/null || true
     aw_zellij action go-to-tab "$target" 2>/dev/null || true
     gotos=$((gotos + 1))
   done
+  if (( ! seen_new )); then
+    aw_radio_log "$(printf 'tab-focus: new tab never appeared after %d check(s) slug=%s caller_position=%s active_position=%s' \
+      "$checks" "$slug" "$caller_pos" "$active")"
+    echo "⚠ Could not confirm focus on your tab: '$slug' never showed up in zellij's tab list, and may still take focus (logged, grep 'tab-focus:')." >&2
+    return 0
+  fi
   aw_radio_log "$(printf 'tab-focus: snap-back failed after %d go-to-tab(s) slug=%s caller_position=%s active_position=%s' \
     "$gotos" "$slug" "$caller_pos" "$active")"
   echo "⚠ Could not keep focus on your tab: '$slug' may have taken it (logged, grep 'tab-focus:')." >&2

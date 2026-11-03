@@ -58,6 +58,9 @@ echo "  ✓ Script: task-reviewer (canonical + kiro routing)"; sleep 0.05
 # task-watch is claude-jira's alone (#328): it reads Jira through acli.
 ln -sf "$SCRIPT_DIR/../bin/task-watch" ~/.local/bin/task-watch
 echo "  ✓ Script: task-watch (Jira auto intake)"; sleep 0.05
+# task-merge-gate is too (#329): the PM's merge decision for task-watch's tickets.
+ln -sf "$SCRIPT_DIR/../bin/task-merge-gate" ~/.local/bin/task-merge-gate
+echo "  ✓ Script: task-merge-gate (auto-merge gate)"; sleep 0.05
 
 # shellcheck disable=SC2016  # literal string written to shell RC; $HOME must not expand here
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'

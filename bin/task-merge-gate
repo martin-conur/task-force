@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# task-merge-gate — may the PM merge an auto ticket's PR by itself? (#329)
+#
+# claude-jira only. Shell, no model: the PM runs it after every clean review and
+# obeys the first word it prints, so the rules are never re-derived from memory.
+#
+#   merge         exit 0  every rule holds: do the merge beat
+#   ask: <why>    exit 1  a rule failed, or something could not be read: tell
+#                         the user why and wait
+#   manual: <why> exit 3  not an auto ticket: the base review flow applies
+#   (usage error) exit 2
+#
+# An auto ticket is one task-watch claimed, decided from state rather than the
+# PM's memory of a ticket-filed message: the ticket carries `<watch
+# label>:claimed`, or task-watch's ledger has an entry for its key
+# ($TASK_FORCE_HOME/watch/<repo>/<KEY>, written on every claim and never
+# removed). For an auto ticket, all four must hold, else `ask:`:
+#
+#   1. The ticket carries the merge label (`ai-auto-merge`). A label only:
+#      words in a description are anyone's to write.
+#   2. The latest review beat for the PR is `review-complete-clean` from
+#      `reviewer-<repo>-pr<N>`, newer than the worker's last (re-)review
+#      request — read from the radio messages on disk, inbox and processed.
+#   3. CI ran and passed for the PR's exact head SHA: `gh run list -c <sha>` is
+#      non-empty and every run completed as success, skipped or neutral. An
+#      empty list is a run that never happened, not a pass (#194).
+#   4. The diff is within the caps: additions + deletions and changed files.
+#
+# Every failure is listed, not just the first. Anything unreadable (acli, gh)
+# is an `ask:`, never a `merge` and never a `manual`: it fails closed.
+#
+# For an auto ticket it then comments the outcome on the Jira ticket through
+# acli (--no-comment skips it). A failed comment is a warning on stderr; it
+# never changes the verdict.
+#
+# Settings come from .claude/jira-workflow.md in the main checkout, last
+# matching bullet wins (lib/doc-setting.sh). Must run on /bin/bash 3.2.
+
+# Resolve own path through symlinks -> AW_ROOT.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+BIN_DIR=$(cd -P "$(dirname "$src")" && pwd)
+AW_ROOT=$(dirname "$BIN_DIR")
+
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
+# shellcheck source=lib/require-jq.sh
+source "$AW_ROOT/lib/require-jq.sh"
+# shellcheck source=lib/doc-setting.sh
+source "$AW_ROOT/lib/doc-setting.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: task-merge-gate <pr-number-or-url> <JIRA-KEY> [--no-comment]
+
+Decide whether the PM may merge an auto ticket's PR without asking. Prints one
+line and exits with its code:
+
+  merge          0  the ticket opted in, the review is clean, CI ran and
+                    passed for the head SHA, and the diff is within the caps
+  ask: <reason>  1  tell the user the reason and wait
+  manual: <why>  3  not an auto ticket (task-watch never claimed it): the
+                    base review flow applies
+
+For an auto ticket the outcome is also commented on the Jira ticket through
+acli; --no-comment skips that.
+
+Settings, read from .claude/jira-workflow.md (last matching bullet wins):
+  Watch label               ai-auto        an auto ticket carries <label>:claimed
+  Merge label               ai-auto-merge  the ticket's opt-in
+  Merge max changed lines   200            additions + deletions
+  Merge max files           10             changed files
+EOF
+  exit "${1:-2}"
+}
+
+PR_ARG="" KEY="" COMMENT=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-comment) COMMENT=0; shift ;;
+    -h|--help) usage 0 ;;
+    -*) echo "Error: unknown flag '$1'" >&2; usage ;;
+    *)
+      if [[ -z "$PR_ARG" ]]; then PR_ARG="$1"
+      elif [[ -z "$KEY" ]]; then KEY="$1"
+      else echo "Error: unexpected argument '$1'" >&2; usage
+      fi
+      shift ;;
+  esac
+done
+[[ -n "$PR_ARG" && -n "$KEY" ]] || usage
+
+PR="${PR_ARG%%[?#]*}"
+PR="${PR%/}"
+PR="${PR##*/}"
+if [[ ! "$PR" =~ ^[0-9]+$ ]]; then
+  echo "Error: '$PR_ARG' is not a PR number or URL" >&2
+  usage
+fi
+# A browse URL or a key; keys are matched uppercased, as task-watch writes them.
+KEY=$(printf '%s' "$KEY" | tr '[:lower:]' '[:upper:]' | grep -oE '[A-Z][A-Z0-9_]+-[0-9]+' | tail -n 1 || true)
+if [[ -z "$KEY" ]]; then
+  echo "Error: no Jira key in the second argument" >&2
+  usage
+fi
+
+require_jq_1_6 || exit 2
+
+MAIN_ROOT=$(aw_main_repo_root "$PWD") || { echo "Error: not in a git repo" >&2; exit 2; }
+DOC="$MAIN_ROOT/.claude/jira-workflow.md"
+if [[ ! -f "$DOC" ]]; then
+  echo "Error: no .claude/jira-workflow.md in $MAIN_ROOT — task-merge-gate is claude-jira only (task-init claude-jira)" >&2
+  exit 2
+fi
+REPO_NAME=$(aw_main_repo_name "$MAIN_ROOT")
+TF_HOME="${TASK_FORCE_HOME:-$HOME/.task-force}"
+LOG_FILE="$TF_HOME/radio/log"
+
+WATCH_LABEL=$(tf_doc_setting "$DOC" "Watch label" ai-auto)
+CLAIMED="$WATCH_LABEL:claimed"
+MERGE_LABEL=$(tf_doc_setting "$DOC" "Merge label" ai-auto-merge)
+MAX_LINES=$(tf_doc_number_setting "$DOC" "Merge max changed lines" 200) || exit 2
+MAX_FILES=$(tf_doc_number_setting "$DOC" "Merge max files" 10) || exit 2
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+_log() {
+  mkdir -p "$(dirname "$LOG_FILE")"
+  printf '%s merge-gate: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE"
+}
+
+_first_line() {
+  cat "$@" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 1 || true
+}
+
+# Comment the outcome on the ticket. Never changes the verdict.
+_comment() {
+  (( COMMENT )) || return 0
+  local rc=0 out="$TMP/comment"
+  printf 'task-merge-gate on PR #%s (%s): %s\n' "$PR" "${PR_URL:-no url}" "$1" |
+    acli jira workitem comment create --key "$KEY" --body-file /dev/stdin --json \
+      >"$out" 2>"$TMP/err" || rc=$?
+  if (( rc != 0 )) || ! jq -e '(.successCount // 0) >= 1 or ([.results[]?.status] | length > 0 and all(. == "SUCCESS"))' \
+      "$out" >/dev/null 2>&1; then
+    echo "task-merge-gate: warning: could not comment on $KEY ($(_first_line "$TMP/err" "$out"))" >&2
+    _log "comment failed key=$KEY pr=$PR repo=$REPO_NAME"
+  fi
+}
+
+# _verdict <line> <exit>: print it, log it, comment it (auto tickets only).
+_verdict() {
+  printf '%s\n' "$1"
+  _log "pr=$PR key=$KEY repo=$REPO_NAME -> $1"
+  [[ "$1" == manual:* ]] || _comment "$1"
+  exit "$2"
+}
+
+# ---------------- the ticket ----------------
+
+rc=0
+acli jira workitem view "$KEY" --fields labels --json >"$TMP/issue.json" 2>"$TMP/err" || rc=$?
+if (( rc != 0 )) || ! jq -e '.fields | type == "object"' "$TMP/issue.json" >/dev/null 2>&1; then
+  COMMENT=0  # acli cannot read the ticket; it would not take a comment either
+  _verdict "ask: could not read $KEY's labels through acli (exit $rc: $(_first_line "$TMP/err" "$TMP/issue.json")) — re-login with: acli jira auth login --web" 1
+fi
+LABELS=$(jq -r '.fields.labels // [] | .[]' "$TMP/issue.json")
+_has_label() { printf '%s\n' "$LABELS" | grep -qxF "$1"; }
+
+if ! _has_label "$CLAIMED" && [[ ! -f "$TF_HOME/watch/$REPO_NAME/$KEY" ]]; then
+  _verdict "manual: $KEY did not come through task-watch (no $CLAIMED label, no watch ledger entry)" 3
+fi
+
+REASONS=()
+
+# 1. The opt-in label.
+_has_label "$MERGE_LABEL" || REASONS+=("$KEY has no $MERGE_LABEL label (merging an auto ticket is opt-in)")
+
+# ---------------- the PR ----------------
+
+PR_URL=""
+rc=0
+gh pr view "$PR" --json headRefOid,additions,deletions,changedFiles,state,url >"$TMP/pr.json" 2>"$TMP/err" || rc=$?
+if (( rc != 0 )) || ! jq -e '.headRefOid | type == "string" and length > 0' "$TMP/pr.json" >/dev/null 2>&1; then
+  REASONS+=("could not read PR #$PR through gh (exit $rc: $(_first_line "$TMP/err" "$TMP/pr.json"))")
+  SHA=""
+else
+  SHA=$(jq -r .headRefOid "$TMP/pr.json")
+  PR_URL=$(jq -r '.url // ""' "$TMP/pr.json")
+  state=$(jq -r '.state // ""' "$TMP/pr.json")
+  [[ "$state" == OPEN ]] || REASONS+=("PR #$PR is ${state:-in an unknown state}, not open")
+
+  # 4. The caps.
+  lines=$(jq -r '(.additions // 0) + (.deletions // 0)' "$TMP/pr.json")
+  files=$(jq -r '.changedFiles // 0' "$TMP/pr.json")
+  (( lines <= MAX_LINES )) || REASONS+=("the diff changes $lines lines, over the $MAX_LINES-line cap")
+  (( files <= MAX_FILES )) || REASONS+=("the diff touches $files files, over the $MAX_FILES-file cap")
+fi
+
+# 2. The review: the newest review beat for this PR, from the radio messages on
+# disk in every mailbox (an --also alias delivers into another repo's PM inbox).
+# A request counts only from this repo's worker, a completion only from this
+# PR's reviewer.
+REVIEWER="reviewer-$REPO_NAME-pr$PR"
+last=$(find "$TF_HOME/radio/mailbox" -type f -name '*.md' \( -path '*/inbox/*' -o -path '*/processed/*' \) \
+    -exec awk '
+      function flush() {
+        if (fname != "" && !done) { print created "\t" id "\t" from "\t" intent "\t" pr; done = 1 }
+      }
+      FNR == 1 { flush(); fname = FILENAME; done = 0; fence = 0
+                 id = ""; from = ""; intent = ""; pr = ""; created = "" }
+      /^---[ \t\r]*$/ { fence++; if (fence >= 2) { flush(); nextfile }; next }
+      fence != 1 { next }
+      index($0, "id: ") == 1         { id = substr($0, 5) }
+      index($0, "from: ") == 1       { from = substr($0, 7) }
+      index($0, "intent: ") == 1     { intent = substr($0, 9) }
+      index($0, "pr: ") == 1         { pr = substr($0, 5) }
+      index($0, "created_at: ") == 1 { created = substr($0, 13) }
+      END { flush() }
+    ' {} + 2>/dev/null |
+  awk -F '\t' -v pr="$PR" -v rev="$REVIEWER" -v wk="worker-$REPO_NAME-" '
+    $5 != pr { next }
+    ($4 == "review-requested" || $4 == "re-review-requested") && index($3, wk) == 1 { print; next }
+    ($4 == "review-complete-clean" || $4 == "review-complete-with-findings") && $3 == rev { print }
+  ' | sort | tail -n 1 | cut -f 4 || true)
+case "$last" in
+  review-complete-clean) ;;
+  review-complete-with-findings) REASONS+=("the latest review of PR #$PR has findings") ;;
+  review-requested|re-review-requested) REASONS+=("PR #$PR has changed since its last review (a $last is newer than any verdict)") ;;
+  *) REASONS+=("no review-complete-clean from $REVIEWER on record") ;;
+esac
+
+# 3. CI for the exact head SHA.
+if [[ -n "$SHA" ]]; then
+  rc=0
+  gh run list -c "$SHA" --limit 100 --json name,status,conclusion >"$TMP/runs.json" 2>"$TMP/err" || rc=$?
+  if (( rc != 0 )) || ! jq -e 'type == "array"' "$TMP/runs.json" >/dev/null 2>&1; then
+    REASONS+=("could not list CI runs for ${SHA:0:12} (exit $rc: $(_first_line "$TMP/err" "$TMP/runs.json"))")
+  elif [[ "$(jq 'length' "$TMP/runs.json")" == 0 ]]; then
+    REASONS+=("no CI run exists for head ${SHA:0:12} — an empty check list is not a pass")
+  else
+    pending=$(jq -r '[.[] | select(.status != "completed") | .name] | join(", ")' "$TMP/runs.json")
+    failed=$(jq -r '[.[] | select(.status == "completed" and ((.conclusion // "") | IN("success", "skipped", "neutral") | not)) | "\(.name) (\(.conclusion // "none"))"] | join(", ")' "$TMP/runs.json")
+    [[ -z "$pending" ]] || REASONS+=("CI is still running for ${SHA:0:12}: $pending")
+    [[ -z "$failed" ]] || REASONS+=("CI did not pass for ${SHA:0:12}: $failed")
+  fi
+fi
+
+if (( ${#REASONS[@]} == 0 )); then
+  _verdict merge 0
+fi
+reason="${REASONS[0]}"
+for (( i = 1; i < ${#REASONS[@]}; i++ )); do reason+="; ${REASONS[$i]}"; done
+_verdict "ask: $reason" 1

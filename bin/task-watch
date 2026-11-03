@@ -55,6 +55,8 @@ source "$AW_ROOT/lib/repo-name.sh"
 source "$AW_ROOT/lib/tracker-settings.sh"
 # shellcheck source=lib/require-jq.sh
 source "$AW_ROOT/lib/require-jq.sh"
+# shellcheck source=lib/doc-setting.sh
+source "$AW_ROOT/lib/doc-setting.sh"
 
 usage() {
   cat <<'EOF'
@@ -128,22 +130,8 @@ _say() {
 }
 
 # _setting <bullet name> <default>: the last `- **<name>**: `<value>`` in the doc.
-_setting() {
-  local v
-  v=$(sed -nE "s|^- \*\*$1\*\*: \`([^\`]+)\`.*|\1|p" "$DOC" | tail -n 1)
-  [[ -n "$v" && "$v" != default ]] || v="$2"
-  printf '%s' "$v"
-}
-
-_number_setting() {
-  local v
-  v=$(_setting "$1" "$2")
-  if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-    echo "Error: '$1' in $DOC must be a whole number, got '$v'" >&2
-    exit 1
-  fi
-  printf '%s' "$v"
-}
+_setting() { tf_doc_setting "$DOC" "$1" "$2"; }
+_number_setting() { tf_doc_number_setting "$DOC" "$1" "$2" || exit 1; }
 
 LABEL=$(_setting "Watch label" ai-auto)
 CLAIMED="$LABEL:claimed"

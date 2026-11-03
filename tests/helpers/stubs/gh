@@ -10,6 +10,10 @@
 #                         Defaults to "feature-branch".
 #   GH_STUB_PR_BASE_REF   baseRefName returned similarly. Defaults to "main".
 #   GH_STUB_PR_BODY       PR body returned similarly. Defaults to empty.
+#   GH_STUB_PR_JSON       JSON printed by `gh pr view N --json headRefOid,...`
+#                         (task-merge-gate, #329). Unset: exits 1.
+#   GH_STUB_RUNS_JSON     JSON printed by `gh run list`. Defaults to `[]`.
+#   GH_STUB_RUNS_EXIT     non-zero: `gh run list` exits with it.
 #
 # task-done uses the `--json url -q .url` form; task-reviewer uses the
 # per-field `--json <field> --jq .<field>` form. We match both.
@@ -18,6 +22,16 @@ echo "gh $*" >> "${STUB_CALLS_DIR}/gh.calls"
 ARGS="$*"
 
 case "$ARGS" in
+  *"pr view"*"--json headRefOid"*)
+    [[ -n "${GH_STUB_PR_JSON:-}" ]] || { echo "no pull requests found" >&2; exit 1; }
+    printf '%s\n' "$GH_STUB_PR_JSON"
+    exit 0
+    ;;
+  "run list"*)
+    [[ "${GH_STUB_RUNS_EXIT:-0}" == 0 ]] || { echo "HTTP 401: Bad credentials" >&2; exit "$GH_STUB_RUNS_EXIT"; }
+    printf '%s\n' "${GH_STUB_RUNS_JSON:-[]}"
+    exit 0
+    ;;
   *"pr view"*"--json headRefName"*"--jq .headRefName"*)
     echo "${GH_STUB_PR_HEAD_REF:-feature-branch}"
     exit 0

@@ -169,13 +169,16 @@ resolve_link() {
         [ ! -e "$HOME/.local/bin/task-reviewer" ] || { echo "$impl: unexpected task-reviewer"; return 1; }
         ;;
     esac
-    # task-watch (#328) is claude-jira's alone.
-    if [[ "$impl" == claude-jira ]]; then
-      [ "$(resolve_link task-watch)" = "$REPO_ROOT_REAL/bin/task-watch" ] \
-        || { echo "$impl: task-watch resolves to $(resolve_link task-watch)"; return 1; }
-    else
-      [ ! -e "$HOME/.local/bin/task-watch" ] || { echo "$impl: unexpected task-watch"; return 1; }
-    fi
+    # task-watch (#328) and task-merge-gate (#329) are claude-jira's alone.
+    local cmd
+    for cmd in task-watch task-merge-gate; do
+      if [[ "$impl" == claude-jira ]]; then
+        [ "$(resolve_link "$cmd")" = "$REPO_ROOT_REAL/bin/$cmd" ] \
+          || { echo "$impl: $cmd resolves to $(resolve_link "$cmd")"; return 1; }
+      else
+        [ ! -e "$HOME/.local/bin/$cmd" ] || { echo "$impl: unexpected $cmd"; return 1; }
+      fi
+    done
   done
 }
 

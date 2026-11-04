@@ -443,6 +443,31 @@ it. `task-remove` takes it back out, exclude block and git config included.
 claude only: kiro has no untracked hook location, so a kiro install is refused
 on a local-only repo, and `--local-only` on a kiro loadout.
 
+**Any setting from the command line** — `task-init <loadout> --set "<setting>=<value>"` (#346)
+
+Every setting bullet in this doc (a list item that is a bold label, a colon and
+a code span) can be written by `task-init`, so a config tool can own the values
+instead of hand edits a `--force` would lose. `<setting>` is the bullet label as
+written here, such as `Status when done` or, on jira, `Watch poll seconds`,
+matched case-insensitively and split on the first `=`. Repeatable. An empty value
+restores the template default. A label this loadout's template does not carry is
+refused with the list of valid ones, exit 2, before anything is written. Values
+land inside the managed region: a re-run with the same `--set` gives the same
+file, and a re-run without one keeps the value already there. The tracker flags
+(`--owner` / `--repo` / `--project`, `--site` / `--key` / `--board`, `--tasks` /
+`--projects` / `--board`) are shorthands for `--set` on their own bullet. An
+existing doc is rewritten only with `--force` (or at a prompt), as for every
+other value. It works with `--local-only`, and `task-config set` / `add
+assistant` / `sync` carry every bullet that differs from the template default as
+a `--set`. A bullet below the end marker is never touched, and still wins for
+the readers that take the last one (`task-watch`, `task-merge-gate`).
+
+```bash
+# an external config tool, per repo, from its own records
+task-init claude-jira --local-only --force --site https://<site>.atlassian.net --key OPS \
+  --set "Status when in review=Code Review" --set "Watch poll seconds=120"
+```
+
 `task-remove` — take task-force back out of this repo (#220)
 
 The same removal walk a `task-config set` performs, with no install after it. Two

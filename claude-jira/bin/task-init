@@ -43,6 +43,18 @@ Local-only install (#327) — nothing task-force reaches the repo's branches:
                    task-work / task-reviewer / task-recreate-worker copy the
                    untracked set into each worktree they open.
 
+Any workflow-doc setting (#346):
+  --set "<setting>=<value>"
+                   Write one setting bullet of the workflow doc, e.g.
+                   --set "Status when done=Closed". <setting> is the bullet
+                   label as written in the doc, matched case-insensitively;
+                   split on the first =. Repeatable. An empty value restores
+                   the template default; an unknown label is refused with the
+                   list of valid ones. A re-run without a given --set keeps the
+                   value already in the doc. Rewriting an existing doc needs
+                   --force (or a prompt run), as for every other value. Tracker
+                   flags (--owner, --site, --tasks, ...) are shorthands for it.
+
 --force and --restore are mutually exclusive.
 EOF
   exit 1
@@ -55,6 +67,7 @@ FORCE=false
 LOCAL_ONLY=false
 RESTORE=false
 SCOPE="all"
+SETS=()
 SITE_VIA_FLAG=false
 KEY_VIA_FLAG=false
 BOARD_VIA_FLAG=false
@@ -67,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     --force)    FORCE=true; shift;;
     --restore)  RESTORE=true; shift;;
     --local-only) LOCAL_ONLY=true; shift;;
+    --set)      [[ $# -ge 2 ]] || { echo "Error: --set needs \"<setting>=<value>\"" >&2; exit 2; }
+                SETS+=("$2"); shift 2;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
     --hooks)    SCOPE="hooks"; shift;;
@@ -123,11 +138,23 @@ LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/require-jq.sh
 . "$LIB_DIR/require-jq.sh"
 # endregion:require-jq-source
+# region:doc-set-source
+# `--set "<setting>=<value>"` (#346) writes any setting bullet of the workflow
+# doc: lib/doc-set.sh checks the label against the template, then rewrites the
+# rendered copy, carrying every bullet the run was not told about over from the
+# existing doc.
+# shellcheck source=lib/doc-set.sh
+. "$LIB_DIR/doc-set.sh"
+# endregion:doc-set-source
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
   exit 1
 fi
+
+# region:doc-set-validate
+tf_set_validate "$TEMPLATE" ${SETS[@]+"${SETS[@]}"} || exit 2
+# endregion:doc-set-validate
 
 git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo"; exit 1; }
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -217,6 +244,9 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
     cp "$TEMPLATE" "$TMP_RENDERED"
   fi
 
+# region:doc-set-apply
+  INSTALL_POLICY="$POLICY" tf_set_apply "$TMP_RENDERED" "$TEMPLATE" "$TARGET" ${SETS[@]+"${SETS[@]}"}
+# endregion:doc-set-apply
   INSTALL_POLICY="$POLICY" install_managed_file "$TMP_RENDERED" "$TARGET" "jira-workflow.md"
 
   IMPORT_LINE="@.claude/jira-workflow.md"

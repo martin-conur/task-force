@@ -110,6 +110,31 @@ Untracked files do not follow `git worktree add`, so `task-work`, `task-reviewer
 
 **claude only.** kiro reads its hooks from `.kiro/agents/<role>.json`, which has no untracked counterpart, so `task-init kiro-* --local-only` is refused, and so is any kiro install, `task-config add assistant kiro` or `set assistant kiro` on a repo already local-only.
 
+#### Any setting from the command line: `--set` (#346)
+
+`task-init <loadout> --set "<setting>=<value>"` writes one setting bullet of the workflow doc (a list item that is a bold label, a colon and
+a code span), so a config tool can own the values
+instead of hand edits a `--force` would lose. `<setting>` is the bullet label as
+written in the doc, such as `Status when done` or, on jira, `Watch poll seconds`,
+matched case-insensitively and split on the first `=`. Repeatable. An empty value
+restores the template default. A label this loadout's template does not carry is
+refused with the list of valid ones, exit 2, before anything is written. Values
+land inside the managed region: a re-run with the same `--set` gives the same
+file, and a re-run without one keeps the value already there. The tracker flags
+(`--owner` / `--repo` / `--project`, `--site` / `--key` / `--board`, `--tasks` /
+`--projects` / `--board`) are shorthands for `--set` on their own bullet. An
+existing doc is rewritten only with `--force` (or at a prompt), as for every
+other value. It works with `--local-only`, and `task-config set` / `add
+assistant` / `sync` carry every bullet that differs from the template default as
+a `--set`. A bullet below the end marker is never touched, and still wins for
+the readers that take the last one (`task-watch`, `task-merge-gate`).
+
+```bash
+# an external config tool, per repo, from its own records
+task-init claude-jira --local-only --force --site https://<site>.atlassian.net --key OPS \
+  --set "Status when in review=Code Review" --set "Watch poll seconds=120"
+```
+
 #### Re-running `task-init`
 
 `task-init` is safe to re-run any time you want to pull in new template scaffolding or restore deleted files. Two orthogonal axes of control:

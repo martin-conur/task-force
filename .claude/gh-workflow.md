@@ -719,7 +719,11 @@ prompt). It spawns a fresh zellij tab + worktree on the PR's head ref, runs the
 to override), cross-checks the PR against the spec issue, runs the
 `code-review` skill on the diff, posts **one** thorough PR comment via
 `gh pr comment --body-file -` carrying its full analysis + verdict, and radios
-PM back with `review-complete-clean` or `review-complete-with-findings`. On
+PM back with `review-complete-clean` or `review-complete-with-findings`. It
+pins the PR's head SHA before reading the diff and names it, as `reviewed <sha>`,
+in the comment's verdict line and as the first line of the radio body, which is
+what `task-merge-gate` binds a clean review to; if the head moved during the
+review the verdict is never clean (#348). On
 this loadout the spec is an issue number or URL, passed as the second arg or
 auto-detected from the PR body's first `Closes #N` / `Fixes #N` /
 `Resolves #N` line, case-insensitive. That auto-detect is **GitHub-only**: the

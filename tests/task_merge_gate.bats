@@ -175,18 +175,43 @@ comments() { cat "$STUB_CALLS_DIR/acli.comments" 2>/dev/null || true; }
   assert_output --partial "reviewed code is older than the head commit"
 }
 
-@test "rule 2: a verdict naming the head SHA is bound by the SHA, whatever the commit date" {
+# #348: the reviewer pins the head at the start and names it as `reviewed <sha>`.
+@test "rule 2: a verdict body with reviewed <head-sha> binds by the SHA, whatever the commit date" {
   rm -rf "$TASK_FORCE_HOME/radio/mailbox"
-  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "Clean. Reviewed head ${SHA:0:7}; CI green."
+  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "reviewed $SHA"$'\n'"Clean; CI green."
   PR_COMMITTED=2026-11-03T10:45:00Z pr_json 40 2 3
   run gate 7 PROJ-1 --no-comment
   assert_success
   assert_output "merge"
+  run grep 'verdict names no SHA' "$TASK_FORCE_HOME/radio/log"
+  assert_failure
 }
 
-@test "rule 2: a verdict naming another SHA falls back to the commit date" {
+@test "rule 2: reviewed <sha-prefix> binds too" {
+  rm -rf "$TASK_FORCE_HOME/radio/mailbox"
+  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "reviewed ${SHA:0:12}: clean"
+  PR_COMMITTED=2026-11-03T10:45:00Z pr_json 40 2 3
+  run gate 7 PROJ-1 --no-comment
+  assert_success
+}
+
+# A commit made before the review but pushed after it has an older
+# committedDate: the time check would pass it, the SHA does not.
+@test "rule 2: reviewed <other-sha> asks: reviewed code is not the head commit, whatever the commit date" {
+  rm -rf "$TASK_FORCE_HOME/radio/mailbox"
+  msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "reviewed abcdef1234567890abcdef1234567890abcdef12"
+  run gate 7 PROJ-1 --no-comment
+  assert_failure 1
+  assert_output "ask: reviewed code is not the head commit (clean verdict reviewed abcdef123456, head is 0123456789ab)"
+}
+
+@test "rule 2: a verdict naming no SHA falls back to the commit date, and logs it" {
   rm -rf "$TASK_FORCE_HOME/radio/mailbox"
   msg "reviewer-$NAME-pr7" review-complete-clean 2026-11-03T10:20:00Z inbox 7 "Clean at abcdef1."
+  run gate 7 PROJ-1 --no-comment
+  assert_success
+  run grep 'merge-gate: verdict names no SHA, using time pr=7 key=PROJ-1' "$TASK_FORCE_HOME/radio/log"
+  assert_success
   PR_COMMITTED=2026-11-03T10:45:00Z pr_json 40 2 3
   run gate 7 PROJ-1 --no-comment
   assert_failure 1

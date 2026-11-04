@@ -660,7 +660,10 @@ spec (a slug or path under `tasks/`, passed as the second arg and read from
 disk; PR-body auto-detect is GitHub-only, so without it the review is
 diff-only), reviews the diff, posts a single thorough PR comment via
 `gh pr comment --body-file -`, and radios PM back with `review-complete-clean` or
-`review-complete-with-findings`. PM still owns the merge decision — the
+`review-complete-with-findings`. It pins the PR's head SHA before reading the
+diff and names it, as `reviewed <sha>`, in the comment's verdict line and as the
+first line of the radio body; if the head moved during the review the verdict
+is never clean (#348). PM still owns the merge decision — the
 reviewer never approves, merges, or mutates status. Then it **auto-destructs**:
 `task-done --remove-worktree` removes its worktree and closes its tab. The
 analysis lives in the PR comment; re-read it with `gh pr view <N> --comments`.

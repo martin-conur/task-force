@@ -225,8 +225,10 @@ is shell, no model, so the rules are never re-derived from memory.
   carries **Merge label** (a label only, never words in a description); the
   latest review beat for the PR is `review-complete-clean` from its reviewer,
   newer than the worker's last re-review request and covering the head commit
-  (it names the head SHA, or is newer than the head commit; a tie in the same
-  second counts as not reviewed); the PR targets the base `task-work` recorded
+  (its body's `reviewed <sha>` is the head SHA; a verdict naming no SHA, from
+  before reviewers pinned one, must be newer than the head commit and logs
+  `merge-gate: verdict names no SHA, using time`; a tie in the same second
+  counts as not reviewed); the PR targets the base `task-work` recorded
   for the worker (else the default branch); CI **ran and passed** for the
   PR's exact head SHA (`gh run list -c <sha>` non-empty, every run success,
   skipped or neutral); and the diff is within **Merge max changed lines**
@@ -859,7 +861,11 @@ the key explicitly — without it the review is diff-only), runs the `code-revie
 skill on the diff, posts **one** thorough PR comment via
 `gh pr comment --body-file -` carrying its full analysis + verdict, and radios
 PM back with
-`review-complete-clean` or `review-complete-with-findings`. Then it
+`review-complete-clean` or `review-complete-with-findings`. It pins the PR's
+head SHA before reading the diff and names it, as `reviewed <sha>`, in the
+comment's verdict line and as the first line of the radio body, which is what
+`task-merge-gate` binds a clean review to; if the head moved during the review
+the verdict is never clean (#348). Then it
 **auto-destructs**: `task-done --remove-worktree` removes its worktree and
 closes its tab. It does NOT idle waiting to be closed, and there is no manual
 cleanup left for anyone. The analysis lives in the PR comment, not the tab —

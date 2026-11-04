@@ -29,6 +29,14 @@ $ARGUMENTS
 
 ### Loop
 
+<!-- region:reviewer-pin-sha -->
+**Pin the reviewed commit first.** Before you read the diff, record the PR's head SHA. That is the commit your verdict covers, and you name it in both the PR comment and the radio verdict (steps 6 and 8), so `task-merge-gate` can bind a clean review to code by SHA rather than by time:
+```bash
+gh pr view <N> --json headRefOid --jq .headRefOid   # the reviewed SHA: keep all 40 characters
+```
+Every shell call starts fresh, so carry the printed value itself forward, not a variable holding it.
+<!-- endregion:reviewer-pin-sha -->
+
 1. Parse the PR # (and Notion page URL, if present) from `$ARGUMENTS`.
 2. If a Notion page URL is associated, fetch it via the Notion MCP:
    ```
@@ -51,6 +59,13 @@ $ARGUMENTS
 
 <!-- region:reviewer-post-radio-destruct -->
    **Tight-PR norm — prefer fix-in-this-PR over deferral.** Frame every finding as something the worker should fix *in this PR*, not as a follow-up ticket, whenever the fix is feasible within the PR's scope. Do NOT suggest "defer to a follow-up" / "track separately" for anything in-scope — that's a deferral the team is trying to avoid. Only flag a deferral when the work is genuinely out of this PR's scope (a separate subsystem, a large refactor), and say so explicitly — PM will decide whether to groom it into a ticket. Default: tight PR, everything fixed before merge.
+
+   **Name the reviewed commit, and check it is still the head.** Just before posting, read `headRefOid` again:
+   ```bash
+   gh pr view <N> --json headRefOid --jq .headRefOid
+   ```
+   - **Unchanged**: the Verdict line carries the full pinned SHA, e.g. `**Verdict:** clean — reviewed <full-sha>`, and the radio body in step 8 starts with `reviewed <full-sha>`. Never shorten or drop it.
+   - **Moved**: commits landed while you were reviewing, so what you read is not what would merge. The verdict cannot be clean, whatever you found. The Verdict line says `changes-requested — head moved during review (<old> -> <new>); re-review needed`, naming both full SHAs, and step 8 sends `review-complete-with-findings` with exactly that body: `head moved during review (<old> -> <new>); re-review needed`.
 7. Post the comment — **on stdin, never through a double-quoted shell string.** Inside `"…"` the shell command-substitutes every backticked token in your prose: `` `pwd -P` `` posts as your working directory, `` `radio orphans` `` posts as that command's output, and a backticked identifier that names no command — `` `$SOME_VAR` ``, `` `_some_helper()` `` — posts as **nothing at all**, deleting the finding's subject and leaving a sentence that reads as if a word were missing. Findings here name functions, variables and paths in inline code constantly, and this comment is the only thing that outlives your tab, so feed the body in with `--body-file -` and a **quote-delimited** heredoc:
    ```bash
    gh pr comment <N> --body-file - <<'REVIEW'
@@ -63,10 +78,12 @@ $ARGUMENTS
 8. Radio PM back with the matching intent. `radio send` takes its body from stdin when `--body` is omitted, so the same quoted heredoc applies — a one-line summary names symbols and flags too:
    ```bash
    radio send --to pm --intent review-complete-clean --pr <N> <<'SUMMARY'
+   reviewed <full-sha>
    <one-line summary>
    SUMMARY
    # — or —
    radio send --to pm --intent review-complete-with-findings --pr <N> <<'SUMMARY'
+   reviewed <full-sha>
    <one-line summary>
    SUMMARY
    ```

@@ -80,7 +80,8 @@ _tf_set_trim() {
 }
 
 # tf_set_validate <template> <spec>...
-# Every spec must be "<label>=<value>" with a label the template carries. On
+# Every spec must be "<label>=<value>" with a label the template carries and a
+# value with no backtick or newline. On
 # the first bad one: stderr names it, lists the valid labels, return 2. Never
 # lets a stray bullet be written.
 tf_set_validate() {
@@ -94,6 +95,13 @@ tf_set_validate() {
       return 2
     fi
     label=$(_tf_set_trim "${spec%%=*}")
+    # A backtick ends the code span early and a newline splits the bullet: either
+    # way the reader regex no longer matches and the setting reads back wrong.
+    case "${spec#*=}" in
+      *'`'*|*$'\n'*)
+        echo "Error: --set: the value for '$label' may not contain a backtick or a newline" >&2
+        return 2 ;;
+    esac
     lc=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')
     known=0
     while IFS= read -r l; do

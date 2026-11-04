@@ -100,6 +100,32 @@ _bullet() {
   assert_output --partial '"<setting>=<value>"'
 }
 
+@test "a bare trailing --set is refused on every loadout" {
+  local init
+  for init in "$JIRA_TASK_INIT" "$CLAUDE_GH_TASK_INIT" "$CLAUDE_LOCAL_TASK_INIT" \
+    "$CLAUDE_NOTION_TASK_INIT" "$KIRO_GH_TASK_INIT" "$KIRO_LOCAL_TASK_INIT" "$KIRO_TASK_INIT"; do
+    run "$init" --set </dev/null
+    assert_failure 2
+    assert_output --partial '--set needs "<setting>=<value>"'
+  done
+  assert [ ! -e "$DOC" ]
+}
+
+@test "a value with a backtick is refused, naming the setting" {
+  run "$JIRA_TASK_INIT" --set 'Watch label=a`b' </dev/null
+  assert_failure 2
+  assert_output --partial "value for 'Watch label' may not contain a backtick or a newline"
+  assert [ ! -e "$DOC" ]
+}
+
+@test "a value with a newline is refused, naming the setting" {
+  run "$JIRA_TASK_INIT" --set "Watch JQL=a
+b" </dev/null
+  assert_failure 2
+  assert_output --partial "value for 'Watch JQL' may not contain a backtick or a newline"
+  assert [ ! -e "$DOC" ]
+}
+
 @test "an empty value restores the template default" {
   "$JIRA_TASK_INIT" --set "Watch poll seconds=60" </dev/null
   run "$JIRA_TASK_INIT" --force --set "Watch poll seconds=" </dev/null

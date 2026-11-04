@@ -63,7 +63,8 @@ while [[ $# -gt 0 ]]; do
     --force)    FORCE=true; shift;;
     --restore)  RESTORE=true; shift;;
     --local-only) LOCAL_ONLY=true; shift;;
-    --set)      SETS+=("$2"); shift 2;;
+    --set)      [[ $# -ge 2 ]] || { echo "Error: --set needs \"<setting>=<value>\"" >&2; exit 2; }
+                SETS+=("$2"); shift 2;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
     --hooks)    SCOPE="hooks"; shift;;

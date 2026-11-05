@@ -546,11 +546,11 @@ project_page() {
   assert_equal "$(q '[.next.items[].label] | join(" ")')" "#6"
 }
 
-@test "next local fallback: the tasks/ backlog by id, skipping in-progress, done and in-flight" {
+@test "next local fallback: the tasks/ backlog by id, skipping in-progress, in-review, done and in-flight" {
   loadout local
   mkdir -p "$MAIN_REPO/tasks"
   local t
-  for t in "010|ten|todo" "002|two|todo" "003|three|done" "004|four|in-progress" "005|five|todo"; do
+  for t in "010|ten|todo" "002|two|todo" "003|three|done" "004|four|in-progress" "005|five|todo" "006|six|in-review"; do
     IFS='|' read -r id title status <<<"$t"
     printf -- '---\nid: %s\ntitle: %s\nstatus: %s\n---\n' "$id" "$title" "$status" > "$MAIN_REPO/tasks/$id-$title.md"
   done

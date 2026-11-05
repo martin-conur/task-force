@@ -24,7 +24,7 @@ Tasks live at `<repo-root>/tasks/` — one `.md` per task, with YAML frontmatter
 ---
 id: 001
 title: Add login flow
-status: todo            # todo | in-progress | done
+status: todo            # todo | in-progress | in-review | done
 priority: P1            # P0 | P1 | P2 | P3
 tags: [auth, frontend]
 created: 2026-05-15
@@ -42,7 +42,7 @@ Filename convention: `NNN-slug.md`, where `NNN` is the zero-padded task id and
 ### Board View
 
 `tasks/_board.md` is **auto-generated** by `task-board` — never hand-edit it.
-It has three sections: Todo / In Progress / Done. Every open task is listed;
+It has four sections: Todo / In Progress / In Review / Done. Every open task is listed;
 Done lists only the 10 newest (highest id first), then one
 `+ N older done tasks` line (#294). `task-board --done-limit N` or
 `TASK_BOARD_DONE_LIMIT=N` changes the cap.

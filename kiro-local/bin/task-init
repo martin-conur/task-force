@@ -191,7 +191,7 @@ This directory holds the project's task backlog as individual markdown files.
 ---
 id: 001
 title: Add login flow
-status: todo            # todo | in-progress | done
+status: todo            # todo | in-progress | in-review | done
 priority: P1            # P0 | P1 | P2 | P3
 tags: [auth, frontend]
 created: 2026-01-01

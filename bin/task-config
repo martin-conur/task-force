@@ -26,6 +26,7 @@ Usage: task-config [show]
        task-config remove assistant <claude|kiro>       [--dry-run] [--yes]
        task-config use <claude|kiro>                    [--dry-run]
        task-config sync [--from <claude|kiro>]          [--dry-run] [--yes]
+       task-config profile add|list|show|test|remove    (task-config profile --help)
 
 show (the default)
   Print which loadout this repo is on, its assistant and tracker axes, the
@@ -58,6 +59,11 @@ sync
   assistant's doc wins; --from names the other one instead. Only the inactive
   doc is re-rendered (its task-init --force --workflow, handed the settings).
 
+profile
+  Define and verify agent profiles (#355) in ~/.task-force/profiles.toml:
+  add one from a preset, list, show, test it with one short claude -p run,
+  remove it. See `task-config profile --help`.
+
 set
   Switch one axis (or both) without stranding the old loadout's artifacts:
 
@@ -89,6 +95,8 @@ Examples
   task-config use kiro
   task-config remove assistant kiro
   task-config sync --from claude
+  task-config profile add fw --preset fireworks --model <id> --key-env FIREWORKS_API_KEY
+  task-config profile test fw
 EOF
   exit 0
 }
@@ -113,6 +121,22 @@ AW_ROOT=$(dirname "$BIN_DIR")
 . "$AW_ROOT/lib/loadout-artifacts.sh"
 # shellcheck source=lib/hook-carrier.sh
 . "$AW_ROOT/lib/hook-carrier.sh"
+
+# `task-config profile …` (#356) is about the machine's profiles.toml, not
+# this repo's loadout: it takes its own flags and runs outside a repo too, so
+# it is dispatched before the loadout argv parse and the repo check.
+if [[ "${1:-}" == profile ]]; then
+  shift
+  # shellcheck source=lib/profile.sh
+  . "$AW_ROOT/lib/profile.sh"
+  # shellcheck source=lib/profile-config.sh
+  . "$AW_ROOT/lib/profile-config.sh"
+  # Written to handle its own failures: errexit off, so a probe that
+  # comes back false (a grep -q, a test) is a branch rather than an exit.
+  set +e
+  aw_profile_cmd "$@"
+  exit $?
+fi
 
 ASSISTANTS=(claude kiro)
 TRACKERS=(gh jira notion local)

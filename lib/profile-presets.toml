@@ -1,0 +1,31 @@
+# Presets for `task-config profile add <name> --preset <preset>` (#356).
+#
+# A preset is a starting point only: `add` copies what it says into the
+# profile it writes, so a profile never refers back to this file and a later
+# edit here changes no existing profile.
+#
+# Each [presets.<name>] table takes:
+#   base_url  ANTHROPIC_BASE_URL. Omit it for a gateway with no fixed address;
+#             `add` then requires --base-url.
+#   env       extra variables, as in a profile's env table
+#   pin       default tier pins, as in a profile's pin table. Omitted, every
+#             tier defaults to the profile's model (lib/profile.sh).
+#   about     one line for `task-config profile add --help`
+#
+# The key always goes in ANTHROPIC_API_KEY, sent as the x-api-key header:
+# #355 refuses ANTHROPIC_AUTH_TOKEN (docs/agent-profiles-spike.md, section 6),
+# so a gateway documented only for `Authorization: Bearer` has no preset.
+# OpenRouter and LiteLLM are left out for that reason: both document Claude
+# Code through ANTHROPIC_AUTH_TOKEN alone.
+
+# The spike's verdict: every tier on the one model, tool search on.
+[presets.fireworks]
+about    = "Fireworks AI, as recorded by the #354 spike"
+base_url = "https://api.fireworks.ai/inference"
+env      = { ENABLE_TOOL_SEARCH = "true" }
+
+# Anthropic's own API with a key of its own, for a launch billed to an API key
+# rather than the machine's login.
+[presets.anthropic]
+about    = "Anthropic's API, keyed by an API key"
+base_url = "https://api.anthropic.com"

@@ -35,7 +35,7 @@ teardown() {
 # A claude that answers in stream-json, as `claude -p --output-format
 # stream-json --verbose` does. $STUB_PT_MODE: ok (reads probe.txt with Read
 # and answers with it), authfail (a synthetic 401), notool (answers without a
-# tool), echo-key (an error that quotes the key back).
+# tool), hang (never answers), echo-key (an error that quotes the key back).
 stub_test_claude() {
   cat > "$STUB_BIN/claude" <<'STUB'
 #!/usr/bin/env bash
@@ -66,6 +66,12 @@ case "${STUB_PT_MODE:-ok}" in
   notool)
     echo '{"type":"assistant","message":{"model":"gw/glm-5","content":[{"type":"text","text":"I cannot read files"}]}}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":"I cannot read files"}'
+    ;;
+  hang)
+    # A gateway that took the connection and never answers. Its pid, so the
+    # test can check it was stopped.
+    echo $$ > "$STUB_CALLS_DIR/test-claude.pid"
+    sleep 30
     ;;
   echo-key)
     echo "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"result\":\"API Error: 401 bad key $ANTHROPIC_API_KEY\"}"
@@ -428,6 +434,36 @@ TOML
   assert_failure
   assert_line '  auth      : ok'
   assert_line '  tool use  : FAILED (no tool call)'
+}
+
+@test "test: a hung gateway times out, fails non-zero, and the claude child is stopped" {
+  stub_test_claude
+  add_fw
+  local t0=$SECONDS
+  STUB_PT_MODE=hang run "$TC" profile test fw --timeout 1
+  assert_failure
+  (( SECONDS - t0 < 10 ))
+  assert_line '  auth      : FAILED'
+  assert_output --partial 'error     : timed out after 1s'
+  assert_output --partial 'claude was stopped'
+  assert_line 'FAILED'
+  local pid
+  pid=$(cat "$STUB_CALLS_DIR/test-claude.pid")
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+@test "test: the timeout comes from \$TASK_CONFIG_PROFILE_TEST_TIMEOUT, and a bad one is refused" {
+  stub_test_claude
+  add_fw
+  STUB_PT_MODE=hang TASK_CONFIG_PROFILE_TEST_TIMEOUT=1 run "$TC" profile test fw
+  assert_failure
+  assert_output --partial 'timed out after 1s'
+  run "$TC" profile test fw --timeout 0
+  assert_failure
+  assert_output --partial "must be a positive number of seconds, not '0'"
+  run "$TC" profile test fw --timeout=abc
+  assert_failure
+  assert_output --partial "not 'abc'"
 }
 
 @test "test never prints the key, even when the gateway echoes it back" {

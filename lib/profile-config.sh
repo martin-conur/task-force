@@ -30,7 +30,7 @@ Usage: task-config profile list
        task-config profile show <name>
        task-config profile add <name> --preset <preset> --model <id> --key-env <VAR> [options]
        task-config profile add <name> --base-url <url> --model <id> --key-env <VAR> [options]
-       task-config profile test <name>
+       task-config profile test <name> [--timeout <secs>]
        task-config profile remove <name>
 
 Agent profiles (#355) live in $TASK_FORCE_HOME/profiles.toml (default
@@ -52,6 +52,8 @@ add      Write a profile, validated as a launcher would read it.
 test     One short `claude -p` run through the profile, in a throwaway
          directory, registering no radio role: auth, the model that answered,
          one tool call, the time it took. Exits non-zero on any failure.
+           --timeout <secs>   stop claude and fail after this long (default 60,
+                              or $TASK_CONFIG_PROFILE_TEST_TIMEOUT)
 remove   Delete a profile, leaving the rest of the file as it was.
 EOF
   _pc_presets_help
@@ -460,8 +462,42 @@ _pc_remove() {
 # nonce is in no prompt, so the answer carries it only if the tool ran.
 _PC_TEST_PROMPT='Use the Read tool to read the file probe.txt in the current directory, then reply with its contents and nothing else.'
 
+# How long `test` waits for claude before it stops it and fails: a gateway
+# that accepts the connection and never answers would otherwise hang it.
+_PC_TEST_TIMEOUT_DEFAULT=60
+
+# _pc_stop <pid> — TERM the process and its children, KILL what is left after
+# 3s. Portable: no timeout(1) on macOS.
+_pc_stop() {
+  local pid="$1"
+  command -v pkill >/dev/null 2>&1 && pkill -TERM -P "$pid" 2>/dev/null
+  kill -TERM "$pid" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.2
+  done
+  command -v pkill >/dev/null 2>&1 && pkill -KILL -P "$pid" 2>/dev/null
+  kill -KILL "$pid" 2>/dev/null
+  return 0
+}
+
 _pc_test() {
-  local name="${1:-}" file key_src key tmp out err rc=0 t0 t1 nonce
+  local name="" timeout="${TASK_CONFIG_PROFILE_TEST_TIMEOUT:-$_PC_TEST_TIMEOUT_DEFAULT}"
+  local file key_src key tmp out err rc=0 t0 t1 nonce
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --timeout)
+        [[ $# -ge 2 ]] || { echo "Error: --timeout requires a value" >&2; return 1; }
+        timeout="$2"; shift 2 ;;
+      --timeout=*) timeout="${1#--timeout=}"; shift ;;
+      -*) echo "Error: unknown option for profile test: $1" >&2; return 1 ;;
+      *)
+        [[ -z "$name" ]] || { echo "Error: profile test takes one name (got '$name' and '$1')" >&2; return 1; }
+        name="$1"; shift ;;
+    esac
+  done
+  [[ "$timeout" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Error: the profile test timeout must be a positive number of seconds, not '$timeout'." >&2; return 1; }
   [[ -n "$name" ]] || { echo "Error: profile test needs a profile name" >&2; return 1; }
   _pc_valid_name "$name" || return 1
   command -v jq >/dev/null 2>&1 || { echo "Error: profile test needs jq." >&2; return 1; }
@@ -489,7 +525,21 @@ _pc_test() {
     aw_profile_export
     exec claude -p "$_PC_TEST_PROMPT" --model "$AW_PROFILE_MODEL" \
       --output-format stream-json --verbose --allowedTools Read --max-turns 4 </dev/null
-  ) >"$out" 2>"$err" || rc=$?
+  ) >"$out" 2>"$err" &
+  # The watchdog: poll every 0.2s, so a quick run is not held to a whole
+  # second, and stop claude once the timeout has passed.
+  local cpid=$! ticks=0 timed_out=""
+  while kill -0 "$cpid" 2>/dev/null; do
+    if (( ticks >= timeout * 5 )); then
+      timed_out=1
+      _pc_stop "$cpid"
+      break
+    fi
+    sleep 0.2
+    ticks=$(( ticks + 1 ))
+  done
+  wait "$cpid" 2>/dev/null
+  rc=$?
   t1=$(date +%s)
 
   local report
@@ -513,7 +563,9 @@ _pc_test() {
 
   local model="" tools="" saw_nonce="false" is_error="true" gw_err=""
   [[ -z "$report" ]] || IFS=$'\x1f' read -r model tools saw_nonce is_error gw_err <<<"$report"
-  if [[ -z "$gw_err" && ( "$is_error" == true || $rc -ne 0 ) ]]; then
+  if [[ -n "$timed_out" ]]; then
+    gw_err="timed out after ${timeout}s with no answer from the gateway; claude was stopped (--timeout <secs> or \$TASK_CONFIG_PROFILE_TEST_TIMEOUT to wait longer)"
+  elif [[ -z "$gw_err" && ( "$is_error" == true || $rc -ne 0 ) ]]; then
     gw_err=$(tail -5 "$err" | tr '\n' ' ')
   fi
   # Whatever came back, the key does not leave this function.
@@ -521,6 +573,9 @@ _pc_test() {
   rm -rf "$tmp"
 
   local ok=1 auth tool
+  # Auth is inferred, not observed: claude reports no auth status, but a
+  # message from a real model means the gateway took the key. A rejected key
+  # yields only Claude Code's own `<synthetic>` error message.
   if [[ -n "$model" ]]; then auth="ok"; else auth="FAILED"; ok=0; fi
   if [[ -n "$tools" && "$saw_nonce" == true ]]; then
     tool="ok ($tools)"
@@ -529,7 +584,7 @@ _pc_test() {
   else
     tool="FAILED (no tool call)"; ok=0
   fi
-  [[ "$is_error" == true || $rc -ne 0 ]] && ok=0
+  [[ "$is_error" == true || $rc -ne 0 || -n "$timed_out" ]] && ok=0
 
   printf 'profile test: %s (model %s, %s)\n' "$name" "$AW_PROFILE_MODEL" "$file"
   printf '  auth      : %s\n' "$auth"

@@ -591,7 +591,7 @@ profile test: fireworks-glm (model glm-latest, ~/.task-force/profiles.toml)
 OK
 ```
 
-It asks the model to read a file with the `Read` tool and answer with its contents. Any failure exits non-zero and prints the gateway's error. The key never appears in the output, even when the gateway echoes it back.
+It asks the model to read a file with the `Read` tool and answer with its contents. Any failure exits non-zero and prints the gateway's error. A gateway that never answers is given 60 seconds: then `claude` is stopped and the test fails with `timed out after 60s`. `--timeout <secs>` or `$TASK_CONFIG_PROFILE_TEST_TIMEOUT` changes that. The key never appears in the output, even when the gateway echoes it back.
 
 **4. Launch on it:**
 

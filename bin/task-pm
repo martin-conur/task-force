@@ -33,6 +33,8 @@ source "$AW_ROOT/lib/kiro-launch.sh"
 # (#358); aw_radio_log for the rename skip.
 # shellcheck source=lib/zellij-tab.sh
 source "$AW_ROOT/lib/zellij-tab.sh"
+# shellcheck source=lib/profile.sh
+source "$AW_ROOT/lib/profile.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 # --agent: this PM on the other installed assistant, for one launch (#293).
@@ -57,6 +59,7 @@ ALSO_REPOS=()
 # a PM left to run unattended.
 AUTO_SUBMIT=""
 FORCE=""
+PROFILE=""
 if ((${#AW_REMAINING_ARGS[@]})); then
   set -- "${AW_REMAINING_ARGS[@]}"
 else
@@ -69,6 +72,7 @@ while [[ $# -gt 0 ]]; do
 Usage: task-pm [--impl <name> | --agent <claude|kiro>]
                [--also <repo-path-or-name> ...]
                [--auto-submit | --no-auto-submit] [--force]
+               [--profile <name>]
 
 Rename the current zellij tab to "pm-<reponame>" and launch the PM agent
 in-place (claude /pm on claude loadouts, kiro-cli chat --agent pm on kiro
@@ -92,6 +96,9 @@ loadouts). Run from inside a task-force-initialized git repo.
 --force             Launch even though this repo's PM looks live in another
                     tab (#301). Without it task-pm refuses, so a claude PM and
                     a kiro PM never split one inbox's wakes.
+--profile <name>    Launch the PM with profile <name> from
+                    ~/.task-force/profiles.toml (#355): a gateway's base URL,
+                    model pins and the variable its key is read from.
 
 Environment:
   TASK_WORK_MODEL   kiro only: the model the PM launches on. Unset means
@@ -119,6 +126,13 @@ EOF
     --auto-submit|--auto)       AUTO_SUBMIT=1;  shift ;;
     --no-auto-submit|--no-auto) AUTO_SUBMIT=""; shift ;;
     --force) FORCE=1; shift ;;
+    --profile)
+      [[ -n "${2:-}" ]] || { echo "Error: --profile needs a profile name" >&2; exit 1; }
+      PROFILE="$2"; shift 2 ;;
+    --profile=*)
+      PROFILE="${1#--profile=}"
+      [[ -n "$PROFILE" ]] || { echo "Error: --profile needs a profile name" >&2; exit 1; }
+      shift ;;
     *) echo "Error: unknown argument '$1' (see task-pm --help)" >&2; exit 1 ;;
   esac
 done
@@ -155,6 +169,10 @@ esac
 # report queues against a mailbox nobody is reading (#218).
 if [[ "$AGENT" == kiro ]]; then
   aw_require_kiro_agent pm "$REPO_ROOT" "task-init ${IMPL}" || exit 1
+fi
+# The profile's refusals (#355) land here too, before the tab is renamed.
+if [[ -n "$PROFILE" ]]; then
+  aw_profile_load "$PROFILE" "$AGENT" || exit 1
 fi
 
 # One live PM per repo (#301). The address pm-<reponame> is the same whichever
@@ -274,8 +292,18 @@ else
   # under the pre-#254 default recorded `1` there. `0` is the explicit off.
   export TASK_FORCE_AUTO_SUBMIT=0
 fi
+# The profile (#355) is exported, not prefixed: the agent is exec'd in place,
+# so nothing of it, the key least of all, reaches a command line. Without one,
+# a TASK_FORCE_PROFILE inherited from the launching shell must not be recorded.
+if [[ -n "$PROFILE" ]]; then
+  aw_profile_export
+else
+  unset TASK_FORCE_PROFILE
+fi
+_model=()
+[[ -n "${AW_PROFILE_MODEL:-}" ]] && _model=(--model "$AW_PROFILE_MODEL")
 case "$AGENT" in
-  claude) exec claude "/pm" ;;
+  claude) exec claude ${_model[@]+"${_model[@]}"} "/pm" ;;
   # The model rides the launch line because a --model flag is the only thing
   # that outranks the user's chat.defaultModel (#259, lib/kiro-launch.sh).
   # --tui is pinned as on every other kiro launch (#157), when kiro-cli has it.

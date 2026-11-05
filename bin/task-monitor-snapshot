@@ -436,10 +436,12 @@ _snapshot_repo() {
 
     jq -cn --arg slug "$slug" --arg ref "$ref" --arg base "$(_field "$info" BASE_BRANCH)" \
       --arg tab_id "$(_field "$info" TAB_ID)" --arg wt "$wtbase/$slug" \
+      --arg profile "$(_field "$info" PROFILE)" \
       --argjson item "$item" --argjson pr "$pr_json" '
       {slug: $slug, ref: (if $ref == "" then null else $ref end), branch: ("task/" + $slug),
        base: (if $base == "" then null else $base end), worktree: $wt,
-       tab_id: (if $tab_id == "" then null else $tab_id end), item: $item, pr: $pr}' \
+       tab_id: (if $tab_id == "" then null else $tab_id end),
+       profile: (if $profile == "" then null else $profile end), item: $item, pr: $pr}' \
       >> "$w/inflight.ndjson"
   done
 

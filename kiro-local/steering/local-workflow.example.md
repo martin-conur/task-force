@@ -93,6 +93,7 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 - `-b, --base BRANCH` — branch the PR will target (default: current branch at call time)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: `HEAD`). Refused when `REF` lacks the radio hooks `HEAD` carries for the agent (#304): a worktree forked from it would start an agent that never registers. Merge the base into `REF` first
 - `--agent <claude|kiro>` — launch this one worker on the other installed assistant, leaving the repo's active one alone (#293). Both loadouts must be installed (`task-config add assistant`, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too, and `task-recreate-worker` without it relaunches on the assistant `task-work` recorded for that worker
+- `--profile <name>` — launch the agent with an agent profile from `~/.task-force/profiles.toml`: a gateway's base URL, model pins, and the variable its key is read from (#355, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too. Claude-only
 - `--no-launch` — open the worktree tab but do NOT start `kiro-cli`
 - `--no-auto-submit` — keep the Enter gate on radio wakes. Radio auto-submit is **the default** (#254): an incoming ping submits itself instead of sitting in the prompt box until someone presses Enter, since nobody types in a worker's tab. Use this for a worker you mean to step into and steer by hand. `--auto-submit` states the default explicitly
 - `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254)
@@ -139,6 +140,26 @@ GitHub / Jira / Notion it refuses with a message naming that loadout, because
 there are no local task files to render a board from. It is a single root copy
 (#238), not a per-loadout one. `--repo PATH` picks the repo, and detection
 follows that path rather than `$PWD`.
+
+**Agent profiles** — `--profile <name>` on `task-work`, `task-reviewer`, `task-recreate-worker` and `task-pm` (#355)
+
+A profile runs Claude Code through an Anthropic-compatible gateway (an open model on Fireworks, say). It lives in `$TASK_FORCE_HOME/profiles.toml` (default `~/.task-force/profiles.toml`), one table per profile. This is the worked example from the #354 spike (`docs/agent-profiles-spike.md`):
+
+```toml
+[profiles.fireworks-glm]
+agent   = "claude"
+model   = "glm-latest"
+env     = { ANTHROPIC_BASE_URL = "https://api.fireworks.ai/inference", ENABLE_TOOL_SEARCH = "true" }
+key_env = { ANTHROPIC_API_KEY = "FIREWORKS_API_KEY" }
+# pin = { sonnet = "…", haiku = "…", opus = "…", subagent = "…" }   # each defaults to model
+# max_context_tokens = 200000                                       # CLAUDE_CODE_MAX_CONTEXT_TOKENS
+```
+
+The launcher puts `env` on the tab's command line as given, pins `ANTHROPIC_DEFAULT_SONNET_MODEL`, `_HAIKU_`, `_OPUS_` and `CLAUDE_CODE_SUBAGENT_MODEL` to `model` unless `pin` names another (an unpinned Sonnet tier sends the auto-mode classifier to `claude-sonnet-5`), and sets `ANTHROPIC_MODEL` as well as `--model`, so on `task-reviewer` the profile's model wins over its Sonnet default. **The key is never on a command line or in a file.** The prefix carries `ANTHROPIC_API_KEY="${FIREWORKS_API_KEY:?…}"`, which the tab's `bash -ic` expands from your shell rc: export the variable there. Only `ANTHROPIC_API_KEY` is accepted. `ANTHROPIC_AUTH_TOKEN` is refused, because with it Claude Code also sent the machine's saved Anthropic Console key to the gateway (spike, section 6). A key in `env` is refused too.
+
+Each launcher refuses, before it creates anything, an unknown profile, a profile whose `agent` is not the one being launched, a `key_env` variable that is unset or empty in your shell, and a file that does not parse (task-force reads a TOML subset: tables, one-line strings, integers, booleans, one-line inline tables). The profile's **name** is recorded as `PROFILE=` in the worker's `.<slug>.info` sidecar and in radio's `<role>.profile` sidecar and session file; `task-recreate-worker` relaunches on it unless `--profile` or `--no-profile` says otherwise, and task-monitor shows it beside the agent. Without `--profile` nothing changes.
+
+Two things need a human or the gateway. The first auto-mode session through a gateway on a machine shows Claude Code's classifier billing notice and waits for `y`, which holds a hands-off worker once. And Claude Code's cost display and `modelUsage` miss the classifier's calls and misprice unknown models: check routing and cost on the gateway's side.
 
 `task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
 

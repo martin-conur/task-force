@@ -47,6 +47,8 @@ source "$AW_ROOT/lib/worktree-create.sh"
 source "$AW_ROOT/lib/local-only.sh"
 # shellcheck source=lib/repo-name.sh
 source "$AW_ROOT/lib/repo-name.sh"
+# shellcheck source=lib/profile.sh
+source "$AW_ROOT/lib/profile.sh"
 
 usage() {
   cat <<'EOF'
@@ -101,6 +103,9 @@ EOF
       --agent AGENT       Launch on this assistant (claude or kiro) instead of
                           the repo's active one, for this one launch. Both
                           loadouts must be installed (task-config add, #293).
+      --profile NAME      Launch the reviewer with profile NAME from
+                          ~/.task-force/profiles.toml (#355), claude only. Its
+                          model wins over the reviewer's default model.
       --no-auto-submit    Keep the Enter gate on radio wakes into the reviewer.
                           Auto-submit is on by default and independent of the
                           permission flags (#246, #146): --no-auto or
@@ -179,6 +184,9 @@ source "$TRACKER_MODULE"
 
 # Continue with --impl (and its value) stripped from the argv.
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+# --profile <name> (#355), checked once the PR parses and before any worktree.
+aw_profile_parse_flag "$@" || exit 1
+set -- ${AW_PROFILE_REMAINING_ARGS[@]+"${AW_PROFILE_REMAINING_ARGS[@]}"}
 
 # ---------------- arg parsing ----------------
 # --auto is the default — the reviewer is always a dispatched worker and the
@@ -256,6 +264,11 @@ PR_NUMBER=$(parse_pr_number "$PR_INPUT") || {
   echo "Error: could not parse PR number from '$PR_INPUT'" >&2
   exit 1
 }
+
+# Every profile refusal (#355) lands before a worktree exists.
+if [[ -n "$AW_PARSED_PROFILE" ]]; then
+  aw_profile_load "$AW_PARSED_PROFILE" "$AGENT" || exit 1
+fi
 
 # ---------------- repo discovery ----------------
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; exit 1; }
@@ -385,6 +398,7 @@ BASE_BRANCH="${PR_BASE_REF:-main}"
   printf 'GH_URL=%s\n' "$PR_URL"
   printf 'PR_NUMBER=%s\n' "$PR_NUMBER"
   printf 'ISSUE_NUMBER=%s\n' "$ISSUE_NUMBER"
+  [[ -z "${AW_PROFILE_NAME:-}" ]] || printf 'PROFILE=%s\n' "$AW_PROFILE_NAME"
 } > "$INFO_FILE"
 
 # ---------------- claude command builder ----------------
@@ -400,7 +414,9 @@ build_claude_cmd() {
   # history expansion; printf %q closes the rest of the metachar class.
   # (#144 round-5 review.)
   [[ -n "$SPEC_IDENTIFIER" ]] && slash_args+=" $(printf %q "$SPEC_IDENTIFIER")"
-  echo "claude ${mode_prefix}\"/reviewer $slash_args\""
+  local model_flag=""
+  [[ -n "${AW_PROFILE_MODEL:-}" ]] && model_flag=" --model $(printf %q "$AW_PROFILE_MODEL")"
+  echo "claude${model_flag} ${mode_prefix}\"/reviewer $slash_args\""
 }
 
 # ---------------- kiro command builder ----------------
@@ -440,8 +456,19 @@ RADIO_ENV_PREFIX+="ZELLIJ_TAB=$(printf %q "$SLUG") "
 RADIO_ENV_PREFIX+="TASK_FORCE_LOADOUT=reviewer "
 if [[ "$AGENT" == kiro ]]; then
   RESOLVED_MODEL="$MODEL"
+elif [[ -n "${AW_PROFILE_MODEL:-}" ]]; then
+  # A profile's model wins over both (#355): its env prefix below sets
+  # ANTHROPIC_MODEL, and the gateway would refuse a Claude id anyway.
+  RESOLVED_MODEL="$AW_PROFILE_MODEL"
 else
   RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5-5}"
+  # Dispatched from a profiled agent (a `task-pm --profile` PM, #355), the
+  # ANTHROPIC_MODEL here is that profile's gateway model, not a caller's pick:
+  # without the profile's base URL it would go to Anthropic. Not inherited.
+  if [[ -n "${TASK_FORCE_PROFILE:-}" ]]; then
+    RESOLVED_MODEL="claude-sonnet-5-5"
+    echo "Note: not inheriting ANTHROPIC_MODEL from profile '$TASK_FORCE_PROFILE'; pass --profile $TASK_FORCE_PROFILE to review on it." >&2
+  fi
   RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
 fi
 # Repo-scoped PM address (#165): the reviewer radios its verdict with `--to pm`,
@@ -458,6 +485,8 @@ if [[ -n "$AUTO_SUBMIT" ]]; then
 else
   RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 "
 fi
+# The profile's variables (#355), the key as a reference the tab expands.
+RADIO_ENV_PREFIX+="$(aw_profile_env_prefix)"
 
 # ---------------- launch ----------------
 # 4th arg to aw_launch_tab is `stay_on_caller_tab=1` — keep focus on the

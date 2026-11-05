@@ -51,6 +51,8 @@ source "$AW_ROOT/lib/ci-guard.sh"
 source "$AW_ROOT/lib/hook-carrier.sh"
 # shellcheck source=lib/worktree-procs.sh
 source "$AW_ROOT/lib/worktree-procs.sh"
+# shellcheck source=lib/profile.sh
+source "$AW_ROOT/lib/profile.sh"
 
 usage() {
   cat <<'EOF'
@@ -115,6 +117,11 @@ Options:
                       a repo with both installed relaunches the worker on the
                       assistant task-work recorded for it, not the repo's
                       active one (#293).
+      --profile <name>
+                      Relaunch on this profile from ~/.task-force/profiles.toml.
+                      Without it, the worker relaunches on the profile task-work
+                      recorded for it, if any (#355).
+      --no-profile    Relaunch with no profile, whatever was recorded.
       --impl <name>   Pin the loadout instead of detecting it.
   -h, --help          Show this help.
 
@@ -165,6 +172,9 @@ INFO_KEY=$(aw_tracker_info_key) || exit 1
 TASK_WORK_MODEL="" TASK_WORK_TRUST_ALL="" aw_agent_init_flags
 
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+# --profile <name> / --no-profile (#355); with neither, the recorded one.
+aw_profile_parse_flag "$@" || exit 1
+set -- ${AW_PROFILE_REMAINING_ARGS[@]+"${AW_PROFILE_REMAINING_ARGS[@]}"}
 
 # ---------------- arg parsing ----------------
 POSITIONAL=()
@@ -354,6 +364,22 @@ if [[ -f "$INFO_FILE" ]]; then
   TASK_REF=$(_info_field "$INFO_KEY" "$INFO_FILE")
 fi
 [[ -n "$BASE_BRANCH" ]] || BASE_BRANCH="main"
+
+# The profile the worker died on (#355): the recorded one, unless --profile
+# names another or --no-profile drops it. Loaded, with its refusals, only for
+# a launch; --no-launch keeps the choice in the sidecar for whoever starts it.
+PROFILE=""
+if [[ -n "$AW_PARSED_PROFILE" ]]; then
+  PROFILE="$AW_PARSED_PROFILE"
+elif [[ -z "$AW_PARSED_NO_PROFILE" ]]; then
+  PROFILE=$(_info_field PROFILE "$INFO_FILE")
+fi
+if [[ -n "$PROFILE" && -z "$NO_LAUNCH" ]]; then
+  if [[ -z "$AW_PARSED_PROFILE" ]]; then
+    echo "Relaunching on profile '$PROFILE', the one task-work recorded for '$SLUG' (--no-profile drops it)."
+  fi
+  aw_profile_load "$PROFILE" "$AGENT" || exit 1
+fi
 
 # ---------------- role + liveness guard ----------------
 REPO_RADIO_NAME=$(aw_main_repo_name "$MAIN_WORKTREE")
@@ -591,6 +617,7 @@ echo "  task:      ${TASK_REF:-none recorded ($INFO_KEY is empty or absent in $(
 echo "  commits:   $AHEAD_OF_BASE ahead of $BASE_BRANCH; $PUSH_LINE"
 echo "  dirty:     ${DIRTY_COUNT} uncommitted change(s) in the worktree"
 echo "  PR:        ${PR_URL:-none found}"
+echo "  profile:   ${PROFILE:-none}"
 echo "  mail:      $INBOX_N unread in inbox"
 if [[ "$DEAD_N" != "0" ]]; then
   # Mail that gc archived because the role was gone when it was sent (#201).
@@ -614,8 +641,9 @@ _tmp_info=$(mktemp "${INFO_FILE}.XXXXXX")
   printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"
   printf 'SLUG=%s\n' "$SLUG"
   printf '%s=%s\n' "$INFO_KEY" "$TASK_REF"
+  [[ -z "$PROFILE" ]] || printf 'PROFILE=%s\n' "$PROFILE"
   if [[ -f "$INFO_FILE" ]]; then
-    grep -v -E "^(BASE_BRANCH|SLUG|${INFO_KEY}|TAB_ID)=" "$INFO_FILE" || true
+    grep -v -E "^(BASE_BRANCH|SLUG|${INFO_KEY}|TAB_ID|PROFILE)=" "$INFO_FILE" || true
   fi
 } > "$_tmp_info"
 mv "$_tmp_info" "$INFO_FILE"
@@ -643,6 +671,8 @@ case "$AUTO_SUBMIT_FLAG" in
   0) RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=0 " ;;
   *) [[ -n "$AUTO_MODE" ]] && RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 " ;;
 esac
+# The profile's variables (#355), the key as a reference the tab expands.
+RADIO_ENV_PREFIX+="$(aw_profile_env_prefix)"
 
 # Focus stays on the caller's tab unless --focus, as task-work's (#254).
 STAY_ON_CALLER="1"

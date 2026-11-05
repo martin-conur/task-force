@@ -46,7 +46,8 @@ def session_obj($S; $role):
   | if $s == null then null else
       {role: $role, state: ($s.STATE | nonempty), last_heartbeat: ($s.LAST_HEARTBEAT | nonempty),
        tab: ($s.TAB | nonempty), tab_id: ($s.TAB_ID | nonempty),
-       zellij_session: ($s.ZELLIJ_SESSION | nonempty), agent: ($s.AGENT | nonempty)}
+       zellij_session: ($s.ZELLIJ_SESSION | nonempty), agent: ($s.AGENT | nonempty),
+       profile: ($s.PROFILE | nonempty)}
     end;
 
 # Message order. created_at has one-second resolution, and a radio id does NOT
@@ -128,6 +129,8 @@ def status($pr; $last_review; $has_reviewer):
                         {intent: $last.intent, from: $last.from, to: $last.to, pr: ($last.pr | tonumber? // null), at: $last.created_at} end),
         session: session_obj($S; $wrole),
         tab_id: .tab_id,
+        # The sidecar's PROFILE= (#355), else the one its session recorded.
+        profile: (.profile // (session_obj($S; $wrole) | if . == null then null else .profile end)),
         reviewers: $revs } ] as $in_flight
 
 | ([$in_flight[] | .ref, .item.ref | select(. != null)]) as $if_refs
@@ -180,7 +183,8 @@ def status($pr; $last_review; $has_reviewer):
     tracker: ($tracker | nonempty),
     agent: ($agent | nonempty),
     pm: ((session_obj($S; $pm_role) // {role: $pm_role, state: null, last_heartbeat: null, tab: null,
-                                       tab_id: null, zellij_session: null, agent: null})
+                                       tab_id: null, zellij_session: null, agent: null,
+                                       profile: null})
          + {alias_of: $alias_of, unread: $unread}),
     # `available`: the forge has answered for this repo at least once. A repo
     # with no GitHub remote never has, and would otherwise read as permanently

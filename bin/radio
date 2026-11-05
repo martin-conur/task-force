@@ -869,6 +869,27 @@ _resolve_auto_submit() {
   return 0
 }
 
+# Profile sidecar (#355): the name of the agent profile the role was launched
+# with (`--profile`, lib/profile.sh), the way <role>.agent records the agent.
+# Only the name: a profile's values, its key above all, are never written
+# anywhere. The launch env says it as TASK_FORCE_PROFILE; register writes the
+# sidecar when it is set, removes it when a launch had none, and keeps it on an
+# explicit repair, whose shell has no say. A re-seed reads it back.
+_profile_sidecar() {
+  printf '%s/%s.profile' "$SESSIONS_DIR" "$1"
+}
+
+# The profile <role> runs on, as register should record it: the launch env's,
+# else (explicit repair only) the sidecar's.
+_resolve_profile() {
+  local role="$1" explicit_repair="$2"
+  if [[ -n "${TASK_FORCE_PROFILE:-}" ]]; then
+    printf '%s' "$TASK_FORCE_PROFILE"
+  elif (( explicit_repair )); then
+    cat "$(_profile_sidecar "$role")" 2>/dev/null || true
+  fi
+}
+
 # Alias-list sidecar for a primary PM (#165 RC-4a). `task-pm --also` records
 # each alias here (one `pm-<other>|<repo>` per line) so cmd_register can re-seed
 # the alias session files on every SessionStart — self-heal parity with the
@@ -1029,6 +1050,8 @@ _ensure_session_file() {
   agent_sidecar=$(_agent_sidecar "$TASK_FORCE_ROLE")
   agent=$(cat "$agent_sidecar" 2>/dev/null || true)
   [[ -n "$agent" ]] || agent="${TASK_FORCE_AGENT:-claude}"
+  local profile
+  profile=$(cat "$(_profile_sidecar "$TASK_FORCE_ROLE")" 2>/dev/null || true)
 
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
@@ -1047,6 +1070,10 @@ _ensure_session_file() {
     fi
     if [[ -n "$(_resolve_auto_submit "$TASK_FORCE_ROLE")" ]]; then
       printf 'AUTO_SUBMIT=1\n'
+    fi
+    # The profile (#355), off the sidecar register wrote.
+    if [[ -n "$profile" ]]; then
+      printf 'PROFILE=%s\n' "$profile"
     fi
   } | _atomic_write "$f"
 
@@ -1585,6 +1612,13 @@ cmd_register() {
   local auto_submit
   auto_submit=$(_resolve_auto_submit "$role")
   printf '%s' "${auto_submit:-0}" | _atomic_write "$(_auto_submit_sidecar "$role")"
+  local profile
+  profile=$(_resolve_profile "$role" "$explicit_repair")
+  if [[ -n "$profile" ]]; then
+    printf '%s' "$profile" | _atomic_write "$(_profile_sidecar "$role")"
+  else
+    rm -f "$(_profile_sidecar "$role")"
+  fi
 
   {
     printf 'ROLE=%s\nTAB=%s\nTAB_ID=%s\nZELLIJ_SESSION=%s\nREPO=%s\nREPO_NAME=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=%s\nLOADOUT=%s\n' \
@@ -1603,6 +1637,9 @@ cmd_register() {
     fi
     if [[ -n "$pane_id" ]]; then
       printf 'PANE_ID=%s\n' "$pane_id"
+    fi
+    if [[ -n "$profile" ]]; then
+      printf 'PROFILE=%s\n' "$profile"
     fi
     printf 'REGISTERED_AT=%s\n' "$registered_at"
     if [[ -n "$session_id" ]]; then
@@ -3241,7 +3278,7 @@ cmd_gc() {
             # the #188 bug being fixed here, and gc must not re-create it.
             if [[ ! -f "$(_session_file "$role")" ]]; then
               rm -f "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")" \
-                    "$(_auto_submit_sidecar "$role")"
+                    "$(_auto_submit_sidecar "$role")" "$(_profile_sidecar "$role")"
             fi
           fi
           removed_dirs=$(( removed_dirs + 1 ))

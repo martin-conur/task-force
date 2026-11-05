@@ -36,6 +36,8 @@ source "$AW_ROOT/lib/repo-name.sh"
 source "$AW_ROOT/lib/ci-guard.sh"
 # shellcheck source=lib/hook-carrier.sh
 source "$AW_ROOT/lib/hook-carrier.sh"
+# shellcheck source=lib/profile.sh
+source "$AW_ROOT/lib/profile.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 # --agent: this one worker on the other installed assistant, without flipping
@@ -59,6 +61,9 @@ source "$TRACKER_MODULE"
 source "$AGENT_MODULE"
 
 set -- ${AW_REMAINING_ARGS[@]+"${AW_REMAINING_ARGS[@]}"}
+# --profile <name> (#355): the agent's env from ~/.task-force/profiles.toml.
+aw_profile_parse_flag "$@" || exit 1
+set -- ${AW_PROFILE_REMAINING_ARGS[@]+"${AW_PROFILE_REMAINING_ARGS[@]}"}
 
 usage() {
   echo "Usage:"
@@ -93,6 +98,10 @@ Options:
       --agent AGENT   Launch this worker on AGENT (claude or kiro) instead of
                       the repo's active assistant, without changing it. Both
                       loadouts must be installed (task-config add, #293).
+      --profile NAME  Launch the agent with profile NAME from
+                      ~/.task-force/profiles.toml: a gateway's base URL, model
+                      pins and the variable its key is read from (#355).
+                      Recorded, so task-recreate-worker relaunches on it.
       --no-auto-submit
                       Keep the Enter gate on radio wakes: "radio check" is typed
                       into the prompt box and waits for a keypress. Use this when
@@ -152,6 +161,11 @@ done
 aw_agent_validate_flags
 
 [[ ${#POSITIONAL[@]} -lt 1 ]] && usage
+
+# Before anything is created: every profile refusal (#355) leaves no worktree.
+if [[ -n "$AW_PARSED_PROFILE" ]]; then
+  aw_profile_load "$AW_PARSED_PROFILE" "$AGENT" || exit 1
+fi
 
 # Sets AW_TASK_REF (may be empty) and AW_SLUG.
 aw_tracker_parse_ref "${POSITIONAL[@]}"
@@ -249,6 +263,9 @@ INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
 # can differ from the repo's active one (--agent, #293), and a recovery has to
 # relaunch the worker it lost rather than whichever assistant is active now.
 printf 'BASE_BRANCH=%s\nSLUG=%s\n%s=%s\nAGENT=%s\n' "$BASE_BRANCH" "$SLUG" "$INFO_KEY" "$TASK_REF" "$AGENT" > "$INFO_FILE"
+# The profile's name, never its values: task-recreate-worker relaunches on it,
+# and task-monitor shows it (#355). The key stays in the user's environment.
+[[ -n "${AW_PROFILE_NAME:-}" ]] && printf 'PROFILE=%s\n' "$AW_PROFILE_NAME" >> "$INFO_FILE"
 
 aw_tracker_post_worktree "$REPO_ROOT" "$SLUG" "$BRANCH" "$WORKTREE_DIR" "$TASK_REF"
 
@@ -305,6 +322,9 @@ if [[ "${AUTO_SUBMIT_FLAG:-}" == "0" ]]; then
 else
   RADIO_ENV_PREFIX+="TASK_FORCE_AUTO_SUBMIT=1 "
 fi
+# The profile's variables (#355), the key as a reference the tab expands.
+# Empty without --profile.
+RADIO_ENV_PREFIX+="$(aw_profile_env_prefix)"
 
 # Focus stays on the caller's tab unless --focus (#254, was --auto-only #130).
 STAY_ON_CALLER="1"

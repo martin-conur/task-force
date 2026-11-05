@@ -60,6 +60,8 @@ pub struct Pm {
     pub tab_id: Option<String>,
     pub zellij_session: Option<String>,
     pub agent: Option<String>,
+    /// The agent profile it was launched with (`--profile`, #355).
+    pub profile: Option<String>,
     pub alias_of: Option<String>,
     pub unread: u64,
 }
@@ -83,6 +85,7 @@ pub struct Session {
     pub tab_id: Option<String>,
     pub zellij_session: Option<String>,
     pub agent: Option<String>,
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -127,6 +130,8 @@ pub struct InFlight {
     pub session: Option<Session>,
     #[serde(deserialize_with = "scalar")]
     pub tab_id: Option<String>,
+    /// The agent profile the worker was launched with (#355).
+    pub profile: Option<String>,
     pub reviewers: Vec<Reviewer>,
 }
 

@@ -75,23 +75,34 @@ aw_agent_preflight() { :; }
 #
 # Plan mode hands /planner the bare ref, not the worker payload: the planner's
 # job is to write the spec, not to "implement" it.
+#
+# A profile's model (#355) rides the line as --model, beside the
+# ANTHROPIC_MODEL its env prefix sets.
 aw_agent_launch_cmd() {
-  local q_ref="$1" prompt="$2"
+  local q_ref="$1" prompt="$2" claude
+  claude="claude$(_aw_claude_model_flag)"
   if [[ -n "$PLAN_MODE" ]]; then
     if [[ -n "$q_ref" ]]; then
-      echo "claude --permission-mode plan \"/planner $q_ref\""
+      echo "$claude --permission-mode plan \"/planner $q_ref\""
     else
-      echo "claude --permission-mode plan \"/planner\""
+      echo "$claude --permission-mode plan \"/planner\""
     fi
     return
   fi
   local mode_prefix=""
   [[ -n "${AUTO_MODE:-}" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$prompt" ]]; then
-    echo "claude ${mode_prefix}\"/worker $prompt\""
+    echo "$claude ${mode_prefix}\"/worker $prompt\""
   else
-    echo "claude ${mode_prefix}\"/worker\""
+    echo "$claude ${mode_prefix}\"/worker\""
   fi
+}
+
+# ` --model <m>` when a profile with a model is loaded (lib/profile.sh), else
+# nothing.
+_aw_claude_model_flag() {
+  [[ -n "${AW_PROFILE_MODEL:-}" ]] || return 0
+  printf ' --model %q' "$AW_PROFILE_MODEL"
 }
 
 # The noun in "Started <this> in <dir>".
@@ -107,11 +118,12 @@ aw_agent_started_message() { echo "worker"; }
 # one silently is worse than asking. Reads AUTO_MODE exactly as
 # aw_agent_launch_cmd does.
 aw_agent_resume_cmd() {
-  local id="$1" mode_prefix=""
+  local id="$1" mode_prefix="" claude
+  claude="claude$(_aw_claude_model_flag)"
   [[ -n "${AUTO_MODE:-}" ]] && mode_prefix="--permission-mode auto "
   if [[ -n "$id" ]]; then
-    echo "claude ${mode_prefix}--resume $id"
+    echo "$claude ${mode_prefix}--resume $id"
   else
-    echo "claude ${mode_prefix}--resume"
+    echo "$claude ${mode_prefix}--resume"
   fi
 }

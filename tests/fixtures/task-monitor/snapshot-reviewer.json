@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-23T14:21:05Z",
+  "generated_at": "2026-11-05T18:21:48Z",
   "mode": "full",
   "repos": [
     {
@@ -13,17 +13,18 @@
       "pm": {
         "role": "pm-widgets",
         "state": "idle",
-        "last_heartbeat": "2026-10-23T14:20:05Z",
+        "last_heartbeat": "2026-11-05T18:20:48Z",
         "tab": "pm-widgets",
         "tab_id": "4",
         "zellij_session": "zs",
         "agent": "claude",
+        "profile": null,
         "alias_of": null,
         "unread": 0
       },
       "forge": {
         "available": true,
-        "fetched_at": "2026-10-23T14:21:05Z",
+        "fetched_at": "2026-11-05T18:21:48Z",
         "stale": false
       },
       "in_flight": [
@@ -68,13 +69,15 @@
           "session": {
             "role": "worker-widgets-issue-5",
             "state": "idle",
-            "last_heartbeat": "2026-10-23T14:20:05Z",
+            "last_heartbeat": "2026-11-05T18:20:48Z",
             "tab": "worker-widgets-issue-5",
             "tab_id": "4",
             "zellij_session": "zs",
-            "agent": "claude"
+            "agent": "claude",
+            "profile": null
           },
           "tab_id": "4",
+          "profile": null,
           "reviewers": [
             {
               "pr": 9,
@@ -82,11 +85,12 @@
               "session": {
                 "role": "reviewer-widgets-pr9",
                 "state": "busy",
-                "last_heartbeat": "2026-10-23T14:20:05Z",
+                "last_heartbeat": "2026-11-05T18:20:48Z",
                 "tab": "reviewer-widgets-pr9",
                 "tab_id": "4",
                 "zellij_session": "zs",
-                "agent": "claude"
+                "agent": "claude",
+                "profile": null
               }
             }
           ]

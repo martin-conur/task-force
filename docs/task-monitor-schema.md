@@ -71,7 +71,8 @@ ignore fields it does not know.
 session's `LAST_HEARTBEAT`: radio rewrites it on every state change and every
 register, so it is when the session was last heard from, not when it entered
 its current state), `tab`, `tab_id`,
-`zellij_session`, `agent`: all from `radio/sessions/pm-<name>.info`, null when
+`zellij_session`, `agent`, `profile` (the agent profile it was launched with,
+`--profile`, #355, or null): all from `radio/sessions/pm-<name>.info`, null when
 there is no session. Then:
 
 - `alias_of`: the primary PM's role when this repo's PM is a `task-pm --also`
@@ -141,11 +142,12 @@ The item fields above, plus:
 | field | meaning |
 |---|---|
 | `slug`, `branch`, `base`, `worktree`, `tab_id` | from the sidecar; `branch` is `task/<slug>` |
+| `profile` | the agent profile the worker was launched with (`task-work --profile`, #355): the sidecar's `PROFILE=`, else its session's, else null. Only the name: a profile's values are never recorded |
 | `item` | the tracker's own item object, before any PR overrides `title` / `description` |
 | `pr` | `{number, url, title, state, is_draft, head, summary, merged_at, merge_sha}`, found by the `task/<slug>` head branch on every tracker, else null. If no PR has that head, the PR the worker named in its own radio messages is used |
 | `status` | see below |
 | `last_intent` | the latest radio message to or from this worker, or about its PR: `{intent, from, to, pr, at}`. `pr` is a number, or null when the message names none |
-| `session` | the worker's radio session: `{role, state, last_heartbeat, tab, tab_id, zellij_session, agent}`, or null |
+| `session` | the worker's radio session: `{role, state, last_heartbeat, tab, tab_id, zellij_session, agent, profile}`, or null |
 | `reviewers` | `[{pr, role, session}]`. `pr` is a number |
 
 `status` comes from the PR's state plus the latest review intent exchanged about

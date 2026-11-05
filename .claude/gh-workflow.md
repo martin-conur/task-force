@@ -685,7 +685,7 @@ the real `~/.task-force` (#262). `task-pm` runs in place, so it inherits the
 variable without help. When it is unset, nothing is passed and the default applies.
 
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
-the current zellij tab to `pm-<reponame>`, registers that repo-scoped role via
+the zellij tab it runs in (by id, never whichever tab has focus, #358) to `pm-<reponame>`, registers that repo-scoped role via
 the `SessionStart` hook, and starts the PM agent in-place. The per-repo role
 (#165) lets PMs in two repos coexist without clobbering each other's mailbox;
 workers reach it by sending `--to pm`, which radio resolves to this repo's

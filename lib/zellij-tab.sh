@@ -5,6 +5,7 @@
 #   aw_launch_tab <slug> <cwd> <cmd>
 #   aw_radio_home_env_prefix   (TASK_FORCE_HOME for a launcher's env prefix, #262)
 #   aw_zellij_session_running <session>   (#291)
+#   aw_zellij_own_tab_id   (#358)
 #
 # Every zellij call here goes through aw_zellij, so a launcher that sets
 # AW_ZELLIJ_SESSION drives that session instead of the one it runs in (#291).
@@ -143,6 +144,26 @@ aw_zellij_tab_name_by_id() {
   tabs=$(aw_zellij action list-tabs --json 2>/dev/null || true)
   printf '%s' "$tabs" | aw_jq_is_array || return 2
   printf '%s' "$tabs"     | jq -r --argjson t "$id" '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
+}
+
+# The tab this process runs in (#358): the tab_id of the terminal pane
+# $ZELLIJ_PANE_ID names, read off `list-panes`. zellij exports that id into
+# every terminal pane, so unlike the focused tab it cannot move under us while
+# we run. Terminal and plugin panes number separately, hence the is_plugin
+# filter; zellij spells a terminal pane `N` or `terminal_N`. Always the session
+# we run in, never AW_ZELLIJ_SESSION's. Empty stdout means "could not tell"
+# (no pane id, no jq, the pane not listed): the caller must skip, never fall
+# back to the focused tab.
+aw_zellij_own_tab_id() {
+  local p="${ZELLIJ_PANE_ID:-}"
+  p="${p#terminal_}"
+  case "$p" in *[!0-9]*|"") return 0 ;; esac
+  command -v zellij >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  zellij action list-panes --json --tab 2>/dev/null \
+    | jq -r --argjson p "$p" \
+        '[.[] | select(.id == $p and (.is_plugin // false) == false) | .tab_id]
+         | .[0] // empty' 2>/dev/null
 }
 
 # True when tab name <name> belongs to <slug>: the bare slug, or the slug after

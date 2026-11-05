@@ -328,6 +328,118 @@ finish() {
   assert_equal "$(pinged | wc -l | tr -d ' ')" 4
 }
 
+# ----- profile policy (#357) ------------------------------------------------------
+
+auto_profile() {
+  printf -- '- **Worker profile for auto tickets**: `%s`\n' "$1" >>"$MAIN_REPO/.claude/jira-workflow.md"
+}
+# The Dispatch: lines of every ticket-filed in the PM inbox, sorted.
+dispatch_lines() {
+  local f
+  for f in "$PM_INBOX"/*.md; do
+    [[ -f "$f" ]] || continue
+    grep -q '^intent: ticket-filed$' "$f" && grep '^Dispatch: ' "$f"
+  done | sort
+  return 0
+}
+profile_of() { sed -n 's/^PROFILE=//p' "$LEDGER/$1"; }
+# One dispatched run of <key> that failed: the PM re-queued it.
+failed_run() {
+  dispatch "$1"; watch --once >/dev/null
+  finish "$1";   watch --once >/dev/null
+  set_labels "$1" ai-auto
+}
+
+@test "profile: no setting (or none) dispatches as before, with no --profile" {
+  issue PROJ-1 ai-auto
+  run watch --once
+  assert_success
+  assert_equal "$(dispatch_lines)" "Dispatch: task-work https://acme.atlassian.net/browse/PROJ-1 --auto"
+  assert_equal "$(profile_of PROJ-1)" ""
+  auto_profile none
+  issue PROJ-2 ai-auto
+  watch --once >/dev/null
+  run dispatch_lines
+  assert_line "Dispatch: task-work https://acme.atlassian.net/browse/PROJ-2 --auto"
+  refute_output --partial -- "--profile"
+}
+
+@test "profile: an auto ticket's first run goes to Worker profile for auto tickets" {
+  auto_profile cheap-glm
+  issue PROJ-1 ai-auto
+  run watch --once
+  assert_success
+  refute_output --partial "retry"
+  assert_equal "$(dispatch_lines)" "Dispatch: task-work https://acme.atlassian.net/browse/PROJ-1 --auto --profile cheap-glm"
+  assert_equal "$(profile_of PROJ-1)" "cheap-glm"
+}
+
+@test "profile: the PM prompt runs the watcher's Dispatch line for auto tickets only; a manual dispatch has no --profile" {
+  local pm="$REPO_ROOT_REAL/claude-jira/commands/pm.md"
+  run grep -F "When asked to start work on an issue, run: \`task-work <JIRA-KEY-or-url>\`" "$pm"
+  assert_success
+  # The only --profile instruction sits in the Auto intake section.
+  run awk '/^### Auto intake/{p=1} !p && /--profile/' "$pm"
+  assert_output ""
+  run awk '/^### Auto intake/{p=1} p && /Dispatch:/ && /--profile/' "$pm"
+  assert_success
+  refute_output ""
+}
+
+@test "profile: the retry after a failed run goes to the default profile, logged" {
+  auto_profile cheap-glm
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  failed_run PROJ-1
+  run watch --once
+  assert_success
+  assert_output --partial "retry PROJ-1 on default profile — run 2 of 2"
+  assert_equal "$(profile_of PROJ-1)" ""
+  run dispatch_lines
+  assert_line "Dispatch: task-work https://acme.atlassian.net/browse/PROJ-1 --auto --profile cheap-glm"
+  assert_line "Dispatch: task-work https://acme.atlassian.net/browse/PROJ-1 --auto"
+  run grep -c "watch: retry PROJ-1 on default profile" "$TASK_FORCE_HOME/radio/log"
+  assert_output 1
+}
+
+@test "profile: a pending timeout is a failed run too, so its retry is on the default" {
+  auto_profile cheap-glm
+  printf -- '- **Watch pending timeout minutes**: `30`\n' >>"$MAIN_REPO/.claude/jira-workflow.md"
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  age_pending PROJ-1
+  run watch --once          # timed out, back in the queue, claimed again
+  assert_output --partial "failed run 1 of 2, back in the queue"
+  assert_output --partial "retry PROJ-1 on default profile"
+  assert_equal "$(profile_of PROJ-1)" ""
+}
+
+@test "profile: a bounce is not a failed run, so the requeued ticket keeps the profile" {
+  auto_profile cheap-glm
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  set_labels PROJ-1 "ai-auto:claimed,ai-auto:needs-info"; watch --once >/dev/null
+  set_labels PROJ-1 ai-auto
+  run watch --once
+  refute_output --partial "retry"
+  assert_equal "$(profile_of PROJ-1)" "cheap-glm"
+}
+
+@test "profile: the default-profile retry counts toward the failure cap, which still holds" {
+  auto_profile cheap-glm
+  issue PROJ-1 ai-auto
+  watch --once >/dev/null
+  failed_run PROJ-1           # run 1, on the profile
+  watch --once >/dev/null     # claimed again: run 2, on the default
+  failed_run PROJ-1
+  assert_equal "$(runs_of PROJ-1)" 2
+  run watch --once
+  assert_success
+  assert_output --partial "labelled ai-auto:failed"
+  assert_equal "$(labels_of PROJ-1)" "ai-auto:failed"
+  assert_equal "$(pinged | tr '\n' ' ')" "PROJ-1 PROJ-1 "
+}
+
 @test "requeue: a reporter's comment after the bounce puts the ticket back and it is claimed again" {
   issue PROJ-1 ai-auto
   set_description PROJ-1 "crashes"

@@ -295,6 +295,85 @@ assert_no_worktree() {
   [[ ! -d "$WORKTREE_BASE/review-pr42" ]]
 }
 
+# ----- task-reviewer: the workflow doc's Reviewer profile (#357) -------------------
+
+reviewer_profile() {
+  mkdir -p "$MAIN_REPO/.claude"
+  printf -- '- **Reviewer profile**: `%s`\n' "$1" >>"$MAIN_REPO/.claude/gh-workflow.md"
+}
+
+@test "task-reviewer: with no --profile, the doc's Reviewer profile is used and named" {
+  reviewer_profile fireworks-glm
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_output --partial "Reviewing on profile 'fireworks-glm', the workflow doc's Reviewer profile"
+  assert_output --partial "model: glm-latest"
+  run grep -Fx "PROFILE=fireworks-glm" "$WORKTREE_BASE/.review-pr42.info"
+  assert_success
+  run_tab
+  run agent_env
+  assert_line "TASK_FORCE_PROFILE=fireworks-glm"
+  assert_line "ANTHROPIC_MODEL=glm-latest"
+}
+
+@test "task-reviewer: the last Reviewer profile bullet wins, so an override below the end marker beats the template" {
+  reviewer_profile none
+  reviewer_profile pinned
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_output --partial "model: main model"
+}
+
+@test "task-reviewer: Reviewer profile none, or no bullet, reviews on the Sonnet default as before" {
+  reviewer_profile none
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  assert_success
+  refute_output --partial "Reviewing on profile"
+  assert_output --partial "model: claude-sonnet-5-5"
+  run grep -E 'TASK_FORCE_PROFILE|glm-latest' "$STUB_CALLS_DIR/zellij.new-tab-cmd"
+  assert_failure
+  run grep '^PROFILE=' "$WORKTREE_BASE/.review-pr42.info"
+  assert_failure
+}
+
+@test "task-reviewer: --profile beats the doc's Reviewer profile" {
+  reviewer_profile fireworks-glm
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --profile pinned
+  assert_success
+  refute_output --partial "Reviewing on profile"
+  assert_output --partial "model: main model"
+}
+
+@test "task-reviewer: --no-profile drops the doc's Reviewer profile for one review" {
+  reviewer_profile fireworks-glm
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --no-profile
+  assert_success
+  refute_output --partial "Reviewing on profile"
+  assert_output --partial "model: claude-sonnet-5-5"
+  run grep -E 'TASK_FORCE_PROFILE|glm-latest' "$STUB_CALLS_DIR/zellij.new-tab-cmd"
+  assert_failure
+}
+
+@test "task-reviewer: a Reviewer profile that does not resolve refuses, names the setting, leaves no worktree" {
+  reviewer_profile nope
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  assert_failure
+  assert_output --partial "no such profile"
+  assert_output --partial "That name comes from **Reviewer profile** in the workflow doc"
+  [[ ! -d "$WORKTREE_BASE/review-pr42" ]]
+}
+
+@test "task-reviewer: a kiro reviewer ignores Reviewer profile (profiles are claude-only)" {
+  mkdir -p "$MAIN_REPO/.kiro/steering"
+  printf -- '- **Reviewer profile**: `fireworks-glm`\n' >"$MAIN_REPO/.kiro/steering/gh-workflow.md"
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  refute_output --partial "Reviewing on profile"
+  refute_output --partial "is not the one being launched"
+  run grep -E 'TASK_FORCE_PROFILE|glm-latest' "$STUB_CALLS_DIR/zellij.new-tab-cmd"
+  assert_failure
+}
+
 # ----- task-recreate-worker --------------------------------------------------------
 
 @test "task-recreate-worker relaunches on the recorded profile" {

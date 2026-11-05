@@ -49,6 +49,8 @@ source "$AW_ROOT/lib/local-only.sh"
 source "$AW_ROOT/lib/repo-name.sh"
 # shellcheck source=lib/profile.sh
 source "$AW_ROOT/lib/profile.sh"
+# shellcheck source=lib/doc-setting.sh
+source "$AW_ROOT/lib/doc-setting.sh"
 
 usage() {
   cat <<'EOF'
@@ -106,6 +108,10 @@ EOF
       --profile NAME      Launch the reviewer with profile NAME from
                           ~/.task-force/profiles.toml (#355), claude only. Its
                           model wins over the reviewer's default model.
+                          Without it, the workflow doc's **Reviewer profile**
+                          applies when it names one (#357).
+      --no-profile        Review with no profile, whatever **Reviewer
+                          profile** says.
       --no-auto-submit    Keep the Enter gate on radio wakes into the reviewer.
                           Auto-submit is on by default and independent of the
                           permission flags (#246, #146): --no-auto or
@@ -265,9 +271,27 @@ PR_NUMBER=$(parse_pr_number "$PR_INPUT") || {
   exit 1
 }
 
+# No --profile: the workflow doc's **Reviewer profile** (#357), `none` by
+# default. claude only, as profiles are; --no-profile skips it for one review.
+PROFILE_FROM_DOC=""
+if [[ -z "$AW_PARSED_PROFILE" && -z "$AW_PARSED_NO_PROFILE" && "$AGENT" == claude ]]; then
+  if DOC_ROOT=$(aw_main_repo_root "$PWD" 2>/dev/null); then
+    PROFILE_FROM_DOC=$(tf_doc_setting "$(aw_impl_workflow_doc "$DOC_ROOT" "$IMPL")" "Reviewer profile" none)
+    [[ "$PROFILE_FROM_DOC" != none ]] || PROFILE_FROM_DOC=""
+  fi
+  if [[ -n "$PROFILE_FROM_DOC" ]]; then
+    AW_PARSED_PROFILE="$PROFILE_FROM_DOC"
+    echo "Reviewing on profile '$PROFILE_FROM_DOC', the workflow doc's Reviewer profile (--no-profile for none)."
+  fi
+fi
+
 # Every profile refusal (#355) lands before a worktree exists.
 if [[ -n "$AW_PARSED_PROFILE" ]]; then
-  aw_profile_load "$AW_PARSED_PROFILE" "$AGENT" || exit 1
+  if ! aw_profile_load "$AW_PARSED_PROFILE" "$AGENT"; then
+    [[ -z "$PROFILE_FROM_DOC" ]] \
+      || echo "       That name comes from **Reviewer profile** in the workflow doc: fix it there, or pass --no-profile." >&2
+    exit 1
+  fi
 fi
 
 # ---------------- repo discovery ----------------

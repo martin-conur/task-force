@@ -49,6 +49,7 @@ WEIRD = 'a $HOME `pwd` "q" b'
 
 [profiles.kiro-one]
 agent = "kiro"
+model = "m"
 TOML
 }
 
@@ -217,7 +218,7 @@ assert_no_worktree() {
 }
 
 @test "refuses ANTHROPIC_AUTH_TOKEN as a key_env target, pointing at the spike" {
-  printf '[profiles.tok]\nagent = "claude"\nkey_env = { ANTHROPIC_AUTH_TOKEN = "FIREWORKS_API_KEY" }\n' \
+  printf '[profiles.tok]\nagent = "claude"\nmodel = "m"\nkey_env = { ANTHROPIC_AUTH_TOKEN = "FIREWORKS_API_KEY" }\n' \
     > "$TASK_FORCE_HOME/profiles.toml"
   AW_IMPL=claude-gh run "$TASK_WORK" "https://github.com/owner/repo/issues/42" --profile tok
   assert_failure
@@ -227,7 +228,7 @@ assert_no_worktree() {
 }
 
 @test "refuses a credential in env, an unknown field and an unknown pin" {
-  printf '[profiles.p]\nagent = "claude"\nenv = { ANTHROPIC_API_KEY = "literal" }\n' > "$TASK_FORCE_HOME/profiles.toml"
+  printf '[profiles.p]\nagent = "claude"\nmodel = "m"\nenv = { ANTHROPIC_API_KEY = "literal" }\n' > "$TASK_FORCE_HOME/profiles.toml"
   AW_IMPL=claude-gh run "$TASK_WORK" "https://github.com/owner/repo/issues/42" --profile p
   assert_failure
   assert_output --partial "ANTHROPIC_API_KEY is in env"
@@ -265,12 +266,26 @@ assert_no_worktree() {
 @test "task-reviewer from a profiled PM does not inherit the profile's model" {
   TASK_FORCE_PROFILE=fireworks-glm ANTHROPIC_MODEL=glm-latest AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
-  assert_output --partial "not inheriting ANTHROPIC_MODEL from profile 'fireworks-glm'"
+  assert_output --partial "this shell runs on profile 'fireworks-glm', so its ANTHROPIC_MODEL is ignored"
   assert_output --partial "model: claude-sonnet-5-5"
   run grep -F "ANTHROPIC_MODEL=claude-sonnet-5-5" "$STUB_CALLS_DIR/zellij.new-tab-cmd"
   assert_success
   run grep -E 'glm-latest|TASK_FORCE_PROFILE' "$STUB_CALLS_DIR/zellij.new-tab-cmd"
   assert_failure
+}
+
+@test "a profile with no model is refused, so no launcher's Claude default reaches the gateway" {
+  printf '[profiles.nomodel]\nagent = "claude"\nenv = { ANTHROPIC_BASE_URL = "https://gw.example" }\n' \
+    > "$TASK_FORCE_HOME/profiles.toml"
+  AW_IMPL=claude-gh run "$TASK_REVIEWER" 42 --profile nomodel
+  assert_failure
+  assert_output --partial "profile 'nomodel': it names no model"
+  [[ ! -d "$WORKTREE_BASE/review-pr42" ]]
+  [[ ! -f "$STUB_CALLS_DIR/zellij.new-tab-cmd" ]]
+  AW_IMPL=claude-gh run "$TASK_WORK" "https://github.com/owner/repo/issues/42" --profile nomodel
+  assert_failure
+  assert_output --partial "it names no model"
+  assert_no_worktree
 }
 
 @test "task-reviewer: a refusal leaves no review worktree behind" {

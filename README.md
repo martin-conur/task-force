@@ -526,6 +526,7 @@ task-recreate-worker issue-42 --no-profile # or without it
 **Refusals.** Each launcher refuses, before it creates a worktree, opens a tab or renames one, and says why:
 
 - an unknown profile (it lists the ones defined), or no `profiles.toml` at all
+- a profile with no `model`: every tier and `--model` default to it, and without one a launcher's own Claude default (the reviewer's Sonnet) would go to the gateway
 - a profile whose `agent` is not the agent being launched (`--agent` switches the launch). Profiles are claude-only for now: the variables are Claude Code's
 - a `key_env` source variable that is unset or empty
 - a file that does not parse, with the line. task-force reads a TOML subset, with no python or toml tool needed: tables, `key = value` with one-line basic or literal strings, integers, booleans and one-line inline tables, and comments

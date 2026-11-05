@@ -462,12 +462,14 @@ elif [[ -n "${AW_PROFILE_MODEL:-}" ]]; then
   RESOLVED_MODEL="$AW_PROFILE_MODEL"
 else
   RESOLVED_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5-5}"
-  # Dispatched from a profiled agent (a `task-pm --profile` PM, #355), the
-  # ANTHROPIC_MODEL here is that profile's gateway model, not a caller's pick:
-  # without the profile's base URL it would go to Anthropic. Not inherited.
+  # No --profile here (a loaded profile always has a model, the branch
+  # above). Dispatched from a profiled agent (a `task-pm --profile` PM, #355),
+  # the ANTHROPIC_MODEL in this environment is that profile's gateway model,
+  # not a caller's pick: without the profile's base URL it would go to
+  # Anthropic. So it is ignored, and the review runs on the default.
   if [[ -n "${TASK_FORCE_PROFILE:-}" ]]; then
     RESOLVED_MODEL="claude-sonnet-5-5"
-    echo "Note: not inheriting ANTHROPIC_MODEL from profile '$TASK_FORCE_PROFILE'; pass --profile $TASK_FORCE_PROFILE to review on it." >&2
+    echo "Note: this shell runs on profile '$TASK_FORCE_PROFILE', so its ANTHROPIC_MODEL is ignored and the review runs on $RESOLVED_MODEL without a profile. Pass --profile $TASK_FORCE_PROFILE to review on the profile." >&2
   fi
   RADIO_ENV_PREFIX+="ANTHROPIC_MODEL=$(printf %q "$RESOLVED_MODEL") "
 fi

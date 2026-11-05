@@ -254,7 +254,7 @@ _aw_profile_is_env_name() { [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; }
 #                      per variable, in emit order
 # On a refusal says why on stderr and returns 1, having set nothing a launch
 # could use. The refusals: no file / a file that does not parse, an unknown
-# profile, an agent other than the one launched, a key_env source unset or
+# profile, no model, an agent other than the one launched, a key_env source unset or
 # empty here, and a schema error (unknown field, a key_env target other than
 # ANTHROPIC_API_KEY, a credential put in `env`).
 aw_profile_load() {
@@ -350,6 +350,15 @@ aw_profile_load() {
   if [[ "$p_agent" != claude ]]; then
     _aw_profile_refuse "profiles are claude-only: the variables a profile sets are Claude Code's" \
       "(docs/agent-profiles-spike.md covers Claude Code alone)."
+    return 1
+  fi
+  # Required: it is what every tier, ANTHROPIC_MODEL and --model fall back
+  # to. A profile without one would leave a launcher's own Claude default
+  # (task-reviewer's Sonnet) pointed at the gateway.
+  if [[ -z "$p_model" ]]; then
+    _aw_profile_refuse "it names no model." \
+      "Add model = \"<the gateway's model id>\" to [profiles.$name]: every tier and" \
+      "--model default to it, and a Claude default would otherwise go to the gateway."
     return 1
   fi
   if [[ -n "$p_ctx" && ! "$p_ctx" =~ ^[1-9][0-9]*$ ]]; then

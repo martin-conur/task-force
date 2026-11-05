@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Tests for bin/task-pm: in-place PM-tab takeover (canonical file, #170).
 # Asserts (per-repo PM role, #165):
-#   - rename-tab to "pm-<reponame>" via zellij (when $ZELLIJ is set)
+#   - renames its own tab (by id, #358) to "pm-<reponame>" via zellij (when $ZELLIJ is set)
 #   - exports TASK_FORCE_ROLE / ZELLIJ_TAB = pm-<reponame>
 #   - exec's `claude /pm` (claude impls) / `kiro-cli chat --agent pm` (kiro)
 #   - --also aliases other repos onto this PM
@@ -23,6 +23,15 @@ setup() {
   setup_stubs
   cd "$MAIN_REPO"
   export ZELLIJ=fake-session
+  # task-pm renames its own tab, the one holding $ZELLIJ_PANE_ID (#358): pane 42
+  # sits in tab 4, while the focused pane is in tab 9. Pinned, so the suite does
+  # not pick up the pane id of the tab it was launched from.
+  export ZELLIJ_PANE_ID=42
+  export STUB_ZELLIJ_PANES_JSON='[
+    {"id": 42, "is_plugin": true,  "is_focused": false, "tab_id": 9},
+    {"id": 42, "is_plugin": false, "is_focused": false, "tab_id": 4},
+    {"id": 7,  "is_plugin": false, "is_focused": true,  "tab_id": 9}
+  ]'
   # task-pm derives the PM role from the sanitized main-repo name (#165 RC-2/6),
   # not the raw basename — mktemp -d names contain a dot, which is stripped.
   PM_REPO_NAME=$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')
@@ -38,7 +47,7 @@ teardown() {
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
   # Tab rename is now repo-scoped (#165) — symmetric with worker-<reponame>-<slug>.
-  assert_stub_called zellij "action rename-tab pm-${PM_REPO_NAME}"
+  assert_stub_called zellij "action rename-tab-by-id 4 pm-${PM_REPO_NAME}"
   # Claude was invoked with /pm
   run stub_calls claude
   assert_output --partial "/pm"
@@ -63,6 +72,51 @@ teardown() {
   assert_output --partial "/pm"
 }
 
+# #358: a bare `rename-tab` renames the focused tab. The user may have switched
+# tabs before task-pm got there, and radio would then wake that tab as the PM.
+@test "task-pm renames its own tab by id, not the focused one (#358)" {
+  AW_IMPL=claude-gh run "$TASK_PM"
+  assert_success
+  assert_stub_called zellij "action list-panes --json --tab"
+  assert_stub_called zellij "action rename-tab-by-id 4 pm-${PM_REPO_NAME}"
+  run stub_calls zellij
+  refute_output --partial "rename-tab-by-id 9"
+  refute_output --partial "action rename-tab pm-"
+}
+
+@test "task-pm accepts zellij's terminal_N spelling of its pane id (#358)" {
+  export ZELLIJ_PANE_ID=terminal_42
+  AW_IMPL=claude-gh run "$TASK_PM"
+  assert_success
+  assert_stub_called zellij "action rename-tab-by-id 4 pm-${PM_REPO_NAME}"
+}
+
+@test "task-pm skips the rename, warns and logs when its own tab cannot be resolved (#358)" {
+  setup_task_force_home
+  local why
+  for why in unset unlisted; do
+    : > "$STUB_CALLS_DIR/zellij.calls"
+    : > "$TASK_FORCE_HOME/radio/log" 2>/dev/null || true
+    if [[ $why == unset ]]; then
+      run env -u ZELLIJ_PANE_ID AW_IMPL=claude-gh "$TASK_PM"
+      assert_output --partial "ZELLIJ_PANE_ID is unset"
+    else
+      ZELLIJ_PANE_ID=99 AW_IMPL=claude-gh run "$TASK_PM"
+      assert_output --partial "pane 99 is not in zellij's pane list"
+    fi
+    assert_success
+    assert_output --partial "Not renaming this tab to pm-${PM_REPO_NAME}"
+    # Never falls back to the focused tab.
+    run stub_calls zellij
+    refute_output --partial "rename-tab"
+    run grep -c "tab-rename: task-pm skipped role=pm-${PM_REPO_NAME}" "$TASK_FORCE_HOME/radio/log"
+    assert_output 1
+    # The PM still launches.
+    run stub_calls claude
+    assert_output --partial "/pm"
+  done
+}
+
 @test "claude task-pm errors out cleanly outside a git repo" {
   local outside
   outside=$(mktemp -d)
@@ -78,7 +132,7 @@ teardown() {
 @test "kiro task-pm renames the current tab to pm-<reponame> and exec's kiro-cli pm agent (#165)" {
   AW_IMPL=kiro-gh run "$TASK_PM"
   assert_success
-  assert_stub_called zellij "action rename-tab pm-${PM_REPO_NAME}"
+  assert_stub_called zellij "action rename-tab-by-id 4 pm-${PM_REPO_NAME}"
   run stub_calls kiro-cli
   assert_output --partial "chat --agent pm"
 }
@@ -357,7 +411,7 @@ _clean_repo() {  # $1 = basename → prints the created repo path
   cd "$repo"
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
-  assert_stub_called zellij "action rename-tab pm-myapp"
+  assert_stub_called zellij "action rename-tab-by-id 4 pm-myapp"
   run cat "$STUB_CALLS_DIR/claude.env"
   assert_output --partial "TASK_FORCE_ROLE=pm-myapp"
   rm -rf "$parent"

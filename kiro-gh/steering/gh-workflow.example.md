@@ -606,7 +606,7 @@ the real `~/.task-force` (#262). `task-pm` runs in place, so it inherits the
 variable without help. When it is unset, nothing is passed and the default applies.
 
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
-the current zellij tab to `pm`, registers via the `agentSpawn` hook, and
+the zellij tab it runs in (by id, never whichever tab has focus, #358) to `pm`, registers via the `agentSpawn` hook, and
 starts the PM agent in-place.
 
 Radio wakes addressed to a PM do **not** auto-submit by default (#254): the wake

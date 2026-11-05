@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Fixed
+- **`task-board` gives in-review tasks their own section instead of filing them under Todo (#364).** The local loadouts' worker sets `status: in-review` right after opening its PR, but the board's `case` knew only `in-progress` and `done`, so a task waiting on review showed up as untouched work.
+  - **An `## In Review` section**, between In Progress and Done, takes `in-review`, `in_review` and `in review`. A task with a live worker in `.git/task-force/state.json` still shows under In Progress, as before.
+  - **task-monitor's Next skips them too.** The local backlog fallback (`aw_tracker_next_fallback` in `lib/trackers/local.sh`) skipped only `in-progress` and `done`, so an in-review task was offered as next work.
+  New tests in `tests/task_board.bats` (one task per status lands in its own section, the alternate spellings, the live-worker override) and `tests/task_monitor_snapshot.bats`. Docs: the README's local sections (which also described the old `done`-before-PR lifecycle), both `local-workflow.example.md` templates, the PM prompts' frontmatter comment and board description, `docs/task-monitor-schema.md`.
+  **Upgrading: no `task-init` re-run needed** for the fix; `task-board` and the tracker lib run from the checkout. Re-running `task-init claude-local` / `kiro-local` refreshes the wording in the PM prompt and workflow doc.
 - **`task-pm` renames its own tab, not whichever tab has focus (#358).** It ran a bare `zellij action rename-tab`, which zellij applies to the focused tab. A user who switched tabs while `task-pm` started, or a launcher that snaps focus back to the caller, got the *other* tab renamed `pm-<repo>`: radio then woke that tab as the PM, and the real PM tab kept its old name.
   - **By id.** `task-pm` resolves the tab holding `$ZELLIJ_PANE_ID` from `zellij action list-panes --json --tab` (new `aw_zellij_own_tab_id` in `lib/zellij-tab.sh`, terminal panes only, `N` or `terminal_N`) and runs `rename-tab-by-id` on it (zellij 0.44).
   - **Never the focused tab.** When its tab cannot be resolved (`ZELLIJ_PANE_ID` unset, no `jq`, the pane not listed) it skips the rename, says so on stderr, and logs a `tab-rename: task-pm skipped` line to radio's log. The PM still launches.

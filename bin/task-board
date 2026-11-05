@@ -98,7 +98,7 @@ fi
 #   {"slug":"...","branch":"task/...","worktree":"/abs/path","started_at":"YYYY-MM-DDTHH:MM:SSZ","task_file":"/abs/path"}
 #
 # Status sources (overlay order):
-#   - Frontmatter status: `todo` / `in-progress` / `done`
+#   - Frontmatter status: `todo` / `in-progress` / `in-review` / `done`
 #   - If a task is referenced in state.json, force it into the In Progress
 #     column regardless of frontmatter (live state overrides committed state).
 
@@ -168,16 +168,18 @@ is_in_flight() {
 # shellcheck source=lib/task-file.sh
 source "$AW_ROOT/lib/task-file.sh"
 
-# Collect tasks into three temp files; each line is "<sort_id>\t<display>".
+# Collect tasks into four temp files; each line is "<sort_id>\t<display>".
 # We use temp files (instead of `declare -n` namerefs) because bash 3.2 has
 # no nameref support and per-call indirect-expansion gets ugly fast.
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 TODO_TXT="$TMP_DIR/todo"
 INPROG_TXT="$TMP_DIR/inprog"
+REVIEW_TXT="$TMP_DIR/review"
 DONE_TXT="$TMP_DIR/done"
 : > "$TODO_TXT"
 : > "$INPROG_TXT"
+: > "$REVIEW_TXT"
 : > "$DONE_TXT"
 
 shopt -s nullglob
@@ -220,6 +222,10 @@ for tf in "$TASKS_DIR"/*.md; do
     case "$fm_status" in
       in-progress|in_progress|"in progress")
         printf '%s\t%s\n' "$sort_id" "$line" >> "$INPROG_TXT" ;;
+      # The local worker sets in-review right after opening its PR (#364);
+      # before this bucket that fell through to Todo, as if nobody had begun.
+      in-review|in_review|"in review")
+        printf '%s\t%s\n' "$sort_id" "$line" >> "$REVIEW_TXT" ;;
       done)
         # Done sorts newest first, so a non-numeric id keys low (-1) rather
         # than high: it sorts last and is the first trimmed by the cap.
@@ -270,6 +276,8 @@ print_done() {
   print_bucket "$TODO_TXT"
   printf '\n## In Progress\n\n'
   print_bucket "$INPROG_TXT"
+  printf '\n## In Review\n\n'
+  print_bucket "$REVIEW_TXT"
   printf '\n## Done\n\n'
   print_done "$DONE_TXT"
   printf '\n'

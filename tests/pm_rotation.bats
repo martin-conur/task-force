@@ -379,8 +379,28 @@ cleared() { stub_calls zellij | grep -c 'write-chars --pane-id 700 /clear' || tr
   assert_equal "$(pm_get GROUP)" EPIC-1
   assert_equal "$(sed -n 's/^GROUP=//p' "$LEDGER/PROJ-2")" EPIC-1
   assert_equal "$(mail handoff-requested)" ""
-  # Searched with the parent field, so the epic is read off the search.
-  assert_stub_called acli "--fields key,labels,status,summary,parent"
+  # acli's search refuses `parent` (#351): the epic is read through view.
+  assert_stub_called acli "--fields key,labels,status,summary --paginate"
+  run grep -F "summary,parent" "$STUB_CALLS_DIR/acli.calls"
+  assert_failure
+  assert_stub_called acli "jira workitem view PROJ-2 --fields parent --json"
+  assert_equal "$(sed -n 's/^PARENT=//p' "$LEDGER/PROJ-2")" EPIC-1
+}
+
+@test "group: the epic is read once per ticket, then from the ledger (#351)" {
+  issue PROJ-1 EPIC-1; issue PROJ-2 EPIC-2; issue PROJ-3
+  run watch --once
+  assert_success
+  # PROJ-2 waits for EPIC-1; PROJ-3 has no epic. Each was viewed once.
+  run grep -c 'workitem view PROJ-2 --fields parent' "$STUB_CALLS_DIR/acli.calls"
+  assert_output 1
+  run watch --once
+  assert_success
+  run grep -c 'workitem view PROJ-2 --fields parent' "$STUB_CALLS_DIR/acli.calls"
+  assert_output 1
+  run grep -c 'workitem view PROJ-3 --fields parent' "$STUB_CALLS_DIR/acli.calls"
+  assert_output 1
+  assert_equal "$(sed -n 's/^PARENT=//p' "$LEDGER/PROJ-3")" ""
 }
 
 @test "group: another epic waits while the PM's epic is in flight (#334)" {

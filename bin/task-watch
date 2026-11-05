@@ -54,6 +54,14 @@ set -euo pipefail
 # means that run failed. Once <failure cap> runs have, the ticket gets
 # `<label>:failed` instead of a claim and is never claimed again.
 #
+# Profiles (#357). With **Worker profile for auto tickets** set, a ticket's
+# first run goes to that profile: the ticket-filed body carries the exact
+# task-work line, `--profile <name>` included, and the ledger the PROFILE it
+# was handed with. Any claim after a failed run goes to the default instead,
+# logged as `retry <KEY> on default profile`, so a model too weak for a ticket
+# does not spend the failure cap on retries that cannot succeed. It counts
+# toward the cap like any run.
+#
 # Settings come from .claude/jira-workflow.md in the main checkout, which a
 # local-only install (#327) leaves untracked but in the same place. The LAST
 # matching bullet wins, so an override below the managed-region end marker
@@ -106,6 +114,10 @@ Settings, read from .claude/jira-workflow.md (last matching bullet wins):
   Watch bounce cap      3         bounces before a ticket stays on
                                   <label>:needs-info instead of being requeued
                                   when the reporter replies
+  Worker profile for auto tickets
+                        none      the profile (#355) a ticket's first run is
+                                  dispatched on; a retry after a failed run
+                                  goes to the default (#357)
 
 PM rotation (#334): at a quiet point, the PM is asked for a handoff note and
 then cleared once it crosses a cap (0 turns one off), or before a ticket from
@@ -195,6 +207,8 @@ ROTATE_AGE=$(_number_setting "Watch rotate age minutes" 480)
 HANDOFF_TIMEOUT=$(_number_setting "Watch handoff timeout minutes" 15)
 MARKER_TTL=$(_number_setting "Watch rotation marker minutes" 5)
 GROUP_LABELS=$(_setting "Watch group labels" none)
+AUTO_PROFILE=$(_setting "Worker profile for auto tickets" none)
+[[ "$AUTO_PROFILE" != none ]] || AUTO_PROFILE=""
 [[ "$GROUP_LABELS" != none ]] || GROUP_LABELS=""
 GROUP_PATTERNS=()
 IFS=', ' read -r -a GROUP_PATTERNS <<<"$GROUP_LABELS" || true
@@ -233,7 +247,8 @@ SELF=$(_self_account)
 
 # ---------------- ledger ----------------
 # One file per claimed key, KEY=VALUE lines: STATE, CLAIMS, RUNS, PINGED,
-# SUMMARY, PENDING_SINCE, and for a bounce BOUNCES, BOUNCED_AT, DESC_SUM.
+# SUMMARY, PENDING_SINCE, PROFILE, and for a bounce BOUNCES, BOUNCED_AT,
+# DESC_SUM.
 
 _ledger_get() {
   local f="$LEDGER/$1"
@@ -434,14 +449,16 @@ _live_keys() {
 }
 
 _ping() {
-  local key="$1" summary url out claims
+  local key="$1" summary url out claims profile
   summary=$(_ledger_get "$key" SUMMARY)
   claims=$(_ledger_get "$key" CLAIMS)
+  profile=$(_ledger_get "$key" PROFILE)
   url=$(_browse_url "$key")
   if out=$(_radio_pm ticket-filed "$key" <<BODY
 $key: $summary
 ${url:-$key}
-Claimed by task-watch (claim ${claims:-1}; ${FAIL_CAP} failed run(s) mark it $FAILED). Triage it: dispatch with task-work --auto, or bounce with $NEEDS_INFO.
+Claimed by task-watch (claim ${claims:-1}; ${FAIL_CAP} failed run(s) mark it $FAILED). Triage it: dispatch with the line below, or bounce with $NEEDS_INFO.
+Dispatch: task-work ${url:-$key} --auto${profile:+ --profile $profile}
 BODY
   ); then
     _ledger_set "$key" PINGED 1
@@ -943,6 +960,17 @@ _pm_handed() {
   fi
 }
 
+# _claim_profile <key> <runs so far>: the profile this claim's run goes to
+# (#357). The setting's on a first run; after a failed run, the default.
+_claim_profile() {
+  local profile="$AUTO_PROFILE"
+  if [[ -n "$profile" ]] && (( $2 > 0 )); then
+    profile=""
+    _say "retry $1 on default profile — run $(( $2 + 1 )) of $FAIL_CAP, after $2 failed run(s)"
+  fi
+  _ledger_set "$1" PROFILE "$profile"
+}
+
 # ---------------- one poll ----------------
 
 _poll() {
@@ -987,6 +1015,7 @@ _poll() {
       if (( rc == 1 )); then waiting=$((waiting + 1)); continue; fi
     fi
     _swap "$key" "$CLAIMED" "$LABEL" || continue
+    _claim_profile "$key" "${runs:-0}"
     _ledger_set "$key" STATE pending
     _ledger_set "$key" PINGED 0
     _ledger_set "$key" PENDING_SINCE "$(date +%s)"

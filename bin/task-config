@@ -107,6 +107,8 @@ AW_ROOT=$(dirname "$BIN_DIR")
 . "$AW_ROOT/lib/detect-impl.sh"
 # shellcheck source=lib/tracker-settings.sh
 . "$AW_ROOT/lib/tracker-settings.sh"
+# shellcheck source=lib/doc-set.sh
+. "$AW_ROOT/lib/doc-set.sh"
 # shellcheck source=lib/loadout-artifacts.sh
 . "$AW_ROOT/lib/loadout-artifacts.sh"
 # shellcheck source=lib/hook-carrier.sh
@@ -218,6 +220,9 @@ _show_one() {
     printf '  tracker   : %s  (unset — fill in %s)\n' "$tracker" "$(_rel "$doc")"
   fi
   printf '  config    : %s\n' "$(_rel "$doc")"
+  if tf_local_only "$REPO_ROOT"; then
+    printf '  install   : local-only  (untracked; listed in .git/info/exclude, git config %s)\n' "$TF_INSTALL_KEY"
+  fi
 
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
@@ -232,6 +237,15 @@ _show_one() {
     fi
     if [[ -f "$REPO_ROOT/.claude/settings.json" ]]; then
       _owns ".claude/settings.json  (radio hooks + seeded allow-list)"
+    fi
+    if tf_local_only "$REPO_ROOT"; then
+      if [[ -f "$REPO_ROOT/CLAUDE.local.md" ]] \
+        && grep -qxF -- "@.claude/$tracker-workflow.md" "$REPO_ROOT/CLAUDE.local.md"; then
+        _owns "CLAUDE.local.md  (the @.claude/$tracker-workflow.md import line)"
+      fi
+      if [[ -f "$REPO_ROOT/.claude/settings.local.json" ]]; then
+        _owns ".claude/settings.local.json  (radio hooks + seeded allow-list)"
+      fi
     fi
   fi
 
@@ -404,11 +418,14 @@ _require_target_init() {
 # _carry <from-loadout> <to-tracker> — fill CARRY with the task-init flags that
 # carry <from-loadout>'s tracker settings, and CARRIED_DESC with what they say.
 # Settings carry only when the tracker is unchanged — see the asymmetry note in
-# the usage text and in lib/tracker-settings.sh.
+# the usage text and in lib/tracker-settings.sh. Every other setting bullet the
+# old doc changed from the template default (status names, Watch settings)
+# travels as a --set (#346); claude and kiro share one template per tracker, so
+# the old loadout's template is the new one's too.
 CARRY=()
 CARRIED_DESC=""
 _carry() {
-  local from="$1" to_tracker="$2" tracker doc tok
+  local from="$1" to_tracker="$2" tracker doc tok sets_desc
   tracker=$(la_tracker "$from")
   doc=$(la_workflow_doc "$REPO_ROOT" "$from")
   CARRY=()
@@ -416,10 +433,14 @@ _carry() {
   if [[ "$to_tracker" == "$tracker" ]]; then
     while IFS= read -r tok; do
       [[ -n "$tok" ]] && CARRY+=("$tok")
-    done < <(tf_tracker_init_flags "$doc" "$tracker")
+    done < <(tf_tracker_init_flags "$doc" "$tracker"
+             tf_set_carry_flags "$doc" "$AW_ROOT/$from/steering/$tracker-workflow.example.md")
     if ((${#CARRY[@]})); then
+      sets_desc=$(tf_set_carry_flags "$doc" "$AW_ROOT/$from/steering/$tracker-workflow.example.md" \
+        | { grep -vxF -- --set || true; } | tr '\n' ';')
       CARRIED_DESC=$(tf_tracker_extract "$doc" "$tracker" | tr '\n' ' ')
-      CARRIED_DESC="${CARRIED_DESC% }"
+      CARRIED_DESC="${CARRIED_DESC% }${sets_desc:+ ${sets_desc%;}}"
+      CARRIED_DESC="${CARRIED_DESC# }"
     elif [[ -n "$(tf_tracker_fields "$tracker")" ]]; then
       CARRIED_DESC="nothing filled in on the old doc"
     fi
@@ -513,6 +534,11 @@ cmd_set() {
 
   local target_init
   target_init=$(_require_target_init "$target") || exit 1
+  # Before the removal, not at the install: kiro's task-init refuses a local-only
+  # repo (#327), and by then the old loadout would already be gone.
+  if [[ "$(la_assistant "$target")" == kiro ]]; then
+    tf_local_only_refuse_kiro "$REPO_ROOT" false || exit 1
+  fi
 
   _carry "$current" "$(la_tracker "$target")"
 
@@ -709,6 +735,9 @@ cmd_add() {
     echo "Error: expected: task-config add assistant <$(IFS='|'; echo "${ASSISTANTS[*]}")>" >&2; exit 1; }
   _in_list "$agent" "${ASSISTANTS[@]}" || {
     echo "Error: unknown assistant '$agent' — known: ${ASSISTANTS[*]}" >&2; exit 1; }
+  if [[ "$agent" == kiro ]]; then
+    tf_local_only_refuse_kiro "$REPO_ROOT" false || exit 1
+  fi
 
   _collect_matches
   aw_require_configured "$REPO_ROOT" "$PIN" || exit 1

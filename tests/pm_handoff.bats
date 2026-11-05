@@ -166,12 +166,19 @@ pm_session() {
   printf '%s\n' "$1" > "$SESS/$PM.agent"
 }
 
-# The zellij stub's tabs: tab 3 and tab 5, with tab <active> focused.
-tabs_with_active() {
-  export ZELLIJ=fake ZELLIJ_SESSION_NAME=zs
+# The zellij stub's tabs: tab 3 and tab 5, with task-pm's own pane (42) in
+# tab <N>. "This tab" is the one holding our pane (#358), not the focused
+# one, so focus is put on the other tab to prove it plays no part.
+pm_pane_in_tab() {
+  local other=$(( $1 == 3 ? 5 : 3 ))
+  export ZELLIJ=fake ZELLIJ_SESSION_NAME=zs ZELLIJ_PANE_ID=42
   export STUB_ZELLIJ_TABS_JSON="[
-    {\"name\": \"$PM\", \"tab_id\": 3, \"position\": 0, \"active\": $([[ $1 == 3 ]] && echo true || echo false)},
-    {\"name\": \"other\", \"tab_id\": 5, \"position\": 1, \"active\": $([[ $1 == 5 ]] && echo true || echo false)}
+    {\"name\": \"$PM\", \"tab_id\": 3, \"position\": 0, \"active\": $([[ $other == 3 ]] && echo true || echo false)},
+    {\"name\": \"other\", \"tab_id\": 5, \"position\": 1, \"active\": $([[ $other == 5 ]] && echo true || echo false)}
+  ]"
+  export STUB_ZELLIJ_PANES_JSON="[
+    {\"id\": 42, \"is_plugin\": false, \"is_focused\": false, \"tab_id\": $1},
+    {\"id\": 7, \"is_plugin\": false, \"is_focused\": true, \"tab_id\": $other}
   ]"
 }
 
@@ -180,7 +187,7 @@ tabs_with_active() {
   # The name comes from the <role>.agent sidecar, which outlives the session
   # file's own fields (#188): leave AGENT= out of the file to prove it.
   sed -i.bak '/^AGENT=/d' "$SESS/$PM.info"
-  tabs_with_active 5
+  pm_pane_in_tab 5
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_failure
   assert_output --partial "$PM is already live on kiro"
@@ -196,7 +203,7 @@ tabs_with_active() {
 
 @test "task-pm --force takes over a live PM and retires its session for a fresh start (#301)" {
   pm_session kiro 60 3
-  tabs_with_active 5
+  pm_pane_in_tab 5
   AW_IMPL=claude-gh run "$TASK_PM" --force
   assert_success
   run stub_calls claude
@@ -209,13 +216,13 @@ tabs_with_active() {
   # The kiro PM just quit in this tab: kiro has no exit hook, so its session
   # still looks live. This is the handoff itself, not a second PM.
   pm_session kiro 60 3
-  tabs_with_active 3
+  pm_pane_in_tab 3
   AW_IMPL=claude-gh run "$TASK_PM"
   assert_success
   [[ ! -e "$SESS/$PM.info" ]]
   # A heartbeat older than an hour is a dead PM wherever its tab was.
   pm_session claude 7200 3
-  tabs_with_active 5
+  pm_pane_in_tab 5
   AW_IMPL=kiro-gh run "$TASK_PM"
   assert_success
   run stub_calls kiro-cli
@@ -225,7 +232,7 @@ tabs_with_active() {
 
 @test "task-pm refuses a live PM in a same-numbered tab of another zellij session (#301)" {
   pm_session claude 60 3
-  tabs_with_active 3
+  pm_pane_in_tab 3
   export ZELLIJ_SESSION_NAME=elsewhere
   AW_IMPL=kiro-gh run "$TASK_PM"
   assert_failure

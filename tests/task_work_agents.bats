@@ -95,7 +95,7 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --focus --auto
   for agent in $(bash -c "source '$DETECT'; aw_all_agents"); do
     impl="$agent-gh"; slug="parity-$agent"
     : > "$STUB_CALLS_DIR/zellij.calls"
-    ZELLIJ=1 STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true}]' \
+    ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="[{\"name\":\"pm\",\"position\":0,\"active\":true},{\"name\":\"$slug\",\"position\":1,\"active\":false}]" \
       run env AW_IMPL="$impl" "$TASK_WORK" -b develop -f feature-x --no-launch --auto "$slug"
     [[ "$status" -eq 0 ]] || { echo "$impl: exit $status: $output" >&2; return 1; }
     [[ "$(source "$WORKTREE_BASE/.$slug.info"; echo "$BASE_BRANCH")" == develop ]] || {

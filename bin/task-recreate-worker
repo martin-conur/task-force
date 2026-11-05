@@ -454,6 +454,13 @@ _resume_session_id() {
   printf '%s' "$id"
 }
 
+# A local-only install (#327) is untracked, so the worktree carries only the
+# copy task-work made when it opened it. Fill in whatever is missing from the
+# main checkout, before the #304 check below asks whether the hooks are there;
+# files already present are left alone, since settings.local.json may hold
+# permissions approved during the lost session.
+tf_local_only_sync "$MAIN_WORKTREE" "$WORKTREE_DIR"
+
 # Resolve the launch line now, before the report and the sidecar rewrite, so a
 # refusal (kiro's --resume, kiro's agent preflight) leaves everything as it was.
 # Every agent-specific choice is the agent module's (#239); this body only picks

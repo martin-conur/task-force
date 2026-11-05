@@ -220,11 +220,14 @@ make_prompt_pair() {
   assert_output 1
   run grep -cF "\"reviewer-contract|reviewer-destruct-summary|$listed\"" "$CHECK_DRIFT"
   assert_output 1
+  run grep -cF "\"reviewer-contract|reviewer-pin-sha|$listed\"" "$CHECK_DRIFT"
+  assert_output 1
   # The real copies agree.
-  printf 'reviewer-contract|%s|%s\n' reviewer-post-radio-destruct "$real" reviewer-destruct-summary "$real" >"$TMP_DIR/manifest"
+  printf 'reviewer-contract|%s|%s\n' reviewer-post-radio-destruct "$real" reviewer-destruct-summary "$real" \
+    reviewer-pin-sha "$real" >"$TMP_DIR/manifest"
   CHECK_DRIFT_MANIFEST="$TMP_DIR/manifest" run bash "$CHECK_DRIFT"
   assert_success
-  assert_output --partial "2 group(s) checked"
+  assert_output --partial "3 group(s) checked"
   # Break one kiro copy's region and watch the group go red.
   mkdir -p "$TMP_DIR/kiro-local/agents"
   jq '.prompt |= sub("Otherwise, destruct\\."; "Otherwise, idle.")' \
@@ -236,4 +239,20 @@ make_prompt_pair() {
   assert_failure
   assert_output --partial "DRIFT [reviewer-contract/reviewer-post-radio-destruct]"
   assert_output --partial "Otherwise, idle."
+}
+
+@test "every reviewer prompt pins the head SHA and names it in the verdict (#348)" {
+  # task-merge-gate binds a clean review to code by the `reviewed <sha>` in the
+  # radio body; a head that moved during the review is never clean.
+  local f
+  for f in .claude/commands/reviewer.md claude-gh/commands/reviewer.md \
+      claude-jira/commands/reviewer.md claude-local/commands/reviewer.md \
+      claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json \
+      kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json; do
+    run bash -c 'case "$1" in *.json) jq -r .prompt "$1" ;; *) cat "$1" ;; esac' _ "$REPO_ROOT_REAL/$f"
+    assert_success
+    assert_output --partial "gh pr view <N> --json headRefOid --jq .headRefOid"
+    assert_output --partial "   reviewed <full-sha>"
+    assert_output --partial "head moved during review (<old> -> <new>); re-review needed"
+  done
 }

@@ -1,10 +1,12 @@
 name: CI
 
 on:
+  # Pushes run only on main: a feature branch's push is covered by its PR's
+  # run. pull_request has no branch filter, so a PR into any base (an
+  # integration branch included) gets CI without editing this file (#359).
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:

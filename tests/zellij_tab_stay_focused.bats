@@ -207,8 +207,9 @@ _focus_log() { grep 'tab-focus:' "$TASK_FORCE_HOME/radio/log" 2>/dev/null || tru
   assert_success
   refute_output --partial "Could not keep focus on your tab"
   assert_equal "$(_goto_count)" 1
-  # The re-check really ran: pre-lookup plus one check after the go-to-tab.
-  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 2
+  # The re-check really ran: pre-lookup plus two consecutive caller-active
+  # checks after the go-to-tab (#343).
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 3
   run _focus_log
   assert_output ''
 }
@@ -255,6 +256,71 @@ _focus_log() { grep 'tab-focus:' "$TASK_FORCE_HOME/radio/log" 2>/dev/null || tru
   assert_output ''
 }
 
+# A list-tabs answered before zellij has processed the new-tab: the caller is
+# active and the new tab is not listed at all.
+CALLER_ONLY='[{"name":"pm","position":0,"active":true}]'
+
+@test "snap-back: caller active before the new tab exists, then the new tab steals focus → caught and snapped back (#343)" {
+  # Pre-lookup, then two checks that see only the caller (zellij has not
+  # processed new-tab yet), then the new tab appears with focus, then the
+  # caller again after the retry.
+  local q="$BATS_TEST_TMPDIR/tabs.queue"
+  printf '%s\n%s\n%s\n%s\n' "$CALLER_ONLY" "$CALLER_ONLY" "$CALLER_ONLY" "$NEW_ACTIVE" > "$q"
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 STUB_ZELLIJ_TABS_JSON_QUEUE="$q" \
+    STUB_ZELLIJ_TABS_JSON="$CALLER_ACTIVE" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  refute_output --partial "Could not"
+  # No go-to-tab while the caller was active; one after the steal.
+  assert_equal "$(_goto_count)" 2
+  # pre-lookup + 2 early + the steal + 2 consecutive caller-active checks.
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 6
+  run _focus_log
+  assert_output --partial 'tab-focus: snap-back needed 2 go-to-tab(s) slug=new-worker caller_position=0'
+  assert_equal "$(grep -c . <<<"$output")" 1
+}
+
+@test "snap-back: one caller-active check is not enough, a steal between two is caught (#343)" {
+  # The new tab is listed and the caller active once, then the steal lands
+  # before the second observation: the streak resets and the loop retries.
+  local q="$BATS_TEST_TMPDIR/tabs.queue"
+  printf '%s\n%s\n%s\n' "$CALLER_ACTIVE" "$CALLER_ACTIVE" "$NEW_ACTIVE" > "$q"
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 STUB_ZELLIJ_TABS_JSON_QUEUE="$q" \
+    STUB_ZELLIJ_TABS_JSON="$CALLER_ACTIVE" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  refute_output --partial "Could not"
+  assert_equal "$(_goto_count)" 2
+  # pre-lookup + active + steal + 2 consecutive caller-active checks.
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 5
+  run _focus_log
+  assert_output --partial 'tab-focus: snap-back needed 2 go-to-tab(s) slug=new-worker caller_position=0'
+}
+
+@test "snap-back: a painted new-tab name (▶️ <slug>) counts as listed (#343)" {
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 \
+    STUB_ZELLIJ_TABS_JSON='[{"name":"pm","position":0,"active":true},{"name":"▶️ new-worker","position":1,"active":false}]' \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  refute_output --partial "Could not"
+  assert_equal "$(_goto_count)" 1
+  run _focus_log
+  assert_output ''
+}
+
+@test "snap-back: new tab never listed → budget spent, logged as never appeared, launch succeeds (#343)" {
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 AW_TAB_FOCUS_CHECKS=4 STUB_ZELLIJ_TABS_JSON="$CALLER_ONLY" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  assert_output --partial "'new-worker' never showed up in zellij's tab list"
+  # The caller stayed active throughout, so no go-to-tab beyond the first.
+  assert_equal "$(_goto_count)" 1
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 5
+  run _focus_log
+  assert_output --partial 'tab-focus: new tab never appeared after 4 check(s) slug=new-worker caller_position=0 active_position=0'
+  assert_equal "$(grep -c . <<<"$output")" 1
+}
+
 @test "snap-back: default bound is about 1.5s, not an unbounded wait (#311)" {
   local q="$BATS_TEST_TMPDIR/tabs.queue" start=$SECONDS
   printf '%s\n' "$CALLER_ACTIVE" > "$q"
@@ -271,11 +337,17 @@ _focus_log() { grep 'tab-focus:' "$TASK_FORCE_HOME/radio/log" 2>/dev/null || tru
 
 CALLER_TABS='[{"name":"pm","position":0,"active":true}]'
 
+# CALLER_TABS plus the new tab <slug>, listed inactive as zellij would once it
+# opens: the snap-back waits for it before trusting the caller's focus (#343).
+_caller_tabs() {
+  printf '[{"name":"pm","tab_id":1,"position":0,"active":true},{"name":"%s","tab_id":2,"position":1,"active":false}]' "$1"
+}
+
 @test "task-work, no flag: snap-back fires (PM keeps focus) on every agent (#254)" {
   local impl
   for impl in claude-gh kiro-gh; do
     : > "$STUB_CALLS_DIR/zellij.calls"
-    ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+    ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$(_caller_tabs "plain-${impl%%-*}")" \
       run env AW_IMPL="$impl" "$TASK_WORK" "plain-${impl%%-*}"
     assert_success
     assert_stub_called zellij "go-to-tab 1"
@@ -283,14 +355,16 @@ CALLER_TABS='[{"name":"pm","position":0,"active":true}]'
 }
 
 @test "task-work --plan: snap-back fires too (#254)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$(_caller_tabs my-feature)" \
     run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --plan
   assert_success
+  refute_output --partial "Could not keep focus"
+  refute_output --partial "Could not confirm focus"
   assert_stub_called zellij "go-to-tab 1"
 }
 
 @test "task-work --auto: snap-back fires (unchanged by permission mode)" {
-  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
+  ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$(_caller_tabs my-feature)" \
     run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --auto
   assert_success
   assert_stub_called zellij "go-to-tab 1"

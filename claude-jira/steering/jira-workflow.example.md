@@ -99,6 +99,154 @@ process tree goes with the tab. Run from anywhere else, the PM's tab included, a
 worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
 along: `grep 'stray-procs:' ~/.task-force/radio/log`.
 
+### Auto intake (`task-watch`)
+
+`task-watch [--once]` — poll Jira for labelled bugs, claim each once, radio the PM (#328)
+
+Run it in a tab of its own, from the repo; it polls until you stop it. It costs
+no model tokens: it is shell, and reads and writes Jira through `acli` (log in
+once with `acli jira auth login --web`). Each poll it searches the watch JQL and,
+while fewer than **Watch max in flight** tickets are claimed and unfinished,
+claims each hit with one label swap (`ai-auto` → `ai-auto:claimed`) and only
+then radios the PM `ticket-filed` with the key and summary. Claim before ping,
+so a crash never dispatches a ticket twice. The PM's intake (in `/pm`) triages
+it: it writes the spec and dispatches `task-work <url> --auto`, or comments on
+what is missing and adds `ai-auto:needs-info`.
+
+- **In flight** is a ticket claimed and not yet bounced, or one a live
+  `task-work` worktree is working on. It stops counting when the worktree is
+  removed, or, for a ticket never seen with a worktree, when Jira shows its
+  status done, `ai-auto:needs-info` or `ai-auto:failed`, or no
+  `ai-auto:claimed`. A ticket still claimed and open after **Watch pending
+  timeout minutes** counts as a failed run and goes back into the queue (or to
+  `ai-auto:failed`, once that makes the cap); the radio log says
+  `watch: pending timeout <KEY>`.
+- **Failure cap.** A ticket that comes back into the queue (`ai-auto` put back,
+  `ai-auto:claimed` removed) after a run was dispatched for it counts as a failed
+  run. After **Watch failure cap** of them it gets `ai-auto:failed` instead of a
+  claim, and is never claimed again. A bounce is not a failed run.
+- **Requeue on a reply** (#338). The reporter only has to answer: when the
+  watcher sees a bounce it records the time and the description's checksum,
+  and each poll it checks tickets on `ai-auto:needs-info` for a comment since
+  by anyone but the account `acli` is logged in as (the PM posts as it too), or
+  an edited description. On one it requeues the ticket in a single edit
+  (`ai-auto` added, `ai-auto:claimed` and `ai-auto:needs-info` removed), logs
+  `watch: requeued <KEY> (reporter replied)`, and claims it again for a fresh
+  triage. A bounced ticket whose `needs-info` was removed while `claimed` stayed
+  on, with no live worktree, is requeued the same way. A requeue is not a
+  failed run. After **Watch bounce cap** bounces the ticket stays on
+  `needs-info`, so a vague ticket cannot loop forever. A comment counts from
+  the PM's bounce comment on, so a quick answer is not missed; a description
+  edit counts once the watcher has seen the bounce. A reporter on the same Jira
+  account as `acli` (a solo user) cannot reply by comment, since it looks like
+  the PM's: edit the description instead.
+- **Failures stop it.** Any non-zero `acli` exit stops the watcher and radios
+  the PM `watch-stopped`. Only an auth failure (`unauthorized` in the error, or
+  `acli jira auth status` failing) asks for a re-login; any other error is
+  passed on as `acli error: <first line>` (#351). Fix it and start the watcher
+  again. It never retries in a loop. A write that fails
+  exits 0 in `acli`, so every claim checks `successCount`, and a failed claim is
+  never followed by a ping.
+- **State** lives outside the repo, in `~/.task-force/watch/<repo>/` (one ledger
+  file per claimed key), so it works on a local-only install. Log lines go to
+  the radio log: `grep 'watch:' ~/.task-force/radio/log`.
+
+Settings. The **last** matching bullet in this file wins, so put an override
+**below the managed-region end marker**, where a `task-init` re-run leaves it
+alone. The default JQL is the project above, the issue type and the label,
+minus claimed and failed tickets, oldest first; a custom one is used as written
+(claimed and failed tickets are skipped either way).
+
+- **Watch label**: `ai-auto`
+- **Watch issue type**: `Bug`
+- **Watch JQL**: `default`
+- **Watch poll seconds**: `300`
+- **Watch max in flight**: `2`
+- **Watch failure cap**: `2`
+- **Watch pending timeout minutes**: `120`
+- **Watch bounce cap**: `3`
+
+**PM rotation** (#334). An autonomous PM's context fills with every triage,
+spec and verdict; past a point it is noise. So the watcher recycles the PM,
+in shell, with no model tokens, when one of three caps is crossed (`0` turns
+one off): **Watch rotate context tokens** (the last assistant turn's input +
+cache-read + cache-creation tokens, read from the transcript radio recorded
+at register), **Watch rotate tickets** (`ticket-filed` handed to this PM) and
+**Watch rotate age minutes**. It also rotates before handing over a ticket
+from a different **group** than the PM's: a ticket's group is its parent epic
+(read once per ticket with `acli jira workitem view KEY --fields parent`, since
+search refuses `parent`), else its first label matching **Watch group labels** (globs allowed, `none`
+by default), else none. The PM's group is the group of the first grouped
+ticket it took; an ungrouped ticket never sets or triggers a group rotation.
+
+- **Quiet point only.** The PM idle, its inbox empty, and no merge gate
+  pending (no reviewer of this repo still running). Otherwise the log says
+  `watch: rotation deferred (<why>)`, once per reason.
+- **Groups stay together.** While any ticket handed to this PM is in flight,
+  whatever its group, a tickets, age or group rotation waits, and a ticket
+  from another group waits unclaimed. Groups decide whether to rotate, never
+  whether to wait. The context cap does not wait for them, and a context
+  reading is ignored until the `/clear` re-register lands, so the old
+  transcript never rotates the fresh PM again.
+- **Sequence.** The watcher radios the PM `handoff-requested` and holds the
+  queue. The PM writes `task-monitor-queue handoff write` and replies
+  `handoff-done` to `watch-<reponame>`. Once both are in and the PM is idle,
+  `radio clear` sets a one-shot rotation marker and types `/clear` into the
+  PM's pane, down the path a wake takes; the `/clear` re-register then prints
+  the board digest and the handoff note, which a re-register otherwise never
+  does. The marker expires after **Watch rotation marker minutes**: one the
+  `/clear` never consumed is dropped (`watch: stale rotation marker dropped`)
+  rather than printed at some later `/compact`.
+  Log: `watch: rotate pm-<repo> reason=<context|tickets|age|group> (…)`.
+  A group rotation happens before the new group's `ticket-filed` is sent.
+- **Never without a note.** No `handoff-done` with a note newer than the
+  request within **Watch handoff timeout minutes**: logged, and retried at the
+  next quiet point.
+- **claude, auto-submitting PMs only.** A kiro PM (no `/clear` was checked)
+  or one launched without `task-pm --auto-submit` (its prompt box is yours) is
+  never rotated; the log says so once per PM.
+
+- **Watch rotate context tokens**: `150000`
+- **Watch rotate tickets**: `6`
+- **Watch rotate age minutes**: `480`
+- **Watch handoff timeout minutes**: `15`
+- **Watch rotation marker minutes**: `5`
+- **Watch group labels**: `none`
+
+### Auto merge (`task-merge-gate`)
+
+`task-merge-gate <pr> <JIRA-KEY> [--no-comment]` — may the PM merge an auto
+ticket's PR without asking? (#329)
+
+The PM runs it after every clean review and obeys the first word it prints. It
+is shell, no model, so the rules are never re-derived from memory.
+
+- **`manual: …`** (exit 3): the ticket did not come through `task-watch` — no
+  `ai-auto:claimed` label and no entry in the watch ledger
+  (`~/.task-force/watch/<repo>/<KEY>`). The normal review flow applies.
+- **`merge`** (exit 0): an auto ticket, and all four rules hold: the ticket
+  carries **Merge label** (a label only, never words in a description); the
+  latest review beat for the PR is `review-complete-clean` from its reviewer,
+  newer than the worker's last re-review request and covering the head commit
+  (its body's `reviewed <sha>` is the head SHA; a verdict naming no SHA, from
+  before reviewers pinned one, must be newer than the head commit and logs
+  `merge-gate: verdict names no SHA, using time`; a tie in the same second
+  counts as not reviewed); the PR targets the base `task-work` recorded
+  for the worker (else the default branch); CI **ran and passed** for the
+  PR's exact head SHA (`gh run list -c <sha>` non-empty, every run success,
+  skipped or neutral); and the diff is within **Merge max changed lines**
+  (additions + deletions) and **Merge max files**. The PM merges as usual.
+- **`ask: <reason>`** (exit 1): anything else, every failing rule listed. The PM
+  tells you why and waits. That is the default for every auto ticket without
+  the merge label, and for anything the gate could not read.
+
+For an auto ticket the gate comments its outcome on the Jira ticket through
+`acli`. Log lines go to the radio log: `grep 'merge-gate:' ~/.task-force/radio/log`.
+
+- **Merge label**: `ai-auto-merge`
+- **Merge max changed lines**: `200`
+- **Merge max files**: `10`
+
 ### Atlassian MCP
 
 This workflow assumes the Atlassian Remote MCP server is configured. Verify with:
@@ -283,6 +431,47 @@ it replaces both, and `set tracker` is refused with the two steps that do it.
 `task-work … --agent <other>` for one launch.
 `task-remove` removes both and clears the setting. jira cannot be dual until a
 kiro-jira loadout exists (#92).
+
+**Local-only install** — `task-init claude-<tracker> --local-only` (#327)
+
+For a repo where nothing task-force-related may reach a branch. The same
+artifacts are written untracked: hooks and the allow-list go to
+`.claude/settings.local.json`, the import to `CLAUDE.local.md`, and every path
+task-init writes is listed in a block of `.git/info/exclude`, which every
+worktree shares and nothing commits. `git config task-force.install local-only`
+records the mode, and every later `task-init` (a re-run, a `task-config set`)
+honours it without the flag. `task-work`, `task-reviewer` and
+`task-recreate-worker` copy the set from the main checkout into each worktree
+before the agent starts, missing files only, and #304's hook check accepts a
+`radio register` hook in `settings.local.json`. A worker's PR carries none of
+it. `task-remove` takes it back out, exclude block and git config included.
+claude only: kiro has no untracked hook location, so a kiro install is refused
+on a local-only repo, and `--local-only` on a kiro loadout.
+
+**Any setting from the command line** — `task-init <loadout> --set "<setting>=<value>"` (#346)
+
+Every setting bullet in this doc (a list item that is a bold label, a colon and
+a code span) can be written by `task-init`, so a config tool can own the values
+instead of hand edits a `--force` would lose. `<setting>` is the bullet label as
+written here, such as `Status when done` or, on jira, `Watch poll seconds`,
+matched case-insensitively and split on the first `=`. Repeatable. An empty value
+restores the template default. A label this loadout's template does not carry is
+refused with the list of valid ones, exit 2, before anything is written. Values
+land inside the managed region: a re-run with the same `--set` gives the same
+file, and a re-run without one keeps the value already there. The tracker flags
+(`--owner` / `--repo` / `--project`, `--site` / `--key` / `--board`, `--tasks` /
+`--projects` / `--board`) are shorthands for `--set` on their own bullet. An
+existing doc is rewritten only with `--force` (or at a prompt), as for every
+other value. It works with `--local-only`, and `task-config set` / `add
+assistant` / `sync` carry every bullet that differs from the template default as
+a `--set`. A bullet below the end marker is never touched, and still wins for
+the readers that take the last one (`task-watch`, `task-merge-gate`).
+
+```bash
+# an external config tool, per repo, from its own records
+task-init claude-jira --local-only --force --site https://<site>.atlassian.net --key OPS \
+  --set "Status when in review=Code Review" --set "Watch poll seconds=120"
+```
 
 `task-remove` — take task-force back out of this repo (#220)
 
@@ -492,6 +681,10 @@ role transition runs through it. The PM / planner / worker prompts shell out to
 | Worker  | new commits pushed after review | `radio send --to pm --intent re-review-requested --pr <N>`             |
 | PM      | review requested changes        | `radio send --to <worker-role> --intent changes-requested --pr <N>`    |
 | PM      | PR merged                       | `radio send --to <worker-role> --intent approved-and-merged --pr <N>`  |
+| Watcher | labelled bug claimed            | `radio send --to pm --intent ticket-filed --issue <KEY-N>`             |
+| Watcher | an `acli` call failed; stopped  | `radio send --to pm --intent watch-stopped`                            |
+| Watcher | PM rotation due                 | `radio send --to pm --intent handoff-requested`                        |
+| PM      | handoff note written            | `radio send --to watch-<reponame> --intent handoff-done`               |
 
 When a worker's turn ends, the `Stop` hook runs `radio stop-hook`
 automatically: with an empty inbox it marks the role idle; if messages queued
@@ -565,7 +758,12 @@ entrypoints keep #93's silence — recovery never leaks into them.
 Recovery does not register, because a register whose tab lookup misses writes an
 empty `TAB_ID`, and that is worse than no session at all. The lookup is by tab
 *name* within the zellij session, so it can resolve from elsewhere — but the only
-place it is guaranteed to is the role's own tab. Run this **there**:
+place it is guaranteed to is the role's own tab. Run this **there**, in the
+agent's own pane: register also records `$ZELLIJ_PANE_ID` as the pane wakes go
+to (#336), and typed in a shell pane beside the agent it would name the shell.
+So a repair records its pane only when it runs beneath the agent (claude's `!`
+prefix); from any other pane it keeps the pane already on file and logs
+`is not the agent's pane`:
 
 ```bash
 radio register --role <role> --tab <tabname> \
@@ -629,7 +827,7 @@ the real `~/.task-force` (#262). `task-pm` runs in place, so it inherits the
 variable without help. When it is unset, nothing is passed and the default applies.
 
 To launch the PM agent in this repo, run `task-pm` from any tab — it renames
-the current zellij tab to `pm-<reponame>`, registers that repo-scoped role via
+the zellij tab it runs in (by id, never whichever tab has focus, #358) to `pm-<reponame>`, registers that repo-scoped role via
 the `SessionStart` hook, and starts the PM agent in-place. The per-repo role
 (#165) lets PMs in two repos coexist without clobbering each other's mailbox;
 workers reach it by sending `--to pm`, which radio resolves to this repo's
@@ -666,7 +864,11 @@ the key explicitly — without it the review is diff-only), runs the `code-revie
 skill on the diff, posts **one** thorough PR comment via
 `gh pr comment --body-file -` carrying its full analysis + verdict, and radios
 PM back with
-`review-complete-clean` or `review-complete-with-findings`. Then it
+`review-complete-clean` or `review-complete-with-findings`. It pins the PR's
+head SHA before reading the diff and names it, as `reviewed <sha>`, in the
+comment's verdict line and as the first line of the radio body, which is what
+`task-merge-gate` binds a clean review to; if the head moved during the review
+the verdict is never clean (#348). Then it
 **auto-destructs**: `task-done --remove-worktree` removes its worktree and
 closes its tab. It does NOT idle waiting to be closed, and there is no manual
 cleanup left for anyone. The analysis lives in the PR comment, not the tab —
@@ -747,6 +949,7 @@ mailbox.
 | Symptom | Cause and check |
 |---------|-----------------|
 | Pinged a role, nothing happened | Re-read the sender's own outcome line — only `delivered` means a keystroke landed; every other line names its own reason. Then `ls ~/.task-force/radio/sessions/` (is the role there, spelled exactly?) and `radio orphans` (a >1h-stale heartbeat means the tab is gone). In the recipient's own tab, `radio check` tells you whether the message arrived and simply wasn't acted on. |
+| A wake typed `radio check` into a shell, `task-watch` or `task-monitor` pane beside the agent | The wake went to the tab's focused pane, not the agent's (#336). `register` records the agent's pane as `PANE_ID=` off `$ZELLIJ_PANE_ID`, and `send` writes there while zellij still lists it as a terminal pane on the role's tab; otherwise it falls back to the focused pane. Each `send: woke` log line ends in `(src=recorded)` or `(src=focused)`, and `recorded PANE_ID=… falling back` says a recorded pane went stale. A session registered before #336 has no `PANE_ID` until its next register: a `/clear` in the agent, or the hand `radio register` above, run in the agent's pane. |
 | `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. On a **PM** that is the default since #254 — the box is yours, and a submitting wake would send whatever you had half-typed; relaunch with `task-pm --auto-submit` only if the PM is meant to run unattended. On a **worker** it is not the default: it was launched with `--no-auto-submit`, or registered before #254 without `--auto` / `--auto-submit`. Relaunch it with plain `task-work` (or `task-recreate-worker --auto-submit`) to stop it recurring. The flag is read off the **recipient's** file, after any `--also` alias hop. |
 | A role keeps vanishing from `sessions/` | Session flapping — something fires a session-end wipe on an intra-session event and takes `TAB_ID` with it. Compare `grep -c 'unregister role='`, `'unregister: proceeding'` and `'unregister: skipping'` in the log: post-#187 `skipping` should carry the bulk of the traffic, and `role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=`, and anything calling it in a loop inflates that counter alone — a test suite that has not isolated `$TASK_FORCE_HOME` will do exactly this against your live role. Otherwise an **old `radio` binary** is on `PATH`, since every non-`--manual` call now logs one or the other; `PATH`'s `radio` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
@@ -755,7 +958,7 @@ mailbox.
 | `radio check` says nothing while mail is in the inbox, or a report lands `from: unknown` | The session has no `$TASK_FORCE_ROLE`: it never registered, which is what every resumed session looks like (the env was a command prefix on the original process, not an export). Fixed in #229 — `check` / `read` / `ack` / `send` now recover the role from disk or refuse loudly, and `radio register --role … --tab …` works without the env var. `grep 'recover-role:' ~/.task-force/radio/log` shows what was recovered or refused, and `grep 'register: no-op' ~/.task-force/radio/log` a hook that fired with an empty environment. |
 | `task-done` says `no tab id captured` and leaves the tab open | The tab's id was never recorded at launch. Before #242 that capture failed silently; now `task-work` (and `task-reviewer` / `task-recreate-worker`) says so on stderr the moment it happens and logs why — `no-zellij-bin`, `not-in-zellij`, `no-jq`, `list-tabs-empty`, `race`, or `no-match` together with the tab names zellij reported. `task-done`'s skip line now also says which source was empty. `grep 'tab-id:' ~/.task-force/radio/log` — one line per missed capture, with the slug and the reason. A sidecar written before the capture existed (#117) has no `TAB_ID=` at all. Close the tab by hand; an unscoped `close-tab` closes whichever tab is focused (#107). |
 | `task-done` says `Not closing zellij tab id=N: it is now '<name>'` and leaves the tab open | The sidecar's `TAB_ID` is stale: zellij restarted since it was captured, and the id now belongs to another tab. Before #260 `task-done` closed it anyway, killing whichever worker held it. A resume in place keeps the old id; `task-recreate-worker` rewrites it. `grep 'tab-close:' ~/.task-force/radio/log` names the tab that holds the id now. Close your own tab by hand; after a restart, recover workers with `task-recreate-worker` (or re-run `radio register --tab …` from the tab, which since #260 also rewrites a stale sidecar id). |
-| A launch left you on the new worker's tab instead of your own | zellij opens a tab asynchronously and always focuses it, so the launcher's snap-back `go-to-tab` can land before the new tab has finished opening (#311). The launcher now re-checks for about 1.5s and issues `go-to-tab` again until your tab is active; it gives up after that and never fails the launch. `grep 'tab-focus:' ~/.task-force/radio/log` — `snap-back needed N go-to-tab(s)` is a race that was corrected, `snap-back failed after N go-to-tab(s)` one that was not, with the position that kept focus. More frequent on a loaded machine. `--focus` skips all of this. |
+| A launch left you on the new worker's tab instead of your own | zellij opens a tab asynchronously and always focuses it, so the launcher's snap-back `go-to-tab` can land before the new tab has finished opening (#311). The launcher now re-checks for about 1.5s and issues `go-to-tab` again until your tab is active; it gives up after that and never fails the launch. `grep 'tab-focus:' ~/.task-force/radio/log` — `snap-back needed N go-to-tab(s)` is a race that was corrected, `snap-back failed after N go-to-tab(s)` one that was not, with the position that kept focus, and `new tab never appeared` a launch whose tab zellij never listed within that time. Since #343 the check waits for the new tab to be listed and wants your tab active twice in a row, so an early answer from zellij no longer ends it before the new tab steals focus. More frequent on a loaded machine. `--focus` skips all of this. |
 
 The log is the only place several of these states are distinguishable at all.
 It is shared by every repo and role on the machine, so read timestamps rather
@@ -768,6 +971,7 @@ grep -c 'send id=' "$L"; grep -c 'send: woke' "$L"   # sent vs. actually woken
 grep -oE 'is busy|is awaiting|looks dead|no session for|has no TAB_ID|tab id unresolved|no writable pane|write-chars failed' "$L" | sort | uniq -c | sort -rn
 grep -oE 'skipping \(empty payload on [a-z-]+ stdin' "$L" | sort | uniq -c
 grep -oE 'tab_id_src=[a-z-]+' "$L" | sort | uniq -c   # `none` = role is unwakeable
+grep -oE '\(src=[a-z]+\)' "$L" | sort | uniq -c   # `focused` = no usable PANE_ID (#336)
 grep -c 'no tab binding for' "$L"; grep -c 'loadout=unknown' "$L"
 ```
 

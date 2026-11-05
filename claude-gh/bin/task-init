@@ -35,6 +35,26 @@ markers is backed up to <doc>.bak before the markers are added.
 When refreshing an existing workflow doc, previously-filled {OWNER} / {REPO} /
 {PROJECT} values are automatically preserved (this-run flags take precedence).
 
+Local-only install (#327) — nothing task-force reaches the repo's branches:
+  --local-only     Write hooks + allow-list to .claude/settings.local.json and
+                   the import to CLAUDE.local.md, list every written path in
+                   .git/info/exclude, and record git config task-force.install.
+                   Sticky: once recorded, every re-run installs local-only.
+                   task-work / task-reviewer / task-recreate-worker copy the
+                   untracked set into each worktree they open.
+
+Any workflow-doc setting (#346):
+  --set "<setting>=<value>"
+                   Write one setting bullet of the workflow doc, e.g.
+                   --set "Status when done=Closed". <setting> is the bullet
+                   label as written in the doc, matched case-insensitively;
+                   split on the first =. Repeatable. An empty value restores
+                   the template default; an unknown label is refused with the
+                   list of valid ones. A re-run without a given --set keeps the
+                   value already in the doc. Rewriting an existing doc needs
+                   --force (or a prompt run), as for every other value. Tracker
+                   flags (--owner, --site, --tasks, ...) are shorthands for it.
+
 --force and --restore are mutually exclusive.
 EOF
   exit 1
@@ -44,8 +64,10 @@ OWNER=""
 REPO=""
 PROJECT=""
 FORCE=false
+LOCAL_ONLY=false
 RESTORE=false
 SCOPE="all"
+SETS=()
 OWNER_VIA_FLAG=false
 REPO_VIA_FLAG=false
 PROJECT_VIA_FLAG=false
@@ -57,6 +79,9 @@ while [[ $# -gt 0 ]]; do
     --project)  PROJECT="$2"; PROJECT_VIA_FLAG=true; shift 2;;
     --force)    FORCE=true; shift;;
     --restore)  RESTORE=true; shift;;
+    --local-only) LOCAL_ONLY=true; shift;;
+    --set)      [[ $# -ge 2 ]] || { echo "Error: --set needs \"<setting>=<value>\"" >&2; exit 2; }
+                SETS+=("$2"); shift 2;;
     --workflow) SCOPE="workflow"; shift;;
     --commands) SCOPE="commands"; shift;;
     --hooks)    SCOPE="hooks"; shift;;
@@ -127,16 +152,58 @@ LIB_DIR="$SCRIPT_DIR/../../lib"
 # shellcheck source=lib/require-jq.sh
 . "$LIB_DIR/require-jq.sh"
 # endregion:require-jq-source
+# region:doc-set-source
+# `--set "<setting>=<value>"` (#346) writes any setting bullet of the workflow
+# doc: lib/doc-set.sh checks the label against the template, then rewrites the
+# rendered copy, carrying every bullet the run was not told about over from the
+# existing doc.
+# shellcheck source=lib/doc-set.sh
+. "$LIB_DIR/doc-set.sh"
+# endregion:doc-set-source
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found at $TEMPLATE"
   exit 1
 fi
 
+# region:doc-set-validate
+tf_set_validate "$TEMPLATE" ${SETS[@]+"${SETS[@]}"} || exit 2
+# endregion:doc-set-validate
+
 git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "Error: not in a git repo"; exit 1; }
 REPO_ROOT=$(git rev-parse --show-toplevel)
 TARGET="$REPO_ROOT/.claude/gh-workflow.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
+
+# region:local-only-setup
+# A local-only install (#327) writes the same artifacts untracked: the hooks into
+# .claude/settings.local.json, the import into CLAUDE.local.md, and every path
+# listed in .git/info/exclude. Sticky through git config, so a re-run or a
+# task-config switch cannot drift back to tracked files. See lib/local-only.sh.
+# Recorded before anything is written, so an interrupted run leaves no file
+# showing in git status.
+# shellcheck source=lib/local-only.sh
+. "$LIB_DIR/local-only.sh"
+SETTINGS_FILE="$REPO_ROOT/.claude/settings.json"
+if [[ "$LOCAL_ONLY" == true ]] || tf_local_only "$REPO_ROOT"; then
+  LOCAL_ONLY=true
+  SETTINGS_FILE="$REPO_ROOT/.claude/settings.local.json"
+  CLAUDE_MD="$REPO_ROOT/CLAUDE.local.md"
+  LOCAL_ONLY_PATTERNS=()
+  while IFS= read -r _pat; do LOCAL_ONLY_PATTERNS+=("$_pat"); done \
+    < <(tf_local_only_patterns "$(basename "$(dirname "$SCRIPT_DIR")")")
+  _tracked=$(tf_local_only_tracked "$REPO_ROOT" "${LOCAL_ONLY_PATTERNS[@]}")
+  if [[ -n "$_tracked" ]]; then
+    {
+      echo "Error: a local-only install cannot write these — git already tracks them:"
+      while IFS= read -r _t; do echo "         $_t"; done <<<"$_tracked"
+      echo "       Excluding a tracked file does nothing, so writing it would change the repo."
+    } >&2
+    exit 1
+  fi
+  tf_local_only_record "$REPO_ROOT" "${LOCAL_ONLY_PATTERNS[@]}"
+fi
+# endregion:local-only-setup
 
 mkdir -p "$REPO_ROOT/.claude"
 
@@ -206,19 +273,22 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
     cp "$TEMPLATE" "$TMP_RENDERED"
   fi
 
+# region:doc-set-apply
+  INSTALL_POLICY="$POLICY" tf_set_apply "$TMP_RENDERED" "$TEMPLATE" "$TARGET" ${SETS[@]+"${SETS[@]}"}
+# endregion:doc-set-apply
   INSTALL_POLICY="$POLICY" install_managed_file "$TMP_RENDERED" "$TARGET" "gh-workflow.md"
 
   IMPORT_LINE="@.claude/gh-workflow.md"
   if [[ -f "$CLAUDE_MD" ]]; then
     if grep -qF "$IMPORT_LINE" "$CLAUDE_MD"; then
-      echo "✓ CLAUDE.md already references gh-workflow.md"
+      echo "✓ $(basename "$CLAUDE_MD") already references gh-workflow.md"
     else
       printf '\n%s\n' "$IMPORT_LINE" >> "$CLAUDE_MD"
-      echo "✓ Appended $IMPORT_LINE to CLAUDE.md"
+      echo "✓ Appended $IMPORT_LINE to $(basename "$CLAUDE_MD")"
     fi
   else
     printf '%s\n' "$IMPORT_LINE" > "$CLAUDE_MD"
-    echo "✓ Created CLAUDE.md with $IMPORT_LINE"
+    echo "✓ Created $(basename "$CLAUDE_MD") with $IMPORT_LINE"
   fi
 fi
 
@@ -244,7 +314,7 @@ fi
 # Pre-existing user hooks (e.g. ./scripts/pre-tool-lint.sh on Stop) are
 # preserved.
 _radio_install_hooks() {
-  local settings_file="$REPO_ROOT/.claude/settings.json"
+  local settings_file="$SETTINGS_FILE"
   local loadout="claude-gh"
 
 # region:require-jq-call

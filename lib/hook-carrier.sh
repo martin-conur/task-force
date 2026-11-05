@@ -25,6 +25,14 @@
 # `ENV=1 radio register`, `/usr/local/bin/radio register`, `command radio
 # register` — still counts; `myradio register` does not.
 
+# shellcheck source=lib/local-only.sh
+. "$(dirname "${BASH_SOURCE[0]}")/local-only.sh"
+
+# A local-only install (#327) puts claude's hooks in `.claude/settings.local.json`
+# instead, untracked and copied into each worktree by the launcher. Claude Code
+# reads that file beside settings.json, so a hook found there counts for any
+# checkout; a worktree whose copy is missing still has neither, and is refused.
+
 # aw_hook_carrier_rel <agent>
 # The carrier's path relative to the checkout root.
 aw_hook_carrier_rel() {
@@ -56,6 +64,10 @@ aw_dir_has_hook_carrier() {
   local agent="$1" dir="$2" rel
   rel=$(aw_hook_carrier_rel "$agent") || return 1
   if [[ -r "$dir/$rel" ]] && _aw_carries_radio_register < "$dir/$rel"; then
+    return 0
+  fi
+  if [[ "$agent" == claude && -r "$dir/.claude/settings.local.json" ]] \
+     && _aw_carries_radio_register < "$dir/.claude/settings.local.json"; then
     return 0
   fi
   _aw_global_hook_carrier "$agent"
@@ -101,6 +113,15 @@ aw_stale_worktrees() {
 aw_hook_carrier_remedy() {
   local agent="$1" dir="$2" base="$3" repo="$4" rel
   rel=$(aw_hook_carrier_rel "$agent")
+  # A local-only install commits nothing, so no merge can bring the hooks in:
+  # the launcher copies them from the main checkout, which must have them.
+  if tf_local_only "$repo"; then
+    echo "       This is a local-only install (#327): the hooks live untracked in"
+    echo "       $repo/.claude/settings.local.json and are copied into each worktree."
+    echo "       If that file has no 'radio register' hook, restore it, then re-run:"
+    echo "         (cd $repo && task-init <loadout> --local-only)"
+    return 0
+  fi
   if aw_ref_has_hook_carrier "$agent" "$repo" "$base"; then
     echo "       '$base' has it. Bring it in, then re-run:"
     echo "         git -C $dir merge $base      # or rebase onto $base"

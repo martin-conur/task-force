@@ -46,6 +46,129 @@ teardown() {
   refute_output --partial "go-to-tab-name"
 }
 
+# ----- the agent's own pane, not the focused one (#336) ---------------------
+
+# pm's tab 7 holds three terminal panes: the agent (701), a task-watch pane
+# (702) and a shell (703) with the focus, plus a plugin pane.
+_seed_pm_tab_with_siblings() {
+  export STUB_ZELLIJ_PANES_JSON='[
+    {"id": 701, "is_plugin": false, "is_focused": false, "tab_id": 7},
+    {"id": 702, "is_plugin": false, "is_focused": false, "tab_id": 7},
+    {"id": 703, "is_plugin": false, "is_focused": true,  "tab_id": 7},
+    {"id": 1,   "is_plugin": true,  "is_focused": false, "tab_id": 7},
+    {"id": 800, "is_plugin": false, "is_focused": true,  "tab_id": 8}
+  ]'
+}
+
+@test "register records the agent's pane from ZELLIJ_PANE_ID (#336)" {
+  ZELLIJ_PANE_ID=701 "$RADIO" register --role pm --tab pm --agent claude
+  run grep '^PANE_ID=' "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "PANE_ID=701"
+}
+
+@test "register accepts zellij's terminal_N spelling of a pane id (#336)" {
+  ZELLIJ_PANE_ID=terminal_701 "$RADIO" register --role pm --tab pm --agent claude
+  run grep '^PANE_ID=' "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "PANE_ID=701"
+}
+
+@test "send wakes the recorded agent pane while focus sits on a sibling pane (#336)" {
+  _seed_pm_tab_with_siblings
+  ZELLIJ_PANE_ID=701 "$RADIO" register --role pm --tab pm --agent claude
+  : > "$STUB_CALLS_DIR/zellij.calls"
+
+  TASK_FORCE_ROLE=worker-foo run "$RADIO" send --to pm --intent ticket-filed --body "x"
+  assert_success
+  assert_output --partial "radio: delivered — woke pm (tab_id=7)"
+  run stub_calls zellij
+  assert_output --partial "action write-chars --pane-id 701 radio check"
+  refute_output --partial "--pane-id 703"
+  run grep -F 'send: woke pm via tab_id=7 pane=701 (src=recorded)' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "send falls back to the focused pane when the recorded pane is gone (#336)" {
+  _seed_pm_tab_with_siblings
+  ZELLIJ_PANE_ID=799 "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ticket-filed --body "x"
+  assert_stub_called zellij "action write-chars --pane-id 703 radio check"
+  run grep -F 'recorded PANE_ID=799 for pm is gone, a plugin pane, or not on tab_id=7' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+  run grep -F 'pane=703 (src=focused)' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "send falls back when the recorded pane id is a plugin pane's (#336)" {
+  _seed_pm_tab_with_siblings
+  ZELLIJ_PANE_ID=1 "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ticket-filed --body "x"
+  assert_stub_called zellij "action write-chars --pane-id 703 radio check"
+  run grep -F 'recorded PANE_ID=1 for pm' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "send falls back when the recorded pane sits on another tab (#336)" {
+  # A pane id reused after a zellij restart: it exists, but on worker-foo's tab.
+  _seed_pm_tab_with_siblings
+  ZELLIJ_PANE_ID=800 "$RADIO" register --role pm --tab pm --agent claude
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ticket-filed --body "x"
+  assert_stub_called zellij "action write-chars --pane-id 703 radio check"
+  run stub_calls zellij
+  refute_output --partial "--pane-id 800"
+  run grep -F 'pane=703 (src=focused)' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "a session file with no PANE_ID wakes the focused pane as before (#336)" {
+  _seed_pm_tab_with_siblings
+  "$RADIO" register --role pm --tab pm --agent claude
+  run grep '^PANE_ID=' "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_failure
+  TASK_FORCE_ROLE=worker-foo "$RADIO" send --to pm --intent ticket-filed --body "x"
+  assert_stub_called zellij "action write-chars --pane-id 703 radio check"
+  run grep -F 'recorded PANE_ID' "$TASK_FORCE_HOME/radio/log"
+  assert_failure
+}
+
+@test "a re-register with no ZELLIJ_PANE_ID keeps the recorded pane on the same tab (#336)" {
+  ZELLIJ_PANE_ID=701 "$RADIO" register --role pm --tab pm --agent claude
+  "$RADIO" register --role pm --tab pm --agent claude
+  run grep '^PANE_ID=' "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "PANE_ID=701"
+}
+
+# A hand repair (no $TASK_FORCE_ROLE) from a shell pane beside the agent must
+# not record that shell. ps is stubbed with this test's own ancestry.
+_stub_ps_ancestry() {
+  local chain="$1"
+  cat > "$STUB_BIN/ps" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' $chain
+STUB
+  chmod +x "$STUB_BIN/ps"
+}
+
+@test "a hand repair from a shell pane beside the agent does not record that pane (#336)" {
+  ZELLIJ_PANE_ID=701 "$RADIO" register --role pm --tab pm --agent claude
+  _stub_ps_ancestry "'500 1 Tue Nov  3 10:00:00 2026 -zsh' '600 500 Tue Nov  3 10:00:01 2026 bash radio register'"
+  TASK_FORCE_ROLE= TASK_FORCE_NO_PROC_SCAN= AW_PROC_SELF_PID=600 ZELLIJ_PANE_ID=703 \
+    run "$RADIO" register --role pm --tab pm --agent claude
+  assert_success
+  run grep '^PANE_ID=' "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "PANE_ID=701"
+  run grep -F 'ZELLIJ_PANE_ID=703 is not the agent' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "a hand repair from inside the agent records its pane (#336)" {
+  _stub_ps_ancestry "'500 1 Tue Nov  3 10:00:00 2026 -zsh' '550 500 Tue Nov  3 10:00:00 2026 claude --permission-mode auto' '600 550 Tue Nov  3 10:00:01 2026 bash -c radio register'"
+  TASK_FORCE_ROLE= TASK_FORCE_NO_PROC_SCAN= AW_PROC_SELF_PID=600 ZELLIJ_PANE_ID=701 \
+    run "$RADIO" register --role pm --tab pm --agent claude
+  assert_success
+  run grep '^PANE_ID=' "$TASK_FORCE_HOME/radio/sessions/pm.info"
+  assert_output "PANE_ID=701"
+}
+
 # ----- delivered: sender is told the wake landed (#166) ---------------------
 
 @test "send to idle recipient prints the delivered outcome on stdout (#166)" {

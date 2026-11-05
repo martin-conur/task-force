@@ -29,7 +29,8 @@ source "$AW_ROOT/lib/kiro-agent.sh"
 # AW_KIRO_DEFAULT_MODEL (#259) and aw_kiro_ui_flag (#157).
 # shellcheck source=lib/kiro-launch.sh
 source "$AW_ROOT/lib/kiro-launch.sh"
-# aw_zellij / aw_zellij_reachable, for the live-PM check (#301).
+# aw_zellij_own_tab_id, for the live-PM check (#301) and the tab rename
+# (#358); aw_radio_log for the rename skip.
 # shellcheck source=lib/zellij-tab.sh
 source "$AW_ROOT/lib/zellij-tab.sh"
 
@@ -165,6 +166,10 @@ fi
 # quit a minute ago still looks live. The check runs before the tab rename,
 # like the fail-fast checks above.
 RADIO="$BIN_DIR/radio"
+# This PM's own tab (#358), by the pane we run in, not by focus: the user may
+# have switched tabs since starting task-pm. Empty when it cannot be told.
+PM_TAB_ID=""
+[[ -n "${ZELLIJ:-}" ]] && PM_TAB_ID=$(aw_zellij_own_tab_id || true)
 PM_SESSIONS="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
 PM_SESSION="$PM_SESSIONS/$PM_ROLE.info"
 _pm_field() { grep -E "^$1=" "$PM_SESSION" 2>/dev/null | head -1 | cut -d= -f2-; }
@@ -175,12 +180,7 @@ if [[ -f "$PM_SESSION" && -z "$PM_PREV_ALIAS" && -z "$FORCE" ]]; then
   if ! grep -q "^${PM_ROLE}[[:space:]]" <<<"$_orphans"; then
     _prev_tab_id=$(_pm_field TAB_ID || true)
     _prev_zsession=$(_pm_field ZELLIJ_SESSION || true)
-    _here_tab_id=""
-    if aw_zellij_reachable && command -v jq >/dev/null 2>&1; then
-      _here_tab_id=$(aw_zellij action list-tabs --json 2>/dev/null \
-        | jq -r '[.[] | select(.active) | .tab_id] | .[0] // empty' 2>/dev/null) || _here_tab_id=""
-    fi
-    if [[ -z "$_prev_tab_id" || "$_prev_tab_id" != "$_here_tab_id" \
+    if [[ -z "$_prev_tab_id" || "$_prev_tab_id" != "$PM_TAB_ID" \
           || ( -n "$_prev_zsession" && "$_prev_zsession" != "${ZELLIJ_SESSION_NAME:-}" ) ]]; then
       _prev_agent=$(head -1 "$PM_SESSIONS/$PM_ROLE.agent" 2>/dev/null || true)
       [[ -n "$_prev_agent" ]] || _prev_agent=$(_pm_field AGENT || true)
@@ -212,8 +212,23 @@ if [[ -f "$PM_SESSION" && -z "$PM_PREV_ALIAS" ]]; then
   TASK_FORCE_ROLE="$PM_ROLE" "$RADIO" unregister --manual </dev/null >/dev/null 2>&1 || true
 fi
 
+# Rename our own tab by id (#358). A bare `rename-tab` renames the focused
+# tab, which by now may be another one, and radio would then wake that tab as
+# the PM. When our tab cannot be resolved, skip: never the focused tab.
 if [[ -n "${ZELLIJ:-}" ]]; then
-  zellij action rename-tab "$PM_ROLE" >/dev/null 2>&1 || true
+  if [[ -n "$PM_TAB_ID" ]]; then
+    zellij action rename-tab-by-id "$PM_TAB_ID" "$PM_ROLE" >/dev/null 2>&1 || true
+  else
+    if [[ -z "${ZELLIJ_PANE_ID:-}" ]]; then
+      _why="ZELLIJ_PANE_ID is unset"
+    elif ! command -v jq >/dev/null 2>&1; then
+      _why="jq is not on PATH"
+    else
+      _why="pane ${ZELLIJ_PANE_ID} is not in zellij's pane list"
+    fi
+    echo "⚠ Not renaming this tab to $PM_ROLE: could not tell which tab is ours ($_why). Rename it by hand (logged, grep 'tab-rename:')." >&2
+    aw_radio_log "$(printf 'tab-rename: task-pm skipped role=%s reason=%s' "$PM_ROLE" "$_why")"
+  fi
 fi
 
 # Write alias sessions for any --also repos so this one PM answers their

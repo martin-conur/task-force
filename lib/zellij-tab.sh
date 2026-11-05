@@ -5,6 +5,7 @@
 #   aw_launch_tab <slug> <cwd> <cmd>
 #   aw_radio_home_env_prefix   (TASK_FORCE_HOME for a launcher's env prefix, #262)
 #   aw_zellij_session_running <session>   (#291)
+#   aw_zellij_own_tab_id   (#358)
 #
 # Every zellij call here goes through aw_zellij, so a launcher that sets
 # AW_ZELLIJ_SESSION drives that session instead of the one it runs in (#291).
@@ -145,6 +146,26 @@ aw_zellij_tab_name_by_id() {
   printf '%s' "$tabs"     | jq -r --argjson t "$id" '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
 }
 
+# The tab this process runs in (#358): the tab_id of the terminal pane
+# $ZELLIJ_PANE_ID names, read off `list-panes`. zellij exports that id into
+# every terminal pane, so unlike the focused tab it cannot move under us while
+# we run. Terminal and plugin panes number separately, hence the is_plugin
+# filter; zellij spells a terminal pane `N` or `terminal_N`. Always the session
+# we run in, never AW_ZELLIJ_SESSION's. Empty stdout means "could not tell"
+# (no pane id, no jq, the pane not listed): the caller must skip, never fall
+# back to the focused tab.
+aw_zellij_own_tab_id() {
+  local p="${ZELLIJ_PANE_ID:-}"
+  p="${p#terminal_}"
+  case "$p" in *[!0-9]*|"") return 0 ;; esac
+  command -v zellij >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  zellij action list-panes --json --tab 2>/dev/null \
+    | jq -r --argjson p "$p" \
+        '[.[] | select(.id == $p and (.is_plugin // false) == false) | .tab_id]
+         | .[0] // empty' 2>/dev/null
+}
+
 # True when tab name <name> belongs to <slug>: the bare slug, or the slug after
 # a space-separated prefix. radio paints `⏸️ <slug>` / `▶️ <slug>` / `❓︎ <slug>`
 # (#140), and matching on the space-delimited tail rather than on that exact
@@ -267,38 +288,64 @@ aw_launch_tab() {
 # (#311). Checks the active tab right after the go-to-tab and, while it is
 # not the caller's, issues go-to-tab again: at most AW_TAB_FOCUS_CHECKS checks
 # (default 7), AW_TAB_FOCUS_INTERVAL seconds apart (default 0.25), so the
-# worst case is about 1.5s and the common case is one list-tabs with no sleep.
+# worst case is about 1.5s and the common case is two list-tabs, one sleep
+# apart.
+#
+# "Caller active" counts only once list-tabs shows the new tab <slug> (#343):
+# a list-tabs answered before zellij has processed the new-tab reports the
+# caller active with no new tab yet, and the new tab steals focus right after.
+# Even then it takes two consecutive caller-active checks to return, so a
+# steal landing just after the tab appears is still caught.
+#
 # A list-tabs that answers nothing usable ends the loop quietly: it cannot
 # tell, and a launch never fails over focus. A retry or a final failure
 # writes one `tab-focus:` line to radio's log, to count how often the race
-# actually happens.
-#
-# Known limit: a first list-tabs answered before zellij has processed the
-# new-tab still reports the caller active, so the loop returns and a focus
-# steal that lands after it goes unseen. If a live run ever shows that, the
-# fix is to require two consecutive active observations of the caller.
+# actually happens; a budget spent without the new tab ever being listed
+# says so.
 aw_snap_back_to_tab() {
   local slug="$1" caller_pos="$2"
   local checks="${AW_TAB_FOCUS_CHECKS:-7}" interval="${AW_TAB_FOCUS_INTERVAL:-0.25}"
-  local target=$((caller_pos + 1)) gotos=1 i active=""
+  local target=$((caller_pos + 1)) gotos=1 i state active="" listed=""
+  local seen_new=0 streak=0
 
   aw_zellij action go-to-tab "$target" 2>/dev/null || true
   for (( i = 1; i <= checks; i++ )); do
-    active=$(aw_zellij action list-tabs --json 2>/dev/null \
-      | jq -r '[.[] | select(.active) | .position] | .[0] // empty' 2>/dev/null) || active=""
+    # "<active position> <slug listed?>"; the paint prefixes are stripped as
+    # in aw_zellij_tab_id_by_name, since radio may rename the tab already.
+    state=$(aw_zellij action list-tabs --json 2>/dev/null \
+      | jq -r --arg n "$slug" \
+          '([.[] | select(.active) | .position] | .[0] // empty | tostring)
+           + " "
+           + (any(.[]; (.name // "" | sub("^⏸️ "; "") | sub("^▶️ "; "")
+                        | sub("^❓︎ "; "")) == $n) | tostring)' 2>/dev/null) || state=""
+    active="${state%% *}" listed="${state#* }"
     [[ -n "$active" ]] || return 0
+    [[ "$listed" == true ]] && seen_new=1
     if [[ "$active" == "$caller_pos" ]]; then
-      if (( gotos > 1 )); then
-        aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s' \
-          "$gotos" "$slug" "$caller_pos")"
+      (( seen_new )) && streak=$((streak + 1))
+      if (( streak >= 2 )); then
+        if (( gotos > 1 )); then
+          aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s' \
+            "$gotos" "$slug" "$caller_pos")"
+        fi
+        return 0
       fi
-      return 0
+      (( i < checks )) || break
+      sleep "$interval" 2>/dev/null || true
+      continue
     fi
+    streak=0
     (( i < checks )) || break
     sleep "$interval" 2>/dev/null || true
     aw_zellij action go-to-tab "$target" 2>/dev/null || true
     gotos=$((gotos + 1))
   done
+  if (( ! seen_new )); then
+    aw_radio_log "$(printf 'tab-focus: new tab never appeared after %d check(s) slug=%s caller_position=%s active_position=%s' \
+      "$checks" "$slug" "$caller_pos" "$active")"
+    echo "⚠ Could not confirm focus on your tab: '$slug' never showed up in zellij's tab list, and may still take focus (logged, grep 'tab-focus:')." >&2
+    return 0
+  fi
   aw_radio_log "$(printf 'tab-focus: snap-back failed after %d go-to-tab(s) slug=%s caller_position=%s active_position=%s' \
     "$gotos" "$slug" "$caller_pos" "$active")"
   echo "⚠ Could not keep focus on your tab: '$slug' may have taken it (logged, grep 'tab-focus:')." >&2

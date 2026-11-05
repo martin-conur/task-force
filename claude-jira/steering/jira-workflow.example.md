@@ -140,9 +140,11 @@ what is missing and adds `ai-auto:needs-info`.
   edit counts once the watcher has seen the bounce. A reporter on the same Jira
   account as `acli` (a solo user) cannot reply by comment, since it looks like
   the PM's: edit the description instead.
-- **Failures stop it.** Any non-zero `acli` exit (a lapsed login reads as
-  `unauthorized`, exit 1) stops the watcher and radios the PM `watch-stopped`;
-  re-login and start it again. It never retries in a loop. A write that fails
+- **Failures stop it.** Any non-zero `acli` exit stops the watcher and radios
+  the PM `watch-stopped`. Only an auth failure (`unauthorized` in the error, or
+  `acli jira auth status` failing) asks for a re-login; any other error is
+  passed on as `acli error: <first line>` (#351). Fix it and start the watcher
+  again. It never retries in a loop. A write that fails
   exits 0 in `acli`, so every claim checks `successCount`, and a failed claim is
   never followed by a ping.
 - **State** lives outside the repo, in `~/.task-force/watch/<repo>/` (one ledger
@@ -171,8 +173,9 @@ one off): **Watch rotate context tokens** (the last assistant turn's input +
 cache-read + cache-creation tokens, read from the transcript radio recorded
 at register), **Watch rotate tickets** (`ticket-filed` handed to this PM) and
 **Watch rotate age minutes**. It also rotates before handing over a ticket
-from a different **group** than the PM's: a ticket's group is its parent epic,
-else its first label matching **Watch group labels** (globs allowed, `none`
+from a different **group** than the PM's: a ticket's group is its parent epic
+(read once per ticket with `acli jira workitem view KEY --fields parent`, since
+search refuses `parent`), else its first label matching **Watch group labels** (globs allowed, `none`
 by default), else none. The PM's group is the group of the first grouped
 ticket it took; an ungrouped ticket never sets or triggers a group rotation.
 

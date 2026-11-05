@@ -517,7 +517,9 @@ finish() {
   assert_success
   assert_output --partial "label swap on PROJ-1"
   assert_equal "$(pinged)" "PROJ-2"
-  assert [ ! -e "$LEDGER/PROJ-1" ]
+  # Only its parent is cached (#351): no claim recorded.
+  run grep '^STATE=' "$LEDGER/PROJ-1"
+  assert_failure
 }
 
 @test "a failed acli read stops the watcher, radios watch-stopped, and claims nothing" {
@@ -530,6 +532,39 @@ finish() {
   assert_success
   run grep 'watch: stopped' "$TASK_FORCE_HOME/radio/log"
   assert_success
+}
+
+@test "a non-auth acli error stops the watcher with acli's error, not a re-login (#351)" {
+  issue PROJ-1 ai-auto
+  ACLI_STUB_SEARCH_ERROR="field 'parent' is not allowed" run watch --once
+  assert_failure 3
+  assert_output --partial "acli error: ✗ Error: field 'parent' is not allowed"
+  refute_output --partial "re-login"
+  assert_equal "$(edits)" 0
+  f=$(grep -l '^intent: watch-stopped$' "$PM_INBOX"/*.md)
+  run cat "$f"
+  assert_output --partial "acli error: ✗ Error: field 'parent' is not allowed"
+  refute_output --partial "auth login"
+}
+
+@test "an acli error with a failing auth status is blamed on the login (#351)" {
+  issue PROJ-1 ai-auto
+  ACLI_STUB_SEARCH_ERROR="something odd" ACLI_STUB_AUTH_STATUS_EXIT=1 run watch --once
+  assert_failure 3
+  assert_output --partial "re-login with: acli jira auth login --web"
+  f=$(grep -l '^intent: watch-stopped$' "$PM_INBOX"/*.md)
+  run cat "$f"
+  assert_output --partial "acli jira auth login --web"
+}
+
+@test "the search asks acli only for fields its search accepts (#351)" {
+  issue PROJ-1 ai-auto
+  run watch --once
+  assert_success
+  assert_output --partial "claimed 1"
+  run grep 'workitem search' "$STUB_CALLS_DIR/acli.calls"
+  assert_success
+  refute_output --regexp '--fields [^ ]*(parent|updated|created)'
 }
 
 @test "a non-zero acli write exit stops the watcher too" {

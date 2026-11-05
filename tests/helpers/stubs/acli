@@ -9,6 +9,9 @@
 #                         the labels the first one swapped. Missing = no issues.
 #   ACLI_STUB_SEARCH_EXIT non-zero: `workitem search` prints acli's
 #                         unauthorized error and exits with it (a lapsed login).
+#   ACLI_STUB_SEARCH_ERROR non-empty: `workitem search` prints
+#                         `✗ Error: <it>` and exits 1 (a non-auth failure).
+#   ACLI_STUB_AUTH_STATUS_EXIT non-zero: `auth status` exits with it.
 #   ACLI_STUB_EDIT_EXIT   non-zero: `workitem edit` exits with it.
 #   ACLI_STUB_EDIT_FAIL   space-separated keys whose edit FAILS the way acli's
 #                         writes do: exit 0, successCount 0 (#326).
@@ -22,6 +25,11 @@
 # `fields.description` in the file for it to return (#338). `workitem edit`
 # takes a comma-separated --remove-labels list. `workitem comment create --key KEY --body-file F` appends
 # the body to $STUB_CALLS_DIR/acli.comments (for task-merge-gate, #329).
+#
+# search is as strict about --fields as the real CLI (#351): `parent`,
+# `updated`, `created`, `*all` and a `-field` exclusion are refused with acli's
+# error, exit 1. Its hits carry no `fields.parent`, which search cannot return;
+# `workitem view` does.
 #
 # search understands just the JQL task-watch writes: `labels = "X"` keeps
 # issues carrying X, `labels not in ("A", "B")` drops issues carrying either,
@@ -42,11 +50,26 @@ _flag() {
 _list() { tr ',' '\n' | sed -e 's/^[[:space:]"]*//' -e 's/[[:space:]"]*$//' | jq -R . | jq -s -c .; }
 
 case "$1 $2 $3" in
+  "jira auth status")
+    exit "${ACLI_STUB_AUTH_STATUS_EXIT:-0}"
+    ;;
   "jira workitem search")
     if [[ "${ACLI_STUB_SEARCH_EXIT:-0}" != 0 ]]; then
       echo "✗ Error: unauthorized: use 'acli [product] auth login' to authenticate"
       exit "$ACLI_STUB_SEARCH_EXIT"
     fi
+    if [[ -n "${ACLI_STUB_SEARCH_ERROR:-}" ]]; then
+      echo "✗ Error: $ACLI_STUB_SEARCH_ERROR"
+      exit 1
+    fi
+    IFS=',' read -r -a wanted <<<"$(_flag --fields "$@")"
+    for f in "${wanted[@]}"; do
+      case "$f" in
+        parent|updated|created|'*all'|-*)
+          echo "✗ Error: field '$f' is not allowed"
+          exit 1 ;;
+      esac
+    done
     jql=$(_flag --jql "$@")
     want=$(printf '%s' "$jql" | sed -nE 's/.*labels = "([^"]+)".*/\1/p')
     notin=$(printf '%s' "$jql" | sed -nE 's/.*labels not in \(([^)]*)\).*/\1/p' | _list)
@@ -56,7 +79,7 @@ case "$1 $2 $3" in
         ($want == "" or ((.fields.labels // []) | index([$want]) != null))
         and ([(.fields.labels // [])[] | select(. as $l | $notin | index([$l]) != null)] | length == 0)
         and (($keys | length) == 0 or (.key as $k | $keys | index([$k]) != null))
-      ))'
+      )) | map(del(.fields.parent))'
     exit 0
     ;;
   "jira workitem view")

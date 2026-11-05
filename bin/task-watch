@@ -28,8 +28,9 @@ set -euo pipefail
 #      left on `needs-info` for good.
 #   2. Search the queue through `acli` (#326: a REST search with a lapsed token
 #      returns 200 and zero issues; an `acli` read exits 1). Any non-zero acli
-#      exit stops the watcher and radios the PM that a re-login is needed. No
-#      retry loop.
+#      exit stops the watcher and radios the PM `watch-stopped`: a re-login
+#      when it is an auth failure (`unauthorized`, or `acli jira auth status`
+#      failing), else the error as acli gave it (#351). No retry loop.
 #   3. For each hit, while fewer than <max in flight> tickets are pending or
 #      running: claim it (one label swap, `<label>` -> `<label>:claimed`), and
 #      only after the claim succeeded, `radio send --to pm --intent
@@ -123,7 +124,8 @@ acli's jira_config.yaml), or an edit to the description, after the watcher saw
 the bounce.
 
 It reads and writes Jira through acli (acli jira auth login --web). Any
-non-zero acli exit stops it and radios the PM to re-login.
+non-zero acli exit stops it and radios the PM: to re-login when acli says it
+is unauthorized, else with acli's error.
 Its log lines go to the radio log with a `watch:` prefix.
 EOF
   exit "${1:-1}"
@@ -160,6 +162,7 @@ WATCH_ROLE="watch-$REPO_NAME"
 PM_ROLE="pm-$REPO_NAME"
 PM_SESSION="$TF_HOME/radio/sessions/$PM_ROLE.info"
 PM_GROUP_NAME=""
+GRP="" PARENT_KEY=""
 
 _log() {
   mkdir -p "$(dirname "$LOG_FILE")"
@@ -280,15 +283,27 @@ _radio_pm() {
 }
 
 # Stop on a failed acli call: no retry loop (#326). Radios the PM, exits 3.
+# Only an auth failure is blamed on the login (#351): `unauthorized` in the
+# error, or `acli jira auth status` failing. Anything else is passed on as is.
 _stop() {
   local what="$1" rc="$2" err="$3"
-  _say "stopped: acli $what exited $rc (${err:-no output}) — re-login with: acli jira auth login --web"
-  _radio_pm watch-stopped "" <<BODY || true
+  if printf '%s' "$err" | grep -qi unauthorized \
+    || ! acli jira auth status >/dev/null 2>&1; then
+    _say "stopped: acli $what exited $rc (${err:-no output}) — re-login with: acli jira auth login --web"
+    _radio_pm watch-stopped "" <<BODY || true
 task-watch for $REPO_NAME stopped: acli $what exited $rc.
 ${err:-acli printed nothing.}
-Most likely the acli login lapsed. Re-login, then restart task-watch in its tab:
+The acli login lapsed. Re-login, then restart task-watch in its tab:
   acli jira auth login --web
 BODY
+  else
+    _say "stopped: acli $what exited $rc: acli error: ${err:-no output}"
+    _radio_pm watch-stopped "" <<BODY || true
+task-watch for $REPO_NAME stopped: acli $what exited $rc.
+acli error: ${err:-acli printed nothing.}
+The login is fine (acli jira auth status passes). Fix the cause, then restart task-watch in its tab.
+BODY
+  fi
   exit 3
 }
 
@@ -299,10 +314,11 @@ _first_line() {
   cat "$@" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 1 || true
 }
 
-# _search <jql> <outfile>: the matching issues as a JSON array.
+# _search <jql> <outfile>: the matching issues as a JSON array. acli's search
+# refuses some fields, `parent` among them (#351): _parent reads that one.
 _search() {
   local rc=0
-  acli jira workitem search --jql "$1" --fields key,labels,status,summary,parent \
+  acli jira workitem search --jql "$1" --fields key,labels,status,summary \
     --paginate --json >"$2" 2>"$TMP/err" || rc=$?
   if (( rc != 0 )); then
     _stop search "$rc" "$(_first_line "$TMP/err" "$2")"
@@ -329,6 +345,23 @@ _view() {
   local rc=0
   acli jira workitem view "$1" --fields comment,description --json >"$2" 2>"$TMP/err" || rc=$?
   (( rc == 0 )) || _stop "view $1" "$rc" "$(_first_line "$TMP/err" "$2")"
+}
+
+# _parent <key>: sets PARENT_KEY to the ticket's parent (its epic) key, or
+# empty. Read through `view`, since search refuses the field, and once per
+# ticket: the ledger keeps it as PARENT=, empty for a ticket with none. Not a
+# command substitution, so a _stop in here stops the watcher.
+_parent() {
+  local rc=0 out="$TMP/parent"
+  if [[ -f "$LEDGER/$1" ]] && grep -q '^PARENT=' "$LEDGER/$1"; then
+    PARENT_KEY=$(_ledger_get "$1" PARENT)
+    return 0
+  fi
+  acli jira workitem view "$1" --fields parent --json >"$out" 2>"$TMP/err" || rc=$?
+  (( rc == 0 )) || _stop "view $1" "$rc" "$(_first_line "$TMP/err" "$out")"
+  PARENT_KEY=$(jq -r '.fields.parent.key // empty' "$out" 2>/dev/null) \
+    || _stop "view $1" 0 "output was not JSON"
+  _ledger_set "$1" PARENT "$PARENT_KEY"
 }
 
 # A checksum of the description in a _view file: an edit changes it.
@@ -711,19 +744,20 @@ _context_stale() {
   return 1
 }
 
-# A ticket's group, from the search file $1 at index $2: its parent (the epic),
-# else its first label matching **Watch group labels** (globs allowed), else
-# nothing. The watcher's own labels never count.
+# _group_of <search file> <index>: sets GRP to the ticket's group: its parent
+# (the epic, read by _parent), else its first label matching **Watch group
+# labels** (globs allowed), else empty. The watcher's own labels never count.
 _group_of() {
-  local parent l p
-  parent=$(jq -r --argjson i "$2" '.[$i].fields.parent.key // empty' "$1")
-  if [[ -n "$parent" ]]; then printf '%s' "$parent"; return 0; fi
+  local l p
+  GRP=""
+  _parent "$(jq -r --argjson i "$2" '.[$i].key' "$1")"
+  if [[ -n "$PARENT_KEY" ]]; then GRP="$PARENT_KEY"; return 0; fi
   (( ${#GROUP_PATTERNS[@]} )) || return 0
   while IFS= read -r l; do
     [[ -n "$l" && "$l" != "$LABEL" && "$l" != "$LABEL:"* ]] || continue
     for p in "${GROUP_PATTERNS[@]}"; do
       # shellcheck disable=SC2053 # $p is a glob on purpose
-      if [[ "$l" == $p ]]; then printf '%s' "$l"; return 0; fi
+      if [[ "$l" == $p ]]; then GRP="$l"; return 0; fi
     done
   done < <(jq -r --argjson i "$2" '.[$i].fields.labels // [] | .[]' "$1")
 }
@@ -944,7 +978,8 @@ _poll() {
     # A ticket from another group than the PM's: rotate first, so the new
     # group starts with a fresh PM, or wait while the PM's group is in flight.
     # An ungrouped ticket never rotates; a PM that cannot rotate takes it as is.
-    grp=$(_group_of "$TMP/queue.json" "$i")
+    _group_of "$TMP/queue.json" "$i"
+    grp="$GRP"
     if [[ -f "$PM_SESSION" && -n "$grp" && -n "${PM_GROUP_NAME:-}" && "$grp" != "$PM_GROUP_NAME" ]]; then
       rc=0
       _rotation_try group "$PM_GROUP_NAME -> $grp" || rc=$?

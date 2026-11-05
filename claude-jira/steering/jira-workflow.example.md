@@ -167,6 +167,21 @@ minus claimed and failed tickets, oldest first; a custom one is used as written
 - **Watch pending timeout minutes**: `120`
 - **Watch bounce cap**: `3`
 
+**Profiles for auto tickets** (#357). With **Worker profile for auto tickets**
+naming a profile (#355, a cheaper model through a gateway, say), a ticket's
+first run goes to it: the `ticket-filed` body ends in the exact line to
+dispatch, `Dispatch: task-work <url> --auto --profile <name>`, and the PM runs
+it as written. A manual dispatch is unchanged. When that run fails, the retry
+runs on the **default** (no profile), and the log says
+`watch: retry <KEY> on default profile`. The retry counts toward **Watch
+failure cap** like any run, so the cap holds; without the fallback a model too
+weak for a ticket would spend the cap on retries that cannot succeed. Any
+failed run counts, a pending timeout included. The merge gate is the same for
+both: a cheaper model's PR clears the same bar. `none`, the default, is
+today's behaviour. Reviews take **Reviewer profile** (under Agent profiles).
+
+- **Worker profile for auto tickets**: `none`
+
 **PM rotation** (#334). An autonomous PM's context fills with every triage,
 spec and verdict; past a point it is noise. So the watcher recycles the PM,
 in shell, with no model tokens, when one of three caps is crossed (`0` turns
@@ -275,6 +290,10 @@ key_env = { ANTHROPIC_API_KEY = "FIREWORKS_API_KEY" }
 The launcher puts `env` on the tab's command line as given, pins `ANTHROPIC_DEFAULT_SONNET_MODEL`, `_HAIKU_`, `_OPUS_` and `CLAUDE_CODE_SUBAGENT_MODEL` to `model` unless `pin` names another (an unpinned Sonnet tier sends the auto-mode classifier to `claude-sonnet-5`), and sets `ANTHROPIC_MODEL` as well as `--model`, so on `task-reviewer` the profile's model wins over its Sonnet default. **The key is never on a command line or in a file.** The prefix carries `ANTHROPIC_API_KEY="${FIREWORKS_API_KEY:?…}"`, which the tab's `bash -ic` expands from your shell rc: export the variable there. Only `ANTHROPIC_API_KEY` is accepted. `ANTHROPIC_AUTH_TOKEN` is refused, because with it Claude Code also sent the machine's saved Anthropic Console key to the gateway (spike, section 6). A key in `env` is refused too.
 
 Each launcher refuses, before it creates anything, an unknown profile, a profile with no `model` (required: every tier defaults to it), a profile whose `agent` is not the one being launched, a `key_env` variable that is unset or empty in your shell, and a file that does not parse (task-force reads a TOML subset: tables, one-line strings, integers, booleans, one-line inline tables). The profile's **name** is recorded as `PROFILE=` in the worker's `.<slug>.info` sidecar and in radio's `<role>.profile` sidecar and session file; `task-recreate-worker` relaunches on it unless `--profile` or `--no-profile` says otherwise, and task-monitor shows it beside the agent. Without `--profile` nothing changes.
+
+**Default profile for reviews** (#357). `task-reviewer` with no `--profile` reviews on **Reviewer profile** when it names one, and says so when it launches; `--no-profile` skips it for one review. `none`, the default, is the Sonnet reviewer as before. Profiles are claude-only, so a kiro reviewer ignores it. Write it with `task-init --set "Reviewer profile=<name>"`, or below the managed-region end marker; the last bullet wins. A name that does not resolve refuses the review, as `--profile` would, and the refusal names the setting.
+
+- **Reviewer profile**: `none`
 
 Two things need a human or the gateway. The first auto-mode session through a gateway on a machine shows Claude Code's classifier billing notice and waits for `y`, which holds a hands-off worker once. And Claude Code's cost display and `modelUsage` miss the classifier's calls and misprice unknown models: check routing and cost on the gateway's side.
 

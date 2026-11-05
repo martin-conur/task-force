@@ -128,6 +128,10 @@ The launcher puts `env` on the tab's command line as given, pins `ANTHROPIC_DEFA
 
 Each launcher refuses, before it creates anything, an unknown profile, a profile with no `model` (required: every tier defaults to it), a profile whose `agent` is not the one being launched, a `key_env` variable that is unset or empty in your shell, and a file that does not parse (task-force reads a TOML subset: tables, one-line strings, integers, booleans, one-line inline tables). The profile's **name** is recorded as `PROFILE=` in the worker's `.<slug>.info` sidecar and in radio's `<role>.profile` sidecar and session file; `task-recreate-worker` relaunches on it unless `--profile` or `--no-profile` says otherwise, and task-monitor shows it beside the agent. Without `--profile` nothing changes.
 
+**Default profile for reviews** (#357). `task-reviewer` with no `--profile` reviews on **Reviewer profile** when it names one, and says so when it launches; `--no-profile` skips it for one review. `none`, the default, is the Sonnet reviewer as before. Profiles are claude-only, so a kiro reviewer ignores it. Write it with `task-init --set "Reviewer profile=<name>"`, or below the managed-region end marker; the last bullet wins. A name that does not resolve refuses the review, as `--profile` would, and the refusal names the setting.
+
+- **Reviewer profile**: `none`
+
 Two things need a human or the gateway. The first auto-mode session through a gateway on a machine shows Claude Code's classifier billing notice and waits for `y`, which holds a hands-off worker once. And Claude Code's cost display and `modelUsage` miss the classifier's calls and misprice unknown models: check routing and cost on the gateway's side.
 
 **Writing and checking one** — `task-config profile add|list|show|test|remove` (#356)

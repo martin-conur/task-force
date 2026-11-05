@@ -196,7 +196,7 @@ aw_tracker_next_fallback() {
     base=$(basename "$tf")
     [[ "$base" == "_board.md" || "$base" == "README.md" ]] && continue
     status=$(aw_task_fm "$tf" status)
-    case "$status" in in-progress|in_progress|"in progress"|done) continue ;; esac
+    case "$status" in in-progress|in_progress|"in progress"|in-review|in_review|"in review"|done) continue ;; esac
     id=$(aw_task_fm "$tf" id)
     [[ "$id" =~ ^[0-9]+$ ]] || id=9999
     printf '%s\t%s\n' "$id" "$tf"

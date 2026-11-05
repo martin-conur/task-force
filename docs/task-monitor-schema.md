@@ -185,8 +185,8 @@ that PR:
     `Priority` field when it has one, in its option order, and otherwise in API
     order. API order is roughly the order items were added, not the board's
     order, which the API does not expose.
-  - **local**: the `tasks/` backlog by numeric id, skipping `in-progress` and
-    `done`.
+  - **local**: the `tasks/` backlog by numeric id, skipping `in-progress`,
+    `in-review` and `done`.
   - **jira / notion**: there is no fallback, so the source is `none`.
 - `source: "none"`: nothing to show.
 

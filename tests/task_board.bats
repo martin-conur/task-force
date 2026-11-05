@@ -58,20 +58,18 @@ _state_entry() {
   assert_success
 }
 
-@test "board has three section headers" {
+@test "board has four section headers, In Review between In Progress and Done" {
   run "$TASK_BOARD" --repo "$MAIN_REPO"
   assert_success
-  run cat "$MAIN_REPO/tasks/_board.md"
-  assert_output --partial "## Todo"
-  assert_output --partial "## In Progress"
-  assert_output --partial "## Done"
+  run grep -E '^## ' "$MAIN_REPO/tasks/_board.md"
+  assert_output "$(printf '## Todo\n## In Progress\n## In Review\n## Done')"
 }
 
 @test "empty tasks dir: each section shows _(none)_" {
   run "$TASK_BOARD" --repo "$MAIN_REPO"
   assert_success
   run grep -c "_(none)_" "$MAIN_REPO/tasks/_board.md"
-  assert_output "3"
+  assert_output "4"
 }
 
 # ---------------------------------------------------------------------------
@@ -97,6 +95,43 @@ _state_entry() {
   run "$TASK_BOARD" --repo "$MAIN_REPO"
   assert_success
   awk '/^## Done/{flag=1; next} /^## /{flag=0} flag' "$MAIN_REPO/tasks/_board.md" | grep -qF "Baz"
+}
+
+# _section <name> — the task titles listed under "## <name>", one per line.
+_section() {
+  awk -v h="## $1" '$0 == h {flag=1; next} /^## /{flag=0} flag' "$MAIN_REPO/tasks/_board.md" \
+    | sed -n 's/^- \[[^ ]* — \([^]]*\)\].*/\1/p'
+}
+
+@test "todo, in-progress, in-review and done each land in their own section (#364)" {
+  _task "$MAIN_REPO/tasks/001-one.md"   001 "One"   todo
+  _task "$MAIN_REPO/tasks/002-two.md"   002 "Two"   in-progress
+  _task "$MAIN_REPO/tasks/003-three.md" 003 "Three" in-review
+  _task "$MAIN_REPO/tasks/004-four.md"  004 "Four"  done
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  assert_equal "$(_section Todo)" "One"
+  assert_equal "$(_section 'In Progress')" "Two"
+  assert_equal "$(_section 'In Review')" "Three"
+  assert_equal "$(_section Done)" "Four"
+}
+
+@test "in_review and 'in review' spellings land in In Review" {
+  _task "$MAIN_REPO/tasks/001-one.md" 001 "One" in_review
+  _task "$MAIN_REPO/tasks/002-two.md" 002 "Two" "in review"
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  assert_equal "$(_section 'In Review')" "$(printf 'One\nTwo')"
+  assert_equal "$(_section Todo)" ""
+}
+
+@test "a live worker keeps an in-review task under In Progress" {
+  _task "$MAIN_REPO/tasks/001-foo.md" 001 "Foo" in-review
+  _state_entry "foo"
+  run "$TASK_BOARD" --repo "$MAIN_REPO"
+  assert_success
+  assert_equal "$(_section 'In Progress')" "Foo"
+  assert_equal "$(_section 'In Review')" ""
 }
 
 @test "tasks sorted by numeric id within each bucket" {

@@ -26,7 +26,7 @@ Your responsibilities:
   ---
   id: NNN
   title: <human-readable title>
-  status: todo            # todo | in-progress | done
+  status: todo            # todo | in-progress | in-review | done
   priority: P1            # P0 | P1 | P2 | P3 — default P2 unless told otherwise
   tags: []
   created: YYYY-MM-DD     # today's date
@@ -65,7 +65,7 @@ When asked to "show backlog" or "list tasks":
   10 tasks or 200. Open a task file only when the work is about that task:
   editing or speccing it, or answering a question about it.
 - Present it as the board has it: grouped by status (Todo / In Progress /
-  Done), with each task's priority shown on its line.
+  In Review / Done), with each task's priority shown on its line.
 
 When creating tasks, default `status: todo` and `priority: P2` unless told otherwise.
 Keep titles concise and actionable.

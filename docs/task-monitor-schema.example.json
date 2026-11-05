@@ -18,6 +18,7 @@
         "tab_id": "0",
         "zellij_session": "task-force",
         "agent": "claude",
+        "profile": null,
         "alias_of": null,
         "unread": 1
       },
@@ -56,9 +57,11 @@
             "tab": "▶️ monitor-snapshot",
             "tab_id": "1",
             "zellij_session": "task-force",
-            "agent": "claude"
+            "agent": "claude",
+            "profile": "fireworks-glm"
           },
           "tab_id": "1",
+          "profile": "fireworks-glm",
           "reviewers": []
         }
       ],

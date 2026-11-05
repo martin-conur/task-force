@@ -196,6 +196,28 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
 
 # ----- in flight ----------------------------------------------------------------
 
+@test "profile (#355): a worker's sidecar PROFILE= and the PM's session PROFILE= reach the snapshot" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5 PROFILE=fireworks-glm
+  sidecar issue-6 GH_URL https://github.com/acme/widgets/issues/6
+  session "worker-$NAME-issue-6" idle PROFILE=other
+  session "pm-$NAME" idle PROFILE=fw-pm
+  snap --local
+  assert_success
+  assert_equal "$(q '.in_flight[] | select(.slug == "issue-5") | .profile')" fireworks-glm
+  # No sidecar line: the profile its session recorded.
+  assert_equal "$(q '.in_flight[] | select(.slug == "issue-6") | .profile')" other
+  assert_equal "$(q '.in_flight[] | select(.slug == "issue-6") | .session.profile')" other
+  assert_equal "$(q .pm.profile)" fw-pm
+}
+
+@test "profile (#355): null without one, on the PM and on a worker" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  snap --local
+  assert_success
+  assert_equal "$(q '.in_flight[0].profile')" null
+  assert_equal "$(q '.pm.profile')" null
+}
+
 @test "in flight: a sidecar with no radio session is still in flight" {
   sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
   snap

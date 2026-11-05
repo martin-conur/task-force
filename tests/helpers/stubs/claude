@@ -7,6 +7,14 @@ echo "TASK_FORCE_ROLE=${TASK_FORCE_ROLE:-} ZELLIJ_TAB=${ZELLIJ_TAB:-} TASK_FORCE
 # The radio home it was started with, `<unset>` when none (#262). Its own file:
 # claude.env lines are matched whole by existing tests.
 echo "TASK_FORCE_HOME=${TASK_FORCE_HOME-<unset>}" >> "${STUB_CALLS_DIR}/claude.home"
+# The variables an agent profile sets (#355), one per line, `<unset>` when
+# absent. Its own file, for the same reason.
+for _v in TASK_FORCE_PROFILE ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN \
+          ANTHROPIC_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL \
+          ANTHROPIC_DEFAULT_OPUS_MODEL CLAUDE_CODE_SUBAGENT_MODEL \
+          CLAUDE_CODE_MAX_CONTEXT_TOKENS ENABLE_TOOL_SEARCH; do
+  echo "$_v=${!_v-<unset>}"
+done > "${STUB_CALLS_DIR}/claude.profile-env"
 # Opt-in: play the SessionStart hook a hooked install would run, registering
 # with the radio at $STUB_CLAUDE_RADIO as $STUB_CLAUDE_AGENT (default claude).
 # $STUB_CLAUDE_REGISTER_DELAY seconds later, in the background, when set: an

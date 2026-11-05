@@ -487,6 +487,62 @@ It opens a fresh tab on the **existing** worktree and launches the agent with th
 
 ---
 
+## Agent profiles — `--profile <name>`
+
+A profile runs Claude Code through an Anthropic-compatible gateway: an open model on Fireworks, say. `task-work`, `task-reviewer`, `task-recreate-worker` and `task-pm` all take `--profile <name>`, and read it from `$TASK_FORCE_HOME/profiles.toml` (default `~/.task-force/profiles.toml`), one table per profile (#355). Which variables a profile must carry comes from the #354 spike, [`docs/agent-profiles-spike.md`](docs/agent-profiles-spike.md), which ran a real worker and reviewer this way:
+
+```toml
+[profiles.fireworks-glm]
+agent   = "claude"
+model   = "glm-latest"
+env     = { ANTHROPIC_BASE_URL = "https://api.fireworks.ai/inference", ENABLE_TOOL_SEARCH = "true" }
+key_env = { ANTHROPIC_API_KEY = "FIREWORKS_API_KEY" }
+# pin = { sonnet = "…", haiku = "…", opus = "…", subagent = "…" }   # each defaults to model
+# max_context_tokens = 200000                                       # becomes CLAUDE_CODE_MAX_CONTEXT_TOKENS
+```
+
+```bash
+task-work https://github.com/you/repo/issues/42 --profile fireworks-glm
+task-reviewer 57 --profile fireworks-glm
+task-pm --profile fireworks-glm
+task-recreate-worker issue-42              # relaunches on the profile it was started with
+task-recreate-worker issue-42 --no-profile # or without it
+```
+
+**What reaches the agent.** A tab starts from the zellij server's environment, so a variable in front of `task-work` never reaches the agent (spike, section 7). The launcher splices the profile into the tab's env prefix instead, beside the radio role:
+
+- `env`, as given, each value `printf %q`-quoted.
+- `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL`, each from `pin`, else from `model`. A profile with no `pin` table still pins all four. The Sonnet pin is the one that matters most: unpinned, the auto-mode classifier asks the gateway for `claude-sonnet-5`. `CLAUDE_CODE_AUTO_MODE_MODEL` is not set, since on its own it did not move the classifier.
+- `ANTHROPIC_MODEL` and `--model` on the `claude` line, both from `model`. On `task-reviewer` the profile's model wins over its `claude-sonnet-5-5` default and over a pre-set `ANTHROPIC_MODEL`.
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from `max_context_tokens`. Without it Claude Code assumes a 200k window for a model it does not know.
+- `TASK_FORCE_PROFILE=<name>`, which radio records.
+
+`task-pm` runs the agent in place, so it exports the same set instead. A profile is never inherited: a `task-reviewer` dispatched by a profiled PM without `--profile` runs on its Sonnet default, not on the `ANTHROPIC_MODEL` the PM's profile exported, and says so.
+
+**The key is never on a command line or in a file.** `key_env` names the variable that holds the key, and the prefix carries a reference to it, `ANTHROPIC_API_KEY="${FIREWORKS_API_KEY:?…}"`, quoted so the launcher does not expand it. The tab's `bash -ic` sources your rc and expands it there, so `ps` never shows the value, and no sidecar, session file, log line or queue entry ever holds it. Export the variable from your shell rc. The launcher checks that it is set in its own environment before it creates anything, and the `:?` stops the agent from starting in a tab whose rc does not export it, where Claude Code would otherwise send the machine's saved key to the gateway.
+
+**`ANTHROPIC_API_KEY` only.** `ANTHROPIC_AUTH_TOKEN` is refused as a `key_env` target: with it, Claude Code also sent the machine's saved Anthropic Console key as `x-api-key`, so the gateway received the user's Anthropic key, and every request failed with 401 (spike, section 6). A credential in `env` is refused too, since its value would sit on the launch line. `apiKeyHelper` is not supported here.
+
+**Refusals.** Each launcher refuses, before it creates a worktree, opens a tab or renames one, and says why:
+
+- an unknown profile (it lists the ones defined), or no `profiles.toml` at all
+- a profile with no `model`: every tier and `--model` default to it, and without one a launcher's own Claude default (the reviewer's Sonnet) would go to the gateway
+- a profile whose `agent` is not the agent being launched (`--agent` switches the launch). Profiles are claude-only for now: the variables are Claude Code's
+- a `key_env` source variable that is unset or empty
+- a file that does not parse, with the line. task-force reads a TOML subset, with no python or toml tool needed: tables, `key = value` with one-line basic or literal strings, integers, booleans and one-line inline tables, and comments
+- a schema error: an unknown field or `pin` tier, `ANTHROPIC_AUTH_TOKEN` or another target in `key_env`, a key in `env`, an `env` that sets `TASK_FORCE_*`
+
+**Recorded by name.** `task-work` writes `PROFILE=<name>` into the worker's `.<slug>.info` sidecar. radio writes `<role>.profile` beside `<role>.agent`, and `PROFILE=` into the session file, from `TASK_FORCE_PROFILE` at register; a register without one removes it, and a hand repair (`radio register --role …`) keeps it. `task-recreate-worker` relaunches on the recorded profile unless `--profile` names another or `--no-profile` drops it, and refuses if it no longer resolves. `task-monitor-snapshot` reports `profile` on the PM, on each in-flight worker and on every session object, and task-monitor shows it beside the agent (`claude·fireworks-glm`).
+
+**Without `--profile` nothing changes.**
+
+**What still needs a human, or the gateway:**
+
+- The first auto-mode session through a gateway on a machine shows Claude Code's classifier billing notice and waits for `y`. That holds a hands-off worker until someone answers it, once.
+- Claude Code's cost display and `modelUsage` miss the classifier's calls, and price an unknown model with a guessed rate. Verify routing and cost on the gateway's side: its logs, or its billing page.
+
+---
+
 ## `task-monitor-snapshot` — the board as JSON
 
 With task-force a ticket takes minutes, and a session runs ten or more of them, all referred to by number. The PM and the workers keep up; the human driving the PM loses track of what `#262` was. `task-monitor-snapshot` is the data layer of task-monitor (epic #272): it prints one JSON document saying what is **in flight**, what is **next** and what is **done** in a repo, each as a title plus a plain one-paragraph description, and whether the repo **needs you**.
@@ -1396,6 +1452,7 @@ Common to every combo:
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: current HEAD). Accepts any ref `git` accepts (branches, tags, SHAs, `origin/foo`). Use this to stack a PR on an in-flight branch (`--from task/issue-46 --base main`) or to spike off `origin/main` without checking it out first. Refused when `REF` lacks the agent's radio hooks and `HEAD` has them (#304): a branch cut before `task-config add assistant` would give the worker a worktree its agent never registers from. Merge the base into it first. A repo whose `HEAD` has no hooks either is not refused, since merging would not help; `--no-launch` is not refused, since it starts nothing.
 - `--no-launch` — create the worktree and open the tab at that directory, but don't auto-start the agent (you pick the model/command yourself)
 - `--impl <name>` — force a specific combo, bypassing auto-detection
+- `--profile <name>` — launch the agent with an agent profile from `~/.task-force/profiles.toml` (claude only; see [Agent profiles](#agent-profiles----profile-name))
 
 Radio auto-submit and focus, on every combo (#246, #254):
 

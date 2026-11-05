@@ -187,20 +187,40 @@ fn forge_stale_since(app: &App) -> Option<Option<DateTime<Utc>>> {
 fn overview(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width as usize;
     let repos = app.repos();
+    let rows = app.overview_rows();
+    // The agent column widens to the longest `agent·profile` (#355), so a
+    // profiled row keeps every row's columns aligned.
+    let agent_w = rows
+        .iter()
+        .filter_map(|row| {
+            let repo = &repos[row.repo()];
+            match *row {
+                OvRow::Repo(_) => None,
+                OvRow::Pm(_) => Some(pm_agent(repo)),
+                OvRow::Worker(_, j) => Some(worker_agent(repo, &repo.in_flight[j])),
+                OvRow::Reviewer(_, j, k) => Some(reviewer_agent(repo, &repo.in_flight[j], k)),
+            }
+        })
+        .map(|a| a.width())
+        .max()
+        .unwrap_or(0)
+        .max(AGENT_W);
     let name_w = repos
         .iter()
         .map(|r| r.name.as_deref().unwrap_or("?").width())
         .max()
         .unwrap_or(0);
     let mut lines = Vec::new();
-    for (i, row) in app.overview_rows().into_iter().enumerate() {
+    for (i, row) in rows.into_iter().enumerate() {
         let selected = i == app.overview_selected;
         let repo = &repos[row.repo()];
         lines.push(match row {
             OvRow::Repo(_) => repo_line(repo, selected, name_w, w),
-            OvRow::Pm(_) => pm_line(repo, selected, w),
-            OvRow::Worker(_, j) => worker_line(repo, &repo.in_flight[j], selected, w),
-            OvRow::Reviewer(_, j, k) => reviewer_line(repo, &repo.in_flight[j], k, selected, w),
+            OvRow::Pm(_) => pm_line(repo, selected, agent_w, w),
+            OvRow::Worker(_, j) => worker_line(repo, &repo.in_flight[j], selected, agent_w, w),
+            OvRow::Reviewer(_, j, k) => {
+                reviewer_line(repo, &repo.in_flight[j], k, selected, agent_w, w)
+            }
         });
     }
     if lines.is_empty() {
@@ -256,7 +276,45 @@ fn repo_line(repo: &Repo, selected: bool, name_w: usize, w: usize) -> Line<'stat
     fit(Line::from(left), Line::from(right), w)
 }
 
-/// Column widths of an agent row: label, agent, state icon, state words.
+/// The agent column's text: the agent, then its profile when it has one
+/// (#355), as `claude·fireworks-glm`.
+fn agent_text(agent: &str, profile: Option<&str>) -> String {
+    match profile.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{agent}·{p}"),
+        None => agent.to_string(),
+    }
+}
+
+fn pm_agent(repo: &Repo) -> String {
+    let pm = &repo.pm;
+    let agent = pm.agent.as_deref().or(repo.agent.as_deref()).unwrap_or("?");
+    agent_text(agent, pm.profile.as_deref())
+}
+
+fn worker_agent(repo: &Repo, item: &InFlight) -> String {
+    let session = item.session.as_ref();
+    let agent = session
+        .and_then(|s| s.agent.as_deref())
+        .or(repo.agent.as_deref())
+        .unwrap_or("?");
+    let profile = item
+        .profile
+        .as_deref()
+        .or(session.and_then(|s| s.profile.as_deref()));
+    agent_text(agent, profile)
+}
+
+fn reviewer_agent(repo: &Repo, item: &InFlight, k: usize) -> String {
+    let session = item.reviewers[k].session.as_ref();
+    let agent = session
+        .and_then(|s| s.agent.as_deref())
+        .or(repo.agent.as_deref())
+        .unwrap_or("?");
+    agent_text(agent, session.and_then(|s| s.profile.as_deref()))
+}
+
+/// Column widths of an agent row: label, agent (at least), state icon, state
+/// words.
 const LABEL_W: usize = 10;
 const AGENT_W: usize = 7;
 const ICON_W: usize = 2;
@@ -269,6 +327,7 @@ fn agent_line(
     selected: bool,
     label: &str,
     agent: &str,
+    agent_w: usize,
     state: Option<&str>,
     words: &str,
     words_style: Style,
@@ -284,7 +343,7 @@ fn agent_line(
         Span::styled(if selected { "▸    " } else { "     " }, bold()),
         Span::styled(pad(label, LABEL_W), title_style(selected)),
         Span::raw(" "),
-        Span::styled(pad(agent, AGENT_W), dim()),
+        Span::styled(pad(agent, agent_w), dim()),
         Span::raw(" "),
         Span::styled(pad(state_icon(state), ICON_W), icon_style),
         Span::raw(" "),
@@ -308,9 +367,9 @@ fn agent_line(
     fit(left, right, w)
 }
 
-fn pm_line(repo: &Repo, selected: bool, w: usize) -> Line<'static> {
+fn pm_line(repo: &Repo, selected: bool, agent_w: usize, w: usize) -> Line<'static> {
     let pm = &repo.pm;
-    let agent = pm.agent.as_deref().or(repo.agent.as_deref()).unwrap_or("?");
+    let agent = pm_agent(repo);
     let words = match (&pm.alias_of, pm.state.as_deref()) {
         (Some(primary), _) => format!("via {primary}"),
         (None, None) => "no session".to_string(),
@@ -332,7 +391,8 @@ fn pm_line(repo: &Repo, selected: bool, w: usize) -> Line<'static> {
     agent_line(
         selected,
         "PM",
-        agent,
+        &agent,
+        agent_w,
         pm.state.as_deref(),
         &words,
         dim(),
@@ -342,12 +402,15 @@ fn pm_line(repo: &Repo, selected: bool, w: usize) -> Line<'static> {
     )
 }
 
-fn worker_line(repo: &Repo, item: &InFlight, selected: bool, w: usize) -> Line<'static> {
+fn worker_line(
+    repo: &Repo,
+    item: &InFlight,
+    selected: bool,
+    agent_w: usize,
+    w: usize,
+) -> Line<'static> {
     let session = item.session.as_ref();
-    let agent = session
-        .and_then(|s| s.agent.as_deref())
-        .or(repo.agent.as_deref())
-        .unwrap_or("?");
+    let agent = worker_agent(repo, item);
     let you = worker_needs_you(repo, item);
     let (words, style) = if you {
         ("waiting on you", Style::default().fg(Color::Yellow))
@@ -365,7 +428,8 @@ fn worker_line(repo: &Repo, item: &InFlight, selected: bool, w: usize) -> Line<'
     agent_line(
         selected,
         label,
-        agent,
+        &agent,
+        agent_w,
         session.and_then(|s| s.state.as_deref()),
         words,
         style,
@@ -383,14 +447,12 @@ fn reviewer_line(
     item: &InFlight,
     k: usize,
     selected: bool,
+    agent_w: usize,
     w: usize,
 ) -> Line<'static> {
     let rev = &item.reviewers[k];
     let session = rev.session.as_ref();
-    let agent = session
-        .and_then(|s| s.agent.as_deref())
-        .or(repo.agent.as_deref())
-        .unwrap_or("?");
+    let agent = reviewer_agent(repo, item, k);
     let state = session.and_then(|s| s.state.as_deref());
     let words = match state {
         Some("busy") => "reviewing",
@@ -405,7 +467,8 @@ fn reviewer_line(
     agent_line(
         selected,
         "  ↳ review",
-        agent,
+        &agent,
+        agent_w,
         state,
         words,
         dim(),
@@ -594,6 +657,14 @@ fn in_flight_lines(
         _ => dim(),
     };
     let mut right = vec![];
+    if let Some(p) = item
+        .profile
+        .as_deref()
+        .or(session.and_then(|s| s.profile.as_deref()))
+        .filter(|p| !p.is_empty())
+    {
+        right.push(Span::styled(format!("{p} · "), dim()));
+    }
     if !item.reviewers.is_empty() {
         right.push(Span::styled(
             format!("{} reviewing · ", item.reviewers.len()),
@@ -1265,6 +1336,28 @@ mod tests {
         assert!(line_with(&s, "PROJ-42 ").starts_with("     PROJ-42    kiro    ·  implementing"));
         let marked: Vec<&str> = rows.iter().filter(|r| r.1).map(|r| r.0).collect();
         assert_eq!(marked, vec!["PM", "#262", "12"]);
+    }
+
+    #[test]
+    fn a_profile_shows_beside_the_agent_and_keeps_the_columns_aligned() {
+        // #355: the worker's sidecar profile, the PM's session profile.
+        let mut snap = parse(MULTI).unwrap();
+        snap.repos[0].pm.profile = Some("fw".to_string());
+        snap.repos[0].in_flight[0].profile = Some("fireworks-glm".to_string());
+        let mut a = app(MULTI, false);
+        a.offer(Instant::now(), crate::refresh::Mode::Local, snap, now());
+        let s = overview_lines(&mut a, 140);
+        let pm = &s[1];
+        let col = format!("     PM         {:<20} ⏸  idle", "claude·fw");
+        assert!(pm.starts_with(&col), "{pm}");
+        let w = line_with(&s, "#267");
+        assert!(
+            w.starts_with("     #267       claude·fireworks-glm ▶  re-review"),
+            "{w}"
+        );
+        // An unprofiled row pads to the same column.
+        let col = format!("       ↳ review {:<20} ▶  reviewing", "claude");
+        assert!(s[3].starts_with(&col), "{}", s[3]);
     }
 
     #[test]

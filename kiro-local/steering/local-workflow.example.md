@@ -99,6 +99,8 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 - `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254)
 - `--auto` — accepted for symmetry with claude, and a no-op here: the permission model stays `-a/--trust-all` (#206), and auto-submit is already on
 
+The slug argument is checked before anything is created (#371): one that holds whitespace or a URL is refused (a task file whose name has a space is fine), and a slug over 50 characters is truncated with a warning. A free-form slug needs no `--no-task` here: on this tracker the slug is the task file, so there is no ref to have forgotten.
+
 Under kiro-cli's V3 engine (`chat.agentEngine = v3` today; kiro-cli's help calls v2 "the pre-3.0 default"), every dispatched kiro launch — `task-work`, `task-recreate-worker`, `task-reviewer` — would first stop at a dialog offering to upgrade your agent configs to the V3 format. Nobody answers it in a dispatched tab, so the first turn never runs. The launchers warn when the launch would run on V3 and `chat.enableAutoAgentUpgrade` is unset. Set it once with `kiro-cli settings chat.enableAutoAgentUpgrade false`. With `false` the radio hooks keep working under V3 (#257). `true`, or accepting the upgrade, rewrites `.kiro/agents/*.json` into kiro-cli's universal format instead; the radio hooks keep working there too, and `task-init` and `task-remove` handle that format since #267.
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.

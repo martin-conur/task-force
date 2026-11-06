@@ -55,9 +55,9 @@ ENV
 }
 
 aw_agent_usage_examples() {
-  echo "  task-work refactor-auth -m claude-sonnet-5.5 --trust-all"
-  echo "  task-work refactor-auth --trust-all --no-auto-submit   # you will type in its tab"
-  echo "  TASK_WORK_MODEL=claude-sonnet-5.5 task-work new-thing"
+  echo "  task-work refactor-auth <ref> -m claude-sonnet-5.5 --trust-all"
+  echo "  task-work refactor-auth <ref> --trust-all --no-auto-submit   # you will type in its tab"
+  echo "  TASK_WORK_MODEL=claude-sonnet-5.5 task-work new-thing <ref>"
 }
 
 aw_agent_init_flags() {
@@ -86,6 +86,9 @@ aw_agent_parse_flag() {
 # No mutually exclusive pair on kiro: --auto is not a permission mode here, so
 # it composes with --trust-all.
 aw_agent_validate_flags() { :; }
+
+# kiro has no --plan: every launch starts the worker, which needs a ref (#371).
+aw_agent_spec_optional() { return 1; }
 
 # aw_agent_preflight <repo_root> <impl>
 #

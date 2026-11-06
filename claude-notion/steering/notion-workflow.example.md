@@ -88,6 +88,9 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 - `--agent <claude|kiro>` — launch this one worker on the other installed assistant, leaving the repo's active one alone (#293). Both loadouts must be installed (`task-config add assistant`, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too, and `task-recreate-worker` without it relaunches on the assistant `task-work` recorded for that worker
 - `--profile <name>` — launch the agent with an agent profile from `~/.task-force/profiles.toml`: a gateway's base URL, model pins, and the variable its key is read from (#355, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too. Claude-only
 - `--no-launch` — open the worktree tab but do NOT start Claude (lets you type the command yourself)
+- `--no-task` — launch with no task ref on purpose. Without it a bare slug is refused, since the worker would start with no spec (#371). `--no-launch` and `--plan` need no ref and no flag: one starts nothing, the other runs the planner that writes the spec
+
+The slug argument is checked before anything is created (#371): one that holds whitespace, `://` or a GitHub / Notion / Jira URL this tracker does not read is refused. So `"<slug> <url>"` passed as one argument, which an unquoted variable in a zsh loop does, names the split (`did you mean: task-work <slug> <url>?`) instead of becoming a 50-character slug with no spec. A slug over 50 characters is still truncated, now with a warning.
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
@@ -95,8 +98,9 @@ Examples:
 ```bash
 task-work add-store-filtering https://www.notion.so/My-Task-abc123def456
 task-work refactor-auth --plan
-task-work feature-x --from task/in-flight --base main --auto   # stack on an in-flight branch
+task-work feature-x https://www.notion.so/Feature-X-abc123def456 --from task/in-flight --base main --auto   # stack on an in-flight branch
 task-work spike-idea --no-launch
+task-work spike-idea --no-task                  # deliberately no spec
 ```
 
 `task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup

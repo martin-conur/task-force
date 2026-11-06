@@ -277,7 +277,7 @@ queue_file() { sed 's/\t/<TAB>/g' "$QUEUE"; }
   setup_stubs
   export AW_IMPL=claude-gh
   nx set 41 >/dev/null
-  run "$TASK_WORK" "41"
+  run "$TASK_WORK" "41" --no-task
   assert_success
   run cat "$QUEUE"
   assert_output "41"

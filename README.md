@@ -1520,8 +1520,11 @@ Common to every combo:
 - `-b, --base BRANCH` — branch the PR will target (default: branch you're on when `task-work` runs)
 - `-f, --from REF` — git ref to fork the new worktree's branch from (default: current HEAD). Accepts any ref `git` accepts (branches, tags, SHAs, `origin/foo`). Use this to stack a PR on an in-flight branch (`--from task/issue-46 --base main`) or to spike off `origin/main` without checking it out first. Refused when `REF` lacks the agent's radio hooks and `HEAD` has them (#304): a branch cut before `task-config add assistant` would give the worker a worktree its agent never registers from. Merge the base into it first. A repo whose `HEAD` has no hooks either is not refused, since merging would not help; `--no-launch` is not refused, since it starts nothing.
 - `--no-launch` — create the worktree and open the tab at that directory, but don't auto-start the agent (you pick the model/command yourself)
+- `--no-task` — launch with no task ref on purpose. On gh, notion and jira a bare slug is refused without it, since the worker would start with no spec (#371). `--no-launch` needs no ref, since it starts nothing, and neither does claude's `--plan`, which runs the planner that writes the spec. local needs no flag: its slug is the task file. `--no-task` with a ref is refused as contradictory.
 - `--impl <name>` — force a specific combo, bypassing auto-detection
 - `--profile <name>` — launch the agent with an agent profile from `~/.task-force/profiles.toml` (claude only; see [Agent profiles](#agent-profiles----profile-name))
+
+The slug argument is checked before anything is created (#371). One that holds whitespace, `://`, or a GitHub / Notion / Jira URL the tracker does not read is refused (a local task file whose name has a space is fine). That catches `"<slug> <url>"` passed as one argument, which is what an unquoted variable in a zsh `for` loop passes: before, the URL was sanitized into a 50-character slug, the sidecar got an empty ref, and the agent started with no spec. The refusal names the split, `did you mean: task-work <slug> <url>?`. A slug over 50 characters is still truncated, now with a warning.
 
 Radio auto-submit and focus, on every combo (#246, #254):
 

@@ -51,7 +51,7 @@ _impls_on() { bash -c "source '$DETECT'; aw_all_impls" | grep "^$1-"; }
 _launch_line() {
   local impl="$1"; shift
   : > "$STUB_CALLS_DIR/zellij.calls"
-  env AW_IMPL="$impl" "$TASK_WORK" "launch-$RANDOM" "$@" >/dev/null 2>&1 || {
+  env AW_IMPL="$impl" "$TASK_WORK" --no-task "launch-$RANDOM" "$@" >/dev/null 2>&1 || {
     echo "launch failed: $impl $*" >&2; return 1; }
   grep -m1 -F "new-tab --name" "$STUB_CALLS_DIR/zellij.calls"
 }
@@ -115,7 +115,7 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --focus --auto
   local agent flag
   for agent in $(bash -c "source '$DETECT'; aw_all_agents"); do
     for flag in -h --help; do
-      run env AW_IMPL="$agent-gh" "$TASK_WORK" "$flag"
+      run env AW_IMPL="$agent-gh" "$TASK_WORK" --no-task "$flag"
       [[ "$status" -eq 0 && "$output" == Usage:* ]] || {
         echo "$agent $flag: exit $status: $output" >&2; return 1; }
     done
@@ -125,7 +125,7 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --focus --auto
 @test "an unknown flag is refused under every agent" {
   local agent
   for agent in $(bash -c "source '$DETECT'; aw_all_agents"); do
-    run env AW_IMPL="$agent-gh" "$TASK_WORK" --unknown-flag my-feature
+    run env AW_IMPL="$agent-gh" "$TASK_WORK" --no-task --unknown-flag my-feature
     assert_failure
     assert_output --partial "unknown flag '--unknown-flag'"
   done
@@ -136,10 +136,10 @@ SHARED_FLAG_TOKENS=(-h --help -b --base -f --from --no-launch --focus --auto
   run env AW_IMPL=kiro-gh "$TASK_WORK" --plan my-feature
   assert_failure
   assert_output --partial "unknown flag '--plan'"
-  run env AW_IMPL=claude-gh "$TASK_WORK" -m some-model my-feature
+  run env AW_IMPL=claude-gh "$TASK_WORK" --no-task -m some-model my-feature
   assert_failure
   assert_output --partial "unknown flag '-m'"
-  run env AW_IMPL=claude-gh "$TASK_WORK" -a my-feature
+  run env AW_IMPL=claude-gh "$TASK_WORK" --no-task -a my-feature
   assert_failure
   assert_output --partial "unknown flag '-a'"
 }
@@ -326,10 +326,10 @@ _session_auto_submit() {
 # ---------------------------------------------------------------------------
 
 @test "kiro -m / --model passes the model to kiro-cli" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" -m claude-opus-4.6 my-feature
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task -m claude-opus-4.6 my-feature
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent worker --model claude-opus-4.6"
-  run env AW_IMPL=kiro-gh "$TASK_WORK" --model claude-sonnet-4.5 other-feature
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task --model claude-sonnet-4.5 other-feature
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent worker --model claude-sonnet-4.5"
 }
@@ -367,7 +367,7 @@ _session_auto_submit() {
 # nobody types in (#157). Disabling it is the user's call, so task-work warns
 # and launches anyway — and only when --trust-all is actually on.
 @test "kiro --trust-all warns about kiro's trust-all confirmation unless it is disabled (#157)" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" -a gate-on
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task -a gate-on
   assert_success
   assert_output --partial "kiro-cli's trust-all confirmation is not"
   assert_output --partial "kiro-cli settings chat.disableTrustAllConfirmation true"
@@ -376,16 +376,16 @@ _session_auto_submit() {
   run cat "$STUB_CALLS_DIR/kiro-cli.settings-cwd"
   assert_output "cwd=$(cd "$MAIN_REPO" && pwd -P)"
 
-  STUB_KIRO_TRUST_CONFIRM_DISABLED=true run env AW_IMPL=kiro-gh "$TASK_WORK" -a gate-off
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task -a gate-off
   assert_success
   refute_output --partial "trust-all confirmation"
-  STUB_KIRO_TRUST_CONFIRM_DISABLED=false run env AW_IMPL=kiro-gh "$TASK_WORK" -a gate-false
+  STUB_KIRO_TRUST_CONFIRM_DISABLED=false run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task -a gate-false
   assert_success
   assert_output --partial "kiro-cli's trust-all confirmation is not"
 }
 
 @test "kiro without --trust-all neither warns nor reads the setting (#157)" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" no-trust
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task no-trust
   assert_success
   refute_output --partial "trust-all confirmation"
   [[ ! -e "$STUB_CALLS_DIR/kiro-cli.settings-cwd" ]]
@@ -404,13 +404,13 @@ _session_auto_submit() {
 # the chat.agentEngine setting, else the default `chat --help` names.
 @test "kiro warns about the V3 upgrade dialog only on V3 with the setting unset (#257)" {
   # Today's default engine (v2): no dialog, no warning.
-  run env AW_IMPL=kiro-gh "$TASK_WORK" v2-default
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task v2-default
   assert_success
   refute_output --partial "chat.enableAutoAgentUpgrade"
 
   # V3 by setting, upgrade setting unset: warn, name `false`, launch anyway.
   : > "$STUB_CALLS_DIR/zellij.calls"
-  STUB_KIRO_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" v3-setting
+  STUB_KIRO_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task v3-setting
   assert_success
   assert_output --partial "the worker on its V3 engine and chat.enableAutoAgentUpgrade is"
   assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade false"
@@ -423,23 +423,23 @@ _session_auto_submit() {
   assert_output "cwd=$(cd "$MAIN_REPO" && pwd -P)"
 
   # V3 as kiro-cli's own default (3.0), the engine setting unset.
-  STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" v3-default
+  STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task v3-default
   assert_success
   assert_output --partial "chat.enableAutoAgentUpgrade false"
 
   # Either value of the setting skips the dialog, so neither warns.
   for v in false true; do
-    STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=$v run env AW_IMPL=kiro-gh "$TASK_WORK" "v3-$v"
+    STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=$v run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task "v3-$v"
     assert_success
     refute_output --partial "chat.enableAutoAgentUpgrade"
   done
 
   # An explicit v2 setting beats a v3 default; a kiro-cli naming no default
   # engine has nothing to warn about.
-  STUB_KIRO_ENGINE=v2 STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" v2-setting
+  STUB_KIRO_ENGINE=v2 STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task v2-setting
   assert_success
   refute_output --partial "chat.enableAutoAgentUpgrade"
-  STUB_KIRO_DEFAULT_ENGINE= run env AW_IMPL=kiro-gh "$TASK_WORK" one-engine
+  STUB_KIRO_DEFAULT_ENGINE= run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task one-engine
   assert_success
   refute_output --partial "chat.enableAutoAgentUpgrade"
 }
@@ -455,7 +455,7 @@ _session_auto_submit() {
   local flag
   for flag in -a --trust-all; do
     : > "$STUB_CALLS_DIR/zellij.calls"
-    run env AW_IMPL=kiro-gh "$TASK_WORK" "$flag" "trust$flag"
+    run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task "$flag" "trust$flag"
     assert_success
     assert_stub_called zellij "kiro-cli chat --agent worker --model claude-opus-5.5 --trust-all-tools"
   done
@@ -465,14 +465,14 @@ _session_auto_submit() {
 # chat.defaultModel, which outranks nothing task-force ships but the agent JSON
 # (#259, lib/kiro-launch.sh). So the default is a launch-line --model.
 @test "kiro defaults the worker to claude-opus-5.5 on the launch line (#259)" {
-  run env -u TASK_WORK_MODEL AW_IMPL=kiro-gh "$TASK_WORK" my-feature
+  run env -u TASK_WORK_MODEL AW_IMPL=kiro-gh "$TASK_WORK" --no-task my-feature
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent worker --model claude-opus-5.5 "
   assert_output --partial "Started worker [model=claude-opus-5.5] in "
 }
 
 @test "kiro TASK_WORK_MODEL sets the default model" {
-  TASK_WORK_MODEL=claude-sonnet-4.6 run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature
+  TASK_WORK_MODEL=claude-sonnet-4.6 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task my-feature
   assert_success
   assert_stub_called zellij "--model claude-sonnet-4.6"
   run grep -F -- "claude-opus-5.5" "$STUB_CALLS_DIR/zellij.calls"
@@ -483,19 +483,19 @@ _session_auto_submit() {
   local v
   for v in 1 true TRUE yes YES; do
     : > "$STUB_CALLS_DIR/zellij.calls"
-    TASK_WORK_TRUST_ALL="$v" run env AW_IMPL=kiro-gh "$TASK_WORK" "on-$v"
+    TASK_WORK_TRUST_ALL="$v" run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task "on-$v"
     assert_success
     assert_stub_called zellij "--trust-all-tools"
   done
   : > "$STUB_CALLS_DIR/zellij.calls"
-  TASK_WORK_TRUST_ALL=0 run env AW_IMPL=kiro-gh "$TASK_WORK" off-0
+  TASK_WORK_TRUST_ALL=0 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task off-0
   assert_success
   run grep -F -- "--trust-all-tools" "$STUB_CALLS_DIR/zellij.calls"
   assert_failure
 }
 
 @test "kiro --model missing its value is an error" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" --model
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task --model
   assert_failure
   assert_output --partial "--model requires a value"
 }
@@ -509,7 +509,7 @@ _session_auto_submit() {
 }
 
 @test "kiro free-form slug: bare worker invocation, no payload" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task my-feature
   assert_success
   assert_stub_called zellij "kiro-cli chat --agent worker"
   run grep -F "Implement task:" "$STUB_CALLS_DIR/zellij.calls"
@@ -526,7 +526,7 @@ _session_auto_submit() {
 }
 
 @test "kiro completion message names the model and trust-all" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" -m X -a my-feature
+  run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task -m X -a my-feature
   assert_success
   assert_output --partial "Started worker [model=X] [trust-all] in "
 }

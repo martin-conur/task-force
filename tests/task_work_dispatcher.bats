@@ -26,13 +26,13 @@ teardown() {
 
 @test "fails when not in a git repo" {
   cd /tmp
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_failure
   assert_output --partial "not in a git repo"
 }
 
 @test "fails with no impl configured" {
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_failure
   assert_output --partial "no agentic-workflow impl configured"
   assert_output --partial "task-init"
@@ -42,7 +42,7 @@ teardown() {
   mkdir -p "$MAIN_REPO/.claude" "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_failure
   assert_output --partial "multiple"
   assert_output --partial "claude-notion"
@@ -68,7 +68,7 @@ teardown() {
 @test "auto-routes to kiro-notion when .kiro/steering/notion-workflow.md exists" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   # kiro-notion's task-work writes the `kiro-cli` command to zellij.
   assert_stub_called zellij "kiro-cli"
@@ -78,7 +78,7 @@ teardown() {
 @test "auto-routes to kiro-gh when .kiro/steering/gh-workflow.md exists" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/gh-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   assert_stub_called zellij "kiro-cli"
   # kiro-gh writes GH_URL= into the info file (tracker-specific var name)
@@ -89,7 +89,7 @@ teardown() {
 @test "auto-routes to claude-notion when .claude/notion-workflow.md exists" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   # claude-notion writes `claude "/worker"` to zellij
   assert_stub_called zellij '/worker'
@@ -100,7 +100,7 @@ teardown() {
 @test "auto-routes to claude-gh when .claude/gh-workflow.md exists" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/gh-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   assert_stub_called zellij '/worker'
   run grep -q '^GH_URL=' "$WORKTREE_BASE/.my-feature.info"
@@ -120,7 +120,7 @@ teardown() {
 @test "auto-routes to claude-local when .claude/local-workflow.md exists" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/local-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   assert_stub_called zellij '/worker'
   run grep -q '^TASK_FILE=' "$WORKTREE_BASE/.my-feature.info"
@@ -130,7 +130,7 @@ teardown() {
 @test "auto-routes to kiro-local when .kiro/steering/local-workflow.md exists" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/local-workflow.md"
-  run "$TASK_WORK_DISPATCHER" my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   assert_stub_called zellij "kiro-cli"
   run grep -q '^TASK_FILE=' "$WORKTREE_BASE/.my-feature.info"
@@ -146,7 +146,7 @@ teardown() {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
   # …but we force kiro-notion.
-  run "$TASK_WORK_DISPATCHER" --impl kiro-notion my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task --impl kiro-notion my-feature
   assert_success
   assert_stub_called zellij "kiro-cli"
 }
@@ -154,13 +154,13 @@ teardown() {
 @test "--impl=value syntax works" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" --impl=kiro-notion my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task --impl=kiro-notion my-feature
   assert_success
   assert_stub_called zellij "kiro-cli"
 }
 
 @test "AW_IMPL env var picks the impl when none is auto-detected" {
-  AW_IMPL=kiro-notion run "$TASK_WORK_DISPATCHER" my-feature
+  AW_IMPL=kiro-notion run "$TASK_WORK_DISPATCHER" --no-task my-feature
   assert_success
   assert_stub_called zellij "kiro-cli"
 }
@@ -168,7 +168,7 @@ teardown() {
 @test "--impl beats AW_IMPL" {
   mkdir -p "$MAIN_REPO/.claude"
   touch "$MAIN_REPO/.claude/notion-workflow.md"
-  AW_IMPL=claude-notion run "$TASK_WORK_DISPATCHER" --impl kiro-notion my-feature
+  AW_IMPL=claude-notion run "$TASK_WORK_DISPATCHER" --no-task --impl kiro-notion my-feature
   assert_success
   assert_stub_called zellij "kiro-cli"
 }
@@ -180,16 +180,16 @@ teardown() {
 @test "passes positional args through to the impl script" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" "My Feature Task"
+  run "$TASK_WORK_DISPATCHER" --no-task "My-Feature.Task!"
   assert_success
   # kiro-notion sanitizes the slug; the impl creates the worktree at that path
-  assert [ -d "$WORKTREE_BASE/my-feature-task" ]
+  assert [ -d "$WORKTREE_BASE/my-featuretask" ]
 }
 
 @test "passes --base through to the impl script" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" --base develop my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task --base develop my-feature
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "$BASE_BRANCH" "develop"
@@ -198,7 +198,7 @@ teardown() {
 @test "passes impl-specific flag (kiro-notion --trust-all) through" {
   mkdir -p "$MAIN_REPO/.kiro/steering"
   touch "$MAIN_REPO/.kiro/steering/notion-workflow.md"
-  run "$TASK_WORK_DISPATCHER" --trust-all my-feature
+  run "$TASK_WORK_DISPATCHER" --no-task --trust-all my-feature
   assert_success
   assert_stub_called zellij "--trust-all-tools"
 }

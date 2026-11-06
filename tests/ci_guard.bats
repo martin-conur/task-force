@@ -327,7 +327,7 @@ msg() { printf '%s\n' "$@" > "$TMP/msg"; }
   [[ "$hooks" == /* ]] || hooks="$MAIN_REPO/$hooks"
   for impl in $(bash -c "source '$REPO_ROOT_REAL/lib/detect-impl.sh'; aw_all_impls"); do
     rm -f "$hooks/commit-msg"
-    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'guard-$impl'"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'guard-$impl' --no-task"
     assert_success
     [[ -x "$hooks/commit-msg" ]] || { echo "$impl: no commit-msg hook installed" >&2; return 1; }
   done

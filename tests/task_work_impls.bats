@@ -141,7 +141,7 @@ _launch_line() {
     prefix=$(_agent_launch_prefix "$agent"); flag_tok=$(_agent_flag_token "$agent")
     slug="agent-$n"
     # shellcheck disable=SC2046  # the flag is one word per agent
-    run "$TASK_WORK_DISPATCHER" "$slug" $(_agent_flag_args "$agent")
+    run "$TASK_WORK_DISPATCHER" "$slug" --no-task $(_agent_flag_args "$agent")
     [[ "$status" -eq 0 ]] || { echo "$impl: exit $status: $output" >&2; return 1; }
     line=$(_launch_line "$slug")
     # The agent command follows the radio prefix, so assert it is the command
@@ -171,12 +171,12 @@ _launch_line() {
   for impl in $(_impls); do
     n=$((n + 1))
     _seed_impl "$impl"
-    run "$TASK_WORK_DISPATCHER" "on-$n"
+    run "$TASK_WORK_DISPATCHER" "on-$n" --no-task
     [[ "$status" -eq 0 ]] || { echo "$impl plain: exit $status: $output" >&2; return 1; }
     line=$(_launch_line "on-$n")
     [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=1 "* ]] || { echo "$impl plain: $line" >&2; return 1; }
 
-    run "$TASK_WORK_DISPATCHER" "off-$n" --no-auto-submit
+    run "$TASK_WORK_DISPATCHER" "off-$n" --no-auto-submit --no-task
     [[ "$status" -eq 0 ]] || { echo "$impl --no-auto-submit: exit $status: $output" >&2; return 1; }
     line=$(_launch_line "off-$n")
     [[ "$line" == *"TASK_FORCE_AUTO_SUBMIT=0 "* ]] || { echo "$impl --no-auto-submit: $line" >&2; return 1; }

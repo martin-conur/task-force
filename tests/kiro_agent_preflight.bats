@@ -82,7 +82,7 @@ teardown() {
 # ----- wired into the launchers ---------------------------------------------
 
 @test "kiro task-work aborts before creating a worktree, branch or tab" {
-  run env AW_IMPL=kiro-gh "$TASK_WORK" probe
+  run env AW_IMPL=kiro-gh "$TASK_WORK" probe --no-task
   assert_failure
   assert_output --partial "kiro agent 'worker' does not resolve"
   # Nothing was scaffolded — the abort is before any side effect.
@@ -95,7 +95,7 @@ teardown() {
 
 @test "kiro task-work proceeds once the agent resolves" {
   setup_kiro_agents
-  run env AW_IMPL=kiro-gh "$TASK_WORK" probe
+  run env AW_IMPL=kiro-gh "$TASK_WORK" probe --no-task
   assert_success
   assert [ -d "$WORKTREE_BASE/probe" ]
 }

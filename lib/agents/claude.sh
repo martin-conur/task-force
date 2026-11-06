@@ -61,6 +61,13 @@ aw_agent_validate_flags() {
   fi
 }
 
+# aw_agent_spec_optional
+#
+# True when this launch is meant to start with no task ref (#371): --plan runs
+# /planner, whose job is to write the spec, so it may be told the task in its
+# tab instead of by a ref.
+aw_agent_spec_optional() { [[ -n "$PLAN_MODE" ]]; }
+
 # claude needs no preflight: there is no per-repo agent config it can fall back
 # from silently, which is what kiro's (#218) guards against.
 aw_agent_preflight() { :; }

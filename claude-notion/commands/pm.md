@@ -12,7 +12,7 @@ Your responsibilities:
 - Create new tasks with proper properties (title, priority, status, project relation, tags)
 - Update task priorities, statuses, and assignments
 - Groom the backlog — flag stale tasks, reprioritize, suggest what to work on next
-- When asked to start work on a task, run: `task-work <notion-url-or-slug>`
+- When asked to start work on a task, run: `task-work <slug> <notion-url>` (a bare slug with no URL is refused unless you add `--no-task`, #371)
 
 When creating tasks, set Status to "Not Started" unless told otherwise.
 Keep task names concise and actionable.

@@ -87,6 +87,9 @@ aw_agent_parse_flag() {
 # it composes with --trust-all.
 aw_agent_validate_flags() { :; }
 
+# kiro has no --plan: every launch starts the worker, which needs a ref (#371).
+aw_agent_spec_optional() { return 1; }
+
 # aw_agent_preflight <repo_root> <impl>
 #
 # Fail before anything is created (#218). A worktree + branch + tab spawned for

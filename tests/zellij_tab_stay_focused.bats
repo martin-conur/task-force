@@ -348,7 +348,7 @@ _caller_tabs() {
   for impl in claude-gh kiro-gh; do
     : > "$STUB_CALLS_DIR/zellij.calls"
     ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$(_caller_tabs "plain-${impl%%-*}")" \
-      run env AW_IMPL="$impl" "$TASK_WORK" "plain-${impl%%-*}"
+      run env AW_IMPL="$impl" "$TASK_WORK" --no-task "plain-${impl%%-*}"
     assert_success
     assert_stub_called zellij "go-to-tab 1"
   done
@@ -365,7 +365,7 @@ _caller_tabs() {
 
 @test "task-work --auto: snap-back fires (unchanged by permission mode)" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$(_caller_tabs my-feature)" \
-    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --auto
+    run env AW_IMPL=claude-gh "$TASK_WORK" --no-task my-feature --auto
   assert_success
   assert_stub_called zellij "go-to-tab 1"
 }
@@ -375,7 +375,7 @@ _caller_tabs() {
   for impl in claude-gh kiro-gh; do
     : > "$STUB_CALLS_DIR/zellij.calls"
     ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
-      run env AW_IMPL="$impl" "$TASK_WORK" "focus-${impl%%-*}" --focus
+      run env AW_IMPL="$impl" "$TASK_WORK" --no-task "focus-${impl%%-*}" --focus
     assert_success
     run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
     assert_failure
@@ -388,7 +388,7 @@ _caller_tabs() {
 
 @test "task-work --focus --auto: --focus wins, no snap-back" {
   ZELLIJ=1 STUB_ZELLIJ_TABS_JSON="$CALLER_TABS" \
-    run env AW_IMPL=claude-gh "$TASK_WORK" my-feature --auto --focus
+    run env AW_IMPL=claude-gh "$TASK_WORK" --no-task my-feature --auto --focus
   assert_success
   run grep -F 'go-to-tab' "$STUB_CALLS_DIR/zellij.calls"
   assert_failure

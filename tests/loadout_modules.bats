@@ -54,6 +54,7 @@ TRACKER_HOOKS_TASK_WORK=(
   aw_tracker_info_key
   aw_tracker_worker_prompt
   aw_tracker_post_worktree
+  aw_tracker_requires_ref
 )
 TRACKER_HOOKS_TASK_REVIEWER=(
   aw_tracker_review_spec
@@ -81,6 +82,7 @@ AGENT_HOOKS_TASK_WORK=(
   aw_agent_preflight
   aw_agent_launch_cmd
   aw_agent_started_message
+  aw_agent_spec_optional
 )
 # What bin/task-recreate-worker asks of an agent beyond task-work's list (#239).
 AGENT_HOOKS_TASK_RECREATE_WORKER=(
@@ -447,7 +449,7 @@ _tw_repo() {
   # Strip gh's key override so the refusing default in _default.sh shows through.
   sed -i.bak '/^aw_tracker_info_key()/d' "$fake/lib/trackers/gh.sh"
   repo=$(_tw_repo repo-nokey)
-  run bash -c "cd '$repo' && AW_IMPL=claude-gh '$fake/bin/task-work' some-slug"
+  run bash -c "cd '$repo' && AW_IMPL=claude-gh '$fake/bin/task-work' some-slug --no-task"
   assert_failure
   assert_output --partial "defines no .info key"
   assert [ ! -e "$repo-worktrees" ]

@@ -658,13 +658,13 @@ _assert_untouched() {
 @test "task-work --agent kiro launches kiro in a claude-active repo and records AGENT=kiro" {
   _dual_docs
   git config task-force.assistant claude
-  run "$TASK_WORK" probe-kiro --agent kiro
+  run "$TASK_WORK" probe-kiro --agent kiro --no-task
   assert_success
   run grep -m1 -F "new-tab --name probe-kiro" "$STUB_CALLS_DIR/zellij.calls"
   assert_output --partial "kiro-cli chat --agent worker"
   grep -qxF 'AGENT=kiro' "$WORKTREE_BASE/.probe-kiro.info"
   # Without the flag the repo's active assistant decides.
-  run "$TASK_WORK" probe-claude
+  run "$TASK_WORK" probe-claude --no-task
   assert_success
   run grep -m1 -F "new-tab --name probe-claude" "$STUB_CALLS_DIR/zellij.calls"
   refute_output --partial "kiro-cli"

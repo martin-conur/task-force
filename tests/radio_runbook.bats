@@ -232,11 +232,11 @@ runbook_block() {
   local impl
   for impl in $(bash -c "source '$REPO_ROOT_REAL/lib/detect-impl.sh'; aw_all_impls" | grep '^kiro-'); do
     : > "$STUB_CALLS_DIR/zellij.calls"
-    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'plain-$impl'"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'plain-$impl' --no-task"
     assert_success
     assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1 kiro-cli"
     : > "$STUB_CALLS_DIR/zellij.calls"
-    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'off-$impl' --no-auto-submit"
+    run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'off-$impl' --no-auto-submit --no-task"
     assert_success
     assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0 kiro-cli"
   done

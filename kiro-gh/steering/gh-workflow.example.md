@@ -71,9 +71,12 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 - `--agent <claude|kiro>` — launch this one worker on the other installed assistant, leaving the repo's active one alone (#293). Both loadouts must be installed (`task-config add assistant`, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too, and `task-recreate-worker` without it relaunches on the assistant `task-work` recorded for that worker
 - `--profile <name>` — launch the agent with an agent profile from `~/.task-force/profiles.toml`: a gateway's base URL, model pins, and the variable its key is read from (#355, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too. Claude-only
 - `--no-launch` — open the worktree tab but do NOT start kiro
+- `--no-task` — launch with no task ref on purpose. Without it a bare slug is refused, since the worker would start with no spec (#371). `--no-launch` needs no ref and no flag, since it starts nothing
 - `--no-auto-submit` — keep the Enter gate on radio wakes. Radio auto-submit is **the default** (#254): an incoming ping submits itself instead of sitting in the prompt box until someone presses Enter, since nobody types in a worker's tab. Use this for a worker you mean to step into and steer by hand. `--auto-submit` states the default explicitly
 - `--focus` — switch to the new tab. By default focus stays on the tab you ran `task-work` from, so the PM can dispatch without being pulled away (#254)
 - `--auto` — accepted for symmetry with claude, and a no-op here: the permission model stays `-a/--trust-all` (#206), and auto-submit is already on
+
+The slug argument is checked before anything is created (#371): one that holds whitespace, `://` or a GitHub / Notion / Jira URL this tracker does not read is refused. So `"<slug> <url>"` passed as one argument, which an unquoted variable in a zsh loop does, names the split (`did you mean: task-work <slug> <url>?`) instead of becoming a 50-character slug with no spec. A slug over 50 characters is still truncated, now with a warning.
 
 Under kiro-cli's V3 engine (`chat.agentEngine = v3` today; kiro-cli's help calls v2 "the pre-3.0 default"), every dispatched kiro launch — `task-work`, `task-recreate-worker`, `task-reviewer` — would first stop at a dialog offering to upgrade your agent configs to the V3 format. Nobody answers it in a dispatched tab, so the first turn never runs. The launchers warn when the launch would run on V3 and `chat.enableAutoAgentUpgrade` is unset. Set it once with `kiro-cli settings chat.enableAutoAgentUpgrade false`. With `false` the radio hooks keep working under V3 (#257). `true`, or accepting the upgrade, rewrites `.kiro/agents/*.json` into kiro-cli's universal format instead; the radio hooks keep working there too, and `task-init` and `task-remove` handle that format since #267.
 
@@ -83,9 +86,10 @@ Examples:
 ```bash
 task-work add-auth "https://github.com/{OWNER}/{REPO}/issues/42"
 task-work https://github.com/{OWNER}/{REPO}/issues/42
-task-work refactor-auth -m claude-sonnet-5.5 --trust-all
-task-work issue-99 --from task/issue-46 --base main         # stack on an in-flight branch
+task-work https://github.com/{OWNER}/{REPO}/issues/43 -m claude-sonnet-5.5 --trust-all
+task-work https://github.com/{OWNER}/{REPO}/issues/99 --from task/issue-46 --base main   # stack on an in-flight branch
 task-work spike-idea --no-launch
+task-work spike-idea --no-task                  # deliberately no spec
 ```
 
 `task-done [options]` — from within a worktree: show diff, print/detect PR, cleanup

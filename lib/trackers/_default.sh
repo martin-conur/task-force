@@ -111,6 +111,47 @@ _aw_tracker_parse_ref_default() {
   fi
 }
 
+# aw_tracker_requires_ref
+#
+# True when a launch with no task ref is a mistake unless --no-task says it is
+# deliberate (#371). Every tracker-backed loadout (gh, notion, jira) gets the
+# default: an agent started with no ref starts with no spec, and the only sign
+# used to be the tab name. `local` overrides it, because its slug is the task
+# file and a free-form slug there has no tracker to have forgotten.
+aw_tracker_requires_ref() { return 0; }
+
+# aw_check_slug_inputs <positional>...
+#
+# Not a hook — the one guard on what the user typed, before parsing (#371). A
+# positional that is not a ref for this tracker becomes the slug, and
+# sanitizing used to eat anything: a zsh loop that passed `"<slug> <url>"` as
+# ONE argument got a 50-char slug with the URL folded into it, an empty ref in
+# the sidecar, and an agent launched with no spec. So refuse, on the raw text:
+#   - whitespace anywhere (a ref never holds any; an existing file may, which
+#     is local's task-file path);
+#   - `://` or a GitHub / Notion / Jira URL shape in a positional that is not a
+#     ref here: it is a URL this tracker cannot read, not a slug.
+# Prints the refusal and returns 1; returns 0 when every positional is fine.
+aw_check_slug_inputs() {
+  local p first rest
+  for p in "$@"; do
+    if [[ "$p" =~ [[:space:]] && ! -f "$p" ]]; then
+      read -r first rest <<<"$p"
+      if [[ -n "$rest" && "$rest" != *[[:space:]]* ]] && aw_tracker_is_ref "$rest"; then
+        echo "Error: slug looks like \"$first $rest\" passed as one argument — did you mean: task-work $first $rest?" >&2
+      else
+        echo "Error: '$p' contains whitespace: a slug or task ref is one word. Was a slug and a ref passed as one argument?" >&2
+      fi
+      return 1
+    fi
+    aw_tracker_is_ref "$p" && continue
+    if [[ "$p" == *://* || "$p" =~ (github\.com|notion\.(so|site|com)|atlassian\.net)/ ]]; then
+      echo "Error: '$p' looks like a URL, but not a task ref this tracker reads, so it cannot be a slug." >&2
+      return 1
+    fi
+  done
+}
+
 # aw_tracker_info_key
 #
 # The key task-work writes the ref under in the worktree's .info sidecar —

@@ -83,6 +83,10 @@ aw_tracker_parse_ref() {
 
 aw_tracker_info_key() { echo TASK_FILE; }
 
+# The slug is the task file, so a launch with no file is not a forgotten ref
+# (#371).
+aw_tracker_requires_ref() { return 1; }
+
 aw_tracker_usage_synopsis() {
   echo "  task-work tasks/NNN-slug.md [options]   # preferred — local task tracking"
   echo "  task-work <free-form-slug> [options]    # ad-hoc, no task file"

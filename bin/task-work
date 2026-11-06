@@ -88,6 +88,10 @@ Options:
       --no-launch     Create the worktree and open the tab at its directory,
                       but do NOT start $(aw_agent_name). Use this when you want to
                       pick the command/model interactively.
+      --no-task       Launch with no task ref on purpose. A tracker-backed
+                      loadout (gh, notion, jira) otherwise refuses a slug with
+                      no ref, since the agent would start with no spec (#371).
+                      Not needed with --no-launch, or with claude's --plan.
       --focus         Switch to the new tab. By default focus stays on the tab
                       you ran this from, so a PM can dispatch without being
                       pulled away (#254).
@@ -121,6 +125,7 @@ EOF
 # ---------------- arg parsing ----------------
 POSITIONAL=()
 NO_LAUNCH=""
+NO_TASK=""
 BASE_BRANCH_OVERRIDE=""
 FROM_REF_OVERRIDE=""
 AUTO_MODE=""
@@ -146,6 +151,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
       FROM_REF_OVERRIDE="$2"; shift 2 ;;
     --no-launch) NO_LAUNCH="1"; shift ;;
+    --no-task) NO_TASK="1"; shift ;;
     --focus) FOCUS="1"; shift ;;
     --auto)
       # shellcheck disable=SC2034  # read by lib/agents/claude.sh (--permission-mode auto)
@@ -167,13 +173,33 @@ if [[ -n "$AW_PARSED_PROFILE" ]]; then
   aw_profile_load "$AW_PARSED_PROFILE" "$AGENT" || exit 1
 fi
 
+# On the raw positionals, before sanitizing can fold a URL into a slug (#371).
+aw_check_slug_inputs "${POSITIONAL[@]}" || exit 1
+
 # Sets AW_TASK_REF (may be empty) and AW_SLUG.
 aw_tracker_parse_ref "${POSITIONAL[@]}"
 TASK_REF="$AW_TASK_REF"
 SLUG="$AW_SLUG"
 
 [[ -z "$SLUG" ]] && { echo "Error: could not derive a slug from input" >&2; exit 1; }
-SLUG="${SLUG:0:50}"
+if [[ ${#SLUG} -gt 50 ]]; then
+  echo "Warning: slug truncated to 50 characters: ${SLUG:0:50} (was ${#SLUG})" >&2
+  SLUG="${SLUG:0:50}"
+fi
+
+# No ref on a tracker-backed loadout means an agent with no spec (#371). Not a
+# mistake when nothing is launched (--no-launch) or the launch writes the spec
+# itself (claude's --plan); otherwise --no-task has to say it is deliberate.
+if [[ -n "$NO_TASK" && -n "$TASK_REF" ]]; then
+  echo "Error: --no-task given with a task ref ($TASK_REF)" >&2
+  exit 1
+fi
+if [[ -z "$TASK_REF" && -z "$NO_TASK" && -z "$NO_LAUNCH" ]] \
+    && aw_tracker_requires_ref && ! aw_agent_spec_optional; then
+  echo "Error: no task ref for '$SLUG': the $(aw_agent_name) worker would start with no spec." >&2
+  echo "  Pass the ref (task-work $SLUG <ref>), or --no-task if this is deliberate." >&2
+  exit 1
+fi
 
 # Resolved now, not at the write: a module with no key must refuse before
 # anything is created, not after the worktree exists.

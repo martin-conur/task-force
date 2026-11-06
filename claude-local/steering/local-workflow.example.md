@@ -103,6 +103,8 @@ The worker opens every PR body with `## Summary`: two or three plain sentences, 
 - `--profile <name>` — launch the agent with an agent profile from `~/.task-force/profiles.toml`: a gateway's base URL, model pins, and the variable its key is read from (#355, below). `task-pm`, `task-reviewer` and `task-recreate-worker` take it too. Claude-only
 - `--no-launch` — open the worktree tab but do NOT start Claude
 
+The slug argument is checked before anything is created (#371): one that holds whitespace or a URL is refused (a task file whose name has a space is fine), and a slug over 50 characters is truncated with a warning. A free-form slug needs no `--no-task` here: on this tracker the slug is the task file, so there is no ref to have forgotten.
+
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
 Examples:

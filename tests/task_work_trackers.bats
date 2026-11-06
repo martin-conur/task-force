@@ -83,7 +83,7 @@ NOTION_TITLED="https://www.notion.so/My-Feature-abc123def456abc123def456abc123de
 }
 
 @test "notion: .info NOTION_URL is empty for free-form slugs" {
-  run env AW_IMPL=claude-notion "$TASK_WORK" my-feature
+  run env AW_IMPL=claude-notion "$TASK_WORK" my-feature --no-task
   assert_success
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${NOTION_URL-unset}" ""
@@ -131,7 +131,7 @@ NOTION_TITLED="https://www.notion.so/My-Feature-abc123def456abc123def456abc123de
 }
 
 @test "jira: free-form slug has no JIRA_REF" {
-  run env AW_IMPL=claude-jira "$TASK_WORK" add-store-filtering
+  run env AW_IMPL=claude-jira "$TASK_WORK" add-store-filtering --no-task
   assert_success
   assert [ -d "$WORKTREE_BASE/add-store-filtering" ]
   source "$WORKTREE_BASE/.add-store-filtering.info"
@@ -195,7 +195,7 @@ NOTION_TITLED="https://www.notion.so/My-Feature-abc123def456abc123def456abc123de
 }
 
 @test "jira: '--' passes a dash-leading positional through as the slug" {
-  run env AW_IMPL=claude-jira "$TASK_WORK" -- -dash-slug
+  run env AW_IMPL=claude-jira "$TASK_WORK" --no-task -- -dash-slug
   assert_success
   assert [ -d "$WORKTREE_BASE/-dash-slug" ]
 }
@@ -449,4 +449,147 @@ BOARD
   run env AW_IMPL=claude-local "$TASK_WORK" --plan tasks/001-add-login.md
   assert_success
   assert_stub_called zellij "claude --permission-mode plan \"/planner $MAIN_REPO/tasks/001-add-login.md\""
+}
+
+# ---------------------------------------------------------------------------
+# Slug guard and the no-ref refusal (#371)
+# ---------------------------------------------------------------------------
+#
+# A zsh loop passed `"<slug> <url>"` as ONE argument: sanitizing folded the URL
+# into a 50-char slug, the sidecar got an empty ref, and the agent launched
+# with no spec. Every refusal here must leave nothing behind.
+
+NOTION_APP="https://app.notion.com/p/410d9a72260f81a89abc123def456abc"
+
+# Nothing exists: no task/* branch, no worktree directory, no .info sidecar, no
+# tab opened, no radio session or sidecar.
+_assert_nothing_created() {
+  run git -C "$MAIN_REPO" branch --list 'task/*'
+  assert_output ""
+  assert [ ! -e "$WORKTREE_BASE" ]
+  run stub_calls zellij
+  refute_output --partial "new-tab"
+  run bash -c "ls -A '$TASK_FORCE_HOME/radio/sessions' 2>/dev/null"
+  assert_output ""
+}
+
+@test "guard: '<slug> <url>' as one argument refuses with the split, on every URL tracker" {
+  setup_task_force_home
+  local impl ref
+  for impl in claude-notion kiro-notion claude-jira claude-gh kiro-gh; do
+    case "$impl" in
+      *-notion) ref="$NOTION_APP" ;;
+      *-jira)   ref="https://acme.atlassian.net/browse/PROJ-7" ;;
+      *-gh)     ref="https://github.com/owner/repo/issues/42" ;;
+    esac
+    run env AW_IMPL="$impl" "$TASK_WORK" "legal-texts-v2 $ref" --base main
+    assert_failure
+    assert_output --partial "slug looks like \"legal-texts-v2 $ref\" passed as one argument — did you mean: task-work legal-texts-v2 $ref?"
+    _assert_nothing_created
+  done
+}
+
+@test "guard: a slug with whitespace and no ref in it refuses" {
+  setup_task_force_home
+  run env AW_IMPL=claude-notion "$TASK_WORK" "my feature" --no-task
+  assert_failure
+  assert_output --partial "contains whitespace"
+  _assert_nothing_created
+}
+
+@test "guard: a URL this tracker does not read refuses rather than becoming a slug" {
+  setup_task_force_home
+  local impl url
+  for impl in claude-notion claude-jira claude-gh; do
+    for url in "https://example.com/some/page" "github.com/owner/repo/pull/3" \
+               "www.notion.so/My-Page-abc123def456abc123def456abc123de" "acme.atlassian.net/jira/x"; do
+      # Skip the one shape that IS a ref here.
+      [[ "$impl" == claude-notion && "$url" == www.notion.so/* ]] && continue
+      run env AW_IMPL="$impl" "$TASK_WORK" "$url" --no-task
+      assert_failure
+      assert_output --partial "looks like a URL"
+      _assert_nothing_created
+    done
+  done
+}
+
+@test "guard: a local task file with a space in its name still launches" {
+  _seed_local claude-local
+  _make_task_file "$MAIN_REPO/tasks/003-add login.md" 003 "Add login"
+  run env AW_IMPL=claude-local "$TASK_WORK" "tasks/003-add login.md"
+  assert_success
+  assert [ -d "$WORKTREE_BASE/add-login" ]
+}
+
+@test "no ref: notion, jira and gh refuse a bare slug without --no-task" {
+  setup_task_force_home
+  local impl
+  for impl in claude-notion kiro-notion claude-jira claude-gh kiro-gh; do
+    run env AW_IMPL="$impl" "$TASK_WORK" my-feature
+    assert_failure
+    assert_output --partial "no task ref for 'my-feature'"
+    assert_output --partial "--no-task"
+    _assert_nothing_created
+  done
+}
+
+@test "no ref: --no-task proceeds and records an empty ref" {
+  local impl key
+  for impl in claude-notion claude-jira claude-gh; do
+    case "$impl" in
+      *-notion) key=NOTION_URL ;; *-jira) key=JIRA_REF ;; *-gh) key=GH_URL ;;
+    esac
+    run env AW_IMPL="$impl" "$TASK_WORK" "spike-${impl##*-}" --no-task
+    assert_success
+    assert [ -d "$WORKTREE_BASE/spike-${impl##*-}" ]
+    run grep -x "${key}=" "$WORKTREE_BASE/.spike-${impl##*-}.info"
+    assert_success
+  done
+}
+
+@test "no ref: --no-task with a ref is refused as contradictory" {
+  setup_task_force_home
+  run env AW_IMPL=claude-notion "$TASK_WORK" my-feature "$NOTION_TITLED" --no-task
+  assert_failure
+  assert_output --partial "--no-task given with a task ref"
+  _assert_nothing_created
+}
+
+@test "no ref: claude --plan needs no ref — the planner writes the spec" {
+  local impl
+  for impl in claude-notion claude-jira claude-gh; do
+    run env AW_IMPL="$impl" "$TASK_WORK" "plan-${impl##*-}" --plan
+    assert_success
+    assert_stub_called zellij "claude --permission-mode plan \"/planner\""
+  done
+}
+
+@test "no ref: --no-launch needs no ref — no agent starts" {
+  local impl
+  for impl in claude-notion kiro-notion claude-jira claude-gh kiro-gh; do
+    run env AW_IMPL="$impl" "$TASK_WORK" "idle-${impl}" --no-launch
+    assert_success
+    assert [ -d "$WORKTREE_BASE/idle-${impl}" ]
+  done
+}
+
+@test "no ref: local takes a free-form slug without --no-task" {
+  local impl
+  for impl in claude-local kiro-local; do
+    rm -rf "$MAIN_REPO/.claude" "$MAIN_REPO/.kiro"
+    _seed_local "$impl"
+    [[ "$impl" == kiro-* ]] && setup_kiro_agents
+    run env AW_IMPL="$impl" "$TASK_WORK" "free-${impl}"
+    assert_success
+    assert [ -d "$WORKTREE_BASE/free-${impl}" ]
+  done
+}
+
+@test "a slug over 50 characters warns that it was truncated" {
+  local long_slug
+  long_slug=$(printf 'abcde%.0s' {1..12})   # 60 chars
+  run env AW_IMPL=claude-notion "$TASK_WORK" "$long_slug" --no-task
+  assert_success
+  assert_output --partial "slug truncated to 50 characters: ${long_slug:0:50} (was 60)"
+  assert [ -d "$WORKTREE_BASE/${long_slug:0:50}" ]
 }

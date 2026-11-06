@@ -459,7 +459,7 @@ _kiro_worker_hooks() {   # <object|array>
 
 @test "kiro warns on V3 when the worker config's hooks are still object-shaped (#370)" {
   _kiro_worker_hooks object
-  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" shape-true
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-true
   assert_success
   assert_output --partial "$MAIN_REPO/.kiro/agents/worker.json still has task-init's object-shaped"
   assert_output --partial "a git stash, checkout or reset that puts it back while the worker runs"
@@ -468,7 +468,7 @@ _kiro_worker_hooks() {   # <object|array>
   assert_stub_called zellij "kiro-cli chat --agent worker"
 
   # Under false nothing is rewritten, and none of the hooks fire at all.
-  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=false run env AW_IMPL=kiro-gh "$TASK_WORK" shape-false
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=false run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-false
   assert_success
   assert_output --partial "fires none of its hooks (kiro-cli 3.1.0): the worker will never"
   refute_output --partial "puts it back while"
@@ -476,15 +476,15 @@ _kiro_worker_hooks() {   # <object|array>
 
 @test "kiro does not warn about the hooks shape off V3, on universal configs, or under --no-launch (#370)" {
   _kiro_worker_hooks object
-  STUB_KIRO_ENGINE=v2 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" shape-v2
+  STUB_KIRO_ENGINE=v2 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-v2
   assert_success
   refute_output --partial "object-shaped"
-  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-launch shape-nolaunch
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task --no-launch shape-nolaunch
   assert_success
   refute_output --partial "object-shaped"
 
   _kiro_worker_hooks array
-  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" shape-universal
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-universal
   assert_success
   refute_output --partial "object-shaped"
 }

@@ -407,6 +407,10 @@ One accepted imprecision: the seeded allow-list is matched as a literal set, so 
 
 The removal engine lives in `lib/loadout-artifacts.sh` rather than inside `task-config`, because [`task-remove`](#task-remove--take-task-force-back-out-of-a-repo) is its second consumer.
 
+### `task-config profile`
+
+`task-config profile add|list|show|test|remove` writes and checks [agent profiles](#agent-profiles----profile-name) in `~/.task-force/profiles.toml` (#356). Profiles belong to the machine, not to a repo, so these work outside a repo too. The walkthrough is [Using another model provider](#using-another-model-provider).
+
 ---
 
 ## `task-remove` — take task-force back out of a repo
@@ -545,6 +549,65 @@ Both are `none` by default, which changes nothing, and both can be written with 
 
 - The first auto-mode session through a gateway on a machine shows Claude Code's classifier billing notice and waits for `y`. That holds a hands-off worker until someone answers it, once.
 - Claude Code's cost display and `modelUsage` miss the classifier's calls, and price an unknown model with a guessed rate. Verify routing and cost on the gateway's side: its logs, or its billing page.
+
+### Using another model provider
+
+`task-config profile` (#356) writes and checks a profile for you, so you do not need to know the variable names above. Four steps, with Fireworks as the example:
+
+**1. Export the key from your shell rc.** A worker's tab sources your rc, and that is the only place the key comes from:
+
+```bash
+echo 'export FIREWORKS_API_KEY=fw_…' >> ~/.zshrc   # or ~/.bashrc
+exec $SHELL
+```
+
+**2. Add a profile from a preset.** The profile names the variable, never its value:
+
+```bash
+task-config profile add fireworks-glm --preset fireworks --model glm-latest --key-env FIREWORKS_API_KEY
+```
+
+`add` checks the profile with the same reader the launchers use before it writes anything, so it never writes one a launch would refuse, and it warns when the key's variable is unset. It appends one `[profiles.<name>]` table to `profiles.toml` and leaves your other profiles and comments as they were. The written profile stands alone: a preset is only where its values came from. The options:
+
+- `--preset <name>`: a starting point from `lib/profile-presets.toml`. `fireworks` is the spike's verdict: base URL `https://api.fireworks.ai/inference`, `ENABLE_TOOL_SEARCH=true`, every tier on `--model`. `anthropic` is Anthropic's API with a key of its own.
+- `--base-url <url>`: instead of a preset, or over its base URL, for any gateway that takes the key as `x-api-key`.
+- `--model <id>`, required: the gateway's model id. Every tier defaults to it.
+- `--key-env <VAR>`, required: the variable holding the key. It is sent as `ANTHROPIC_API_KEY`.
+- `--pin <tier>=<id>` (repeatable): `sonnet`, `haiku`, `opus` or `subagent` on another model.
+- `--env <K>=<V>` (repeatable): another variable, or a preset's with another value.
+- `--force`: replace a profile of that name where it stands in the file.
+
+There is no `--auth`. Profiles send the key as `x-api-key` only, since `ANTHROPIC_AUTH_TOKEN` leaked the machine's Anthropic key to the gateway (spike, section 6). That is why OpenRouter and LiteLLM have no preset: both document Claude Code only through `ANTHROPIC_AUTH_TOKEN` (the `Authorization: Bearer` header). A gateway that also accepts `x-api-key` works with `--base-url`.
+
+**3. Test it.** One short, non-interactive `claude -p` run through the profile, with the variables a launch sets, in a throwaway directory, registering no radio role:
+
+```console
+$ task-config profile test fireworks-glm
+profile test: fireworks-glm (model glm-latest, ~/.task-force/profiles.toml)
+  auth      : ok
+  answered  : accounts/fireworks/models/glm-5p3
+  tool use  : ok (Read)
+  elapsed   : 13s
+OK
+```
+
+It asks the model to read a file with the `Read` tool and answer with its contents. Any failure exits non-zero and prints the gateway's error. A gateway that never answers is given 60 seconds: then `claude` is stopped and the test fails with `timed out after 60s`. `--timeout <secs>` or `$TASK_CONFIG_PROFILE_TEST_TIMEOUT` changes that. The key never appears in the output, even when the gateway echoes it back.
+
+**4. Launch on it:**
+
+```bash
+task-work https://github.com/you/repo/issues/42 --auto --profile fireworks-glm
+```
+
+The rest:
+
+```bash
+task-config profile list                  # name, agent, model, base URL
+task-config profile show fireworks-glm    # every variable a launch sets; the key's variable as set or unset
+task-config profile remove fireworks-glm  # cut it out, leaving the rest of the file alone
+```
+
+`profiles.toml` stays yours to edit by hand. `remove` refuses a profile it cannot cut out cleanly, one written as dotted keys under another table, rather than touch other lines.
 
 ---
 

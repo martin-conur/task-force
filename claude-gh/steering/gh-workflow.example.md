@@ -134,6 +134,19 @@ Each launcher refuses, before it creates anything, an unknown profile, a profile
 
 Two things need a human or the gateway. The first auto-mode session through a gateway on a machine shows Claude Code's classifier billing notice and waits for `y`, which holds a hands-off worker once. And Claude Code's cost display and `modelUsage` miss the classifier's calls and misprice unknown models: check routing and cost on the gateway's side.
 
+**Writing and checking one** — `task-config profile add|list|show|test|remove` (#356)
+
+You need not write the table by hand. `add` writes one, from a preset or from `--base-url`, and checks it with the same reader the launchers use before it writes anything, so it cannot write a profile a launch would refuse. `test` makes one short `claude -p` run through it, in a throwaway directory with no radio role, and reports auth, the model that answered, one tool call and the time taken; it exits non-zero with the gateway's error, or after 60s with no answer (`--timeout <secs>`, `$TASK_CONFIG_PROFILE_TEST_TIMEOUT`). Neither prints the key: `show` says only whether its variable is `set` or `unset`. `add --force` replaces a profile where it stands, and `add` and `remove` leave every other line and comment of the file as it was. Presets live in `lib/profile-presets.toml`: `fireworks` (the spike's base URL and `ENABLE_TOOL_SEARCH=true`, every tier on `--model`) and `anthropic`. OpenRouter and LiteLLM have none, because both document Claude Code only through `ANTHROPIC_AUTH_TOKEN`, which profiles refuse.
+
+```bash
+task-config profile add fireworks-glm --preset fireworks --model glm-latest --key-env FIREWORKS_API_KEY
+task-config profile test fireworks-glm
+task-config profile add my-gw --base-url https://gw.example/anthropic --model m --key-env GW_KEY --pin haiku=small
+task-config profile list
+task-config profile show fireworks-glm
+task-config profile remove my-gw
+```
+
 `task-recreate-worker <slug> [options]` — recover a worker whose tab died but whose worktree survived (#230)
 
 A machine restart (or a killed zellij server) takes out every tab on the box and

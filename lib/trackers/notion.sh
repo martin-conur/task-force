@@ -33,13 +33,13 @@ aw_tracker_info_key() { echo NOTION_URL; }
 aw_tracker_usage_synopsis() {
   echo "  task-work <slug> <notion-url> [options]    # explicit slug + URL (preferred when an agent kicks it off)"
   echo "  task-work <notion-url> [options]           # slug derived from the URL's title segment"
-  echo "  task-work <free-form-slug> [options]       # ad-hoc, no Notion URL"
+  echo "  task-work <free-form-slug> --no-task [options]   # ad-hoc, no Notion URL"
 }
 
 aw_tracker_usage_examples() {
   echo '  task-work add-store-filtering "https://www.notion.so/abc123def456abc123def456abc123de"'
   echo "  task-work https://www.notion.so/My-Task-abc123def456abc123def456abc123de"
-  echo "  task-work refactor-auth"
+  echo "  task-work refactor-auth --no-task"
   echo "  task-work spike-idea --no-launch"
   echo "  # Stack a follow-up on top of an in-flight branch:"
   echo "  task-work followup <notion-url> --from task/refactor-auth --base main"

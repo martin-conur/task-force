@@ -178,7 +178,7 @@ aw_tracker_worker_prompt() { printf 'Implement task: %s' "$1"; }
 aw_tracker_usage_synopsis() {
   echo "  task-work <slug> <ref> [options]       # explicit slug + task reference"
   echo "  task-work <ref> [options]              # slug derived from the reference"
-  echo "  task-work <free-form-slug> [options]   # ad-hoc, no task reference"
+  echo "  task-work <free-form-slug> --no-task [options]   # ad-hoc, no task reference"
 }
 
 # aw_tracker_usage_notes
@@ -190,7 +190,7 @@ aw_tracker_usage_notes() { :; }
 #
 # Tracker-flavoured lines of the `Examples:` block. Printed.
 aw_tracker_usage_examples() {
-  echo "  task-work refactor-auth"
+  echo "  task-work refactor-auth --no-task"
   echo "  task-work spike-idea --no-launch"
 }
 

@@ -55,9 +55,9 @@ ENV
 }
 
 aw_agent_usage_examples() {
-  echo "  task-work refactor-auth -m claude-sonnet-5.5 --trust-all"
-  echo "  task-work refactor-auth --trust-all --no-auto-submit   # you will type in its tab"
-  echo "  TASK_WORK_MODEL=claude-sonnet-5.5 task-work new-thing"
+  echo "  task-work refactor-auth <ref> -m claude-sonnet-5.5 --trust-all"
+  echo "  task-work refactor-auth <ref> --trust-all --no-auto-submit   # you will type in its tab"
+  echo "  TASK_WORK_MODEL=claude-sonnet-5.5 task-work new-thing <ref>"
 }
 
 aw_agent_init_flags() {

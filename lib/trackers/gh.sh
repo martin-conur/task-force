@@ -29,19 +29,19 @@ aw_tracker_info_key() { echo GH_URL; }
 aw_tracker_usage_synopsis() {
   echo "  task-work <slug> <gh-url> [options]    # explicit slug + GitHub issue URL (preferred when an agent kicks it off)"
   echo "  task-work <gh-url> [options]           # slug derived from issue number (issue-N)"
-  echo "  task-work <free-form-slug> [options]   # ad-hoc, no GitHub URL"
+  echo "  task-work <free-form-slug> --no-task [options]   # ad-hoc, no GitHub URL"
 }
 
 aw_tracker_usage_examples() {
   echo '  task-work add-auth "https://github.com/owner/repo/issues/42"'
   echo "  task-work https://github.com/owner/repo/issues/42"
-  echo "  task-work refactor-auth"
+  echo "  task-work refactor-auth --no-task"
   echo "  task-work spike-idea --no-launch"
   echo '  task-work issue-42 "https://github.com/owner/repo/issues/42" --auto'
   echo "  # Stack a follow-up PR on top of an in-flight branch:"
   echo "  task-work issue-99 <url> --from task/issue-46 --base main --auto"
   echo "  # Spike off origin/main without checking it out:"
-  echo "  task-work spike --from origin/main"
+  echo "  task-work spike --from origin/main --no-task"
 }
 
 # ---------------- task-reviewer hooks ----------------

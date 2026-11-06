@@ -59,13 +59,13 @@ aw_tracker_worker_prompt() { printf 'Implement Jira issue: %s' "$1"; }
 aw_tracker_usage_synopsis() {
   echo "  task-work <slug> <jira-key-or-url> [options]   # explicit slug + Jira issue"
   echo "  task-work <jira-key-or-url> [options]          # slug derived from the key (proj-123)"
-  echo "  task-work <free-form-slug> [options]           # ad-hoc, no Jira issue"
+  echo "  task-work <free-form-slug> --no-task [options]   # ad-hoc, no Jira issue"
 }
 
 aw_tracker_usage_examples() {
   echo "  task-work PROJ-123"
   echo "  task-work https://your.atlassian.net/browse/PROJ-123"
-  echo "  task-work add-store-filtering"
+  echo "  task-work add-store-filtering --no-task"
   echo "  task-work --base develop PROJ-456"
   echo "  task-work spike-idea --no-launch"
   echo "  # Stack a follow-up on top of an in-flight branch:"

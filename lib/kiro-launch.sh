@@ -26,6 +26,11 @@
 # aw_require_kiro_agent): the flag set and the settings scope rules are
 # kiro-cli's to define. None can abort a launch — a slow or broken CLI
 # degrades to the old launch line, or to no warning.
+#
+# Not a gate but in the same family, aw_kiro_warn_hooks_shape (#370) flags an
+# agent config whose hooks V3 will lose. It reads the config's `hooks` shape
+# off the file, because that shape is task-init's to write; the engine and
+# the setting it still asks kiro-cli for.
 
 # The model every task-force kiro launch except the reviewer's passes as
 # --model (#259): task-work's worker, task-pm's PM, task-recreate-worker's
@@ -108,13 +113,13 @@ aw_kiro_engine() {
 # either value of the setting skips the dialog. Read with kiro-cli from
 # <workdir>, so workspace-scoped settings count. Always returns 0.
 #
-# The fix it names is `false`. Under false the configs stay as task-init wrote
-# them, and V3 loads them as they are, radio hooks firing (verified on 2.32.0).
-# `true` skips the dialog too, by rewriting .kiro/agents/*.json in place into
-# kiro-cli's "universal" format, whose `hooks` is an array. That used to be a
-# caveat worth printing, because task-init's hook merge and task-remove's strip
-# read `hooks` only as an object; both handle the array shape since #267, so
-# the message no longer warns the user off it.
+# The fix it names is `true`, which skips the dialog by rewriting
+# .kiro/agents/*.json in place into kiro-cli's "universal" format, whose
+# `hooks` is an array. task-init's hook merge and task-remove's strip handle
+# that shape since #267. It used to name `false`, under which the configs stay
+# as task-init wrote them: V3 loaded those with radio hooks firing on 2.32.0,
+# but on 3.1.0 it loads none of their hooks, so a worker never registers
+# (#370). What `true` leaves behind is aw_kiro_warn_hooks_shape's concern.
 aw_kiro_warn_upgrade_gate() {
   local workdir="${1:-$PWD}" what="${2:-the agent}" v
   [[ "$(aw_kiro_engine "$workdir")" == v3 ]] || return 0
@@ -125,7 +130,58 @@ aw_kiro_warn_upgrade_gate() {
     echo "         unset, so $what will stop at kiro's \"upgrade your agent configs\""
     echo "         dialog before its first turn, and nobody types in a dispatched tab"
     echo "         (#257). Answer it in the tab, or skip it for good:"
-    echo "           kiro-cli settings chat.enableAutoAgentUpgrade false"
+    echo "           kiro-cli settings chat.enableAutoAgentUpgrade true"
+  } >&2
+  return 0
+}
+
+# aw_kiro_warn_hooks_shape <workdir> <agent> <what>
+#
+# Warn on stderr when <what> will run on the V3 engine from an agent config
+# whose `hooks` is still the object task-init writes, not kiro-cli's universal
+# array (#370). <workdir>/.kiro/agents/<agent>.json is read, else the global
+# ~/.kiro/agents one, as aw_require_kiro_agent resolves it. Always returns 0.
+#
+# Probed on kiro-cli 3.1.0 in a scratch HOME, two turns per run:
+#   - chat.enableAutoAgentUpgrade false: the object-shaped file is loaded as
+#     is and not one of its hooks fires, agentSpawn included.
+#   - true (or the dialog answered): the file is rewritten to universal at
+#     launch and every hook fires, but the committed copy is still the object
+#     shape. When anything puts that copy back while the agent runs (a `git
+#     stash`, `checkout`, `reset --hard`, a branch switch or merge), V3
+#     hot-reloads the agent from it and drops every hook for the rest of the
+#     session, even once the universal file is back. Nothing refreshes the
+#     heartbeat, and radio calls the role dead. A reload of a universal file,
+#     edited or not, keeps them.
+# A committed universal config has neither problem. Shipping one from
+# task-init is #350; until then the fix is to upgrade and commit it by hand.
+aw_kiro_warn_hooks_shape() {
+  local workdir="${1:-$PWD}" agent="${2:-worker}" what="${3:-the agent}" cfg v
+  command -v jq >/dev/null 2>&1 || return 0
+  cfg="$workdir/.kiro/agents/$agent.json"
+  [[ -r "$cfg" ]] || cfg="$HOME/.kiro/agents/$agent.json"
+  [[ -r "$cfg" ]] || return 0
+  [[ "$(jq -r '.hooks | type' "$cfg" 2>/dev/null)" == object ]] || return 0
+  [[ "$(aw_kiro_engine "$workdir")" == v3 ]] || return 0
+  v=$(cd "$workdir" 2>/dev/null && kiro-cli settings -f json chat.enableAutoAgentUpgrade 2>/dev/null) || v=""
+  {
+    if [[ "$v" == false ]]; then
+      echo "Warning: $cfg still has task-init's object-shaped \`hooks\`, and"
+      echo "         chat.enableAutoAgentUpgrade is false, so kiro-cli's V3 engine loads it"
+      echo "         as is and fires none of its hooks (kiro-cli 3.1.0): $what will never"
+      echo "         register with radio (#370)."
+    else
+      echo "Warning: $cfg still has task-init's object-shaped \`hooks\`. kiro-cli's V3"
+      echo "         engine rewrites it at launch, but the committed copy keeps the old shape:"
+      echo "         a git stash, checkout or reset that puts it back while $what runs"
+      echo "         drops every radio hook for the rest of the session, and radio then calls"
+      echo "         it dead (#370)."
+    fi
+    echo "         Fix it once, in the main checkout, and commit the result:"
+    echo "           kiro-cli settings chat.enableAutoAgentUpgrade true"
+    echo "           kiro-cli agent upgrade .kiro/agents && git add .kiro/agents && git commit"
+    echo "         task-init keeps the upgraded shape (#267); a worktree forked before the"
+    echo "         commit needs \`git merge <base>\`."
   } >&2
   return 0
 }

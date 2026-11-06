@@ -60,6 +60,8 @@ DOCUMENTED_GREPS=(
   'refusing to wipe'
   'recover-role:'
   'register: no-op'
+  'waking anyway'
+  'hook-noop:'
 )
 
 # Print the runbook block of a workflow doc: the heading through the end of the
@@ -157,6 +159,17 @@ runbook_block() {
     run grep -cF -- 'register: no-op' "$f"
     assert_success
     refute_output "0"
+  done
+}
+
+@test "the frozen-heartbeat kiro row is in the README and every workflow doc (#370)" {
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
+           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    for s in 'waking anyway' 'hook-noop:' 'ContextualHookInvoked' 'kiro-cli agent upgrade .kiro/agents'; do
+      run grep -cF -- "$s" "$f"
+      assert_success
+      refute_output "0"
+    done
   done
 }
 

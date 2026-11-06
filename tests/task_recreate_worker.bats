@@ -746,7 +746,7 @@ dead_worker_symlinked_base() {
   dead_worker issue-42
   STUB_KIRO_ENGINE=v3 AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_success
-  assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade false"
+  assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade true"
   dead_worker issue-43
   STUB_KIRO_ENGINE=v3 AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-43 --no-launch
   assert_success

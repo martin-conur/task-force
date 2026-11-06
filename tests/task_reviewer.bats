@@ -786,6 +786,18 @@ teardown() {
   refute_output --partial "chat.enableAutoAgentUpgrade"
 }
 
+@test "kiro task-reviewer: warns on V3 when the reviewer config's hooks are object-shaped (#370)" {
+  printf '%s\n' '{"name":"reviewer","hooks":{"agentSpawn":[{"command":"radio register --role x"}]}}' \
+    > "$MAIN_REPO/.kiro/agents/reviewer.json"
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true AW_IMPL=kiro-gh run "$TASK_REVIEWER" 45
+  assert_success
+  assert_output --partial "reviewer.json still has task-init's object-shaped"
+  assert_output --partial "while the reviewer runs"
+  STUB_KIRO_ENGINE=v2 STUB_KIRO_AUTO_UPGRADE=true AW_IMPL=kiro-gh run "$TASK_REVIEWER" 46
+  assert_success
+  refute_output --partial "object-shaped"
+}
+
 # The model and the PR URL are spliced into the `bash -ic` payload, so both are
 # %q'd as task-work does (#157). Pinned by re-parsing the captured payload the
 # way the spawned shell does and reading back the argv kiro-cli would receive:

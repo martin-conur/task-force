@@ -169,6 +169,10 @@ esac
 # report queues against a mailbox nobody is reading (#218).
 if [[ "$AGENT" == kiro ]]; then
   aw_require_kiro_agent pm "$REPO_ROOT" "task-init ${IMPL}" || exit 1
+  # A PM's hooks are lost the same way a worker's are (#370): it runs in the
+  # main checkout, where a `git stash` or `checkout` restores the committed
+  # config under it.
+  aw_kiro_warn_hooks_shape "$REPO_ROOT" pm "the PM"
 fi
 # The profile's refusals (#355) land here too, before the tab is renamed.
 if [[ -n "$PROFILE" ]]; then

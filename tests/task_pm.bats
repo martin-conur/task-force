@@ -137,6 +137,19 @@ teardown() {
   assert_output --partial "chat --agent pm"
 }
 
+# The PM's hooks are lost the way a worker's are (#370): it runs in the main
+# checkout, where a git stash or checkout restores the committed config.
+@test "kiro task-pm warns on V3 when the pm config's hooks are object-shaped (#370)" {
+  printf '%s\n' '{"name":"pm","hooks":{"agentSpawn":[{"command":"radio register --role x"}]}}' \
+    > "$MAIN_REPO/.kiro/agents/pm.json"
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true AW_IMPL=kiro-gh run "$TASK_PM"
+  assert_success
+  assert_output --partial "pm.json still has task-init's object-shaped"
+  assert_output --partial "while the PM runs"
+  run stub_calls kiro-cli
+  assert_output --partial "chat --agent pm"
+}
+
 # A --model flag is the only thing that outranks the user's chat.defaultModel
 # (#259, lib/kiro-launch.sh), so the PM's default rides the exec line. Every kiro
 # loadout shares that line today; each is pinned so a fork of it cannot regress

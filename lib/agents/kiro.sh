@@ -103,12 +103,14 @@ aw_agent_spec_optional() { return 1; }
 # Also where the trust-all gate is flagged (#157): a warning, never a refusal,
 # and only when kiro-cli is actually dispatched — under --no-launch you start
 # it in the tab yourself. NO_LAUNCH is the body's, like MODEL and TRUST_ALL.
-# The V3 upgrade dialog (#257) is flagged the same way, trust-all or not.
+# The V3 upgrade dialog (#257) is flagged the same way, trust-all or not, and
+# so is a config whose hooks V3 will lose (#370).
 aw_agent_preflight() {
   aw_require_kiro_agent worker "$1" "task-init $2" || return 1
   [[ -n "${NO_LAUNCH:-}" ]] && return 0
   [[ -n "$TRUST_ALL" ]] && aw_kiro_warn_trust_gate "$1" "the worker"
   aw_kiro_warn_upgrade_gate "$1" "the worker"
+  aw_kiro_warn_hooks_shape "$1" worker "the worker"
   return 0
 }
 

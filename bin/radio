@@ -440,8 +440,8 @@ _register_flag_value() {
 # a dot) used to hit _require_role's `exit 2` inside _update_state, blocking
 # every prompt for the session's life. Unset role → 0, logged hourly (plain
 # `claude` session, #370); invalid role → logged 0 (misconfiguration, but
-# never the user's problem mid-prompt). User-invoked commands (read, ack, send) keep failing
-# loudly via _require_role.
+# never the user's problem mid-prompt). User-invoked commands (read, ack,
+# send) keep failing loudly via _require_role.
 _hook_role_gate() {
   _silent_exit_if_no_role "$1"
   if ! _validate_role "$TASK_FORCE_ROLE" 2>/dev/null; then

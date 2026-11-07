@@ -15,7 +15,10 @@ Each file at the top level is the unedited output of
 
     kiro-cli agent upgrade --no-backup <dir>
 
-on **kiro-cli 2.32.0**, run over the matching input in `v2/`. The inputs are
+on **kiro-cli 2.32.0**, run over the matching input in `v2/`. The two radio
+fixtures were regenerated on **kiro-cli 3.1.0** when task-init gained the
+`postToolUse` hook (#322); 3.1.0 reproduced the four 2.32.0 files byte for
+byte first, so only that hook differs. The inputs are
 minimal configs in task-init's own shape, with the radio commands copied
 verbatim from what `kiro-gh/bin/task-init` installs. They are kept small on
 purpose so the fixtures do not go stale whenever a shipped prompt changes. To
@@ -38,8 +41,8 @@ gave byte-identical files.
 
 | File | Input hooks | What it is for |
 |------|-------------|----------------|
-| `radio-and-user.json` | the three radio hooks (kiro-gh), plus the user's own `stop` hook and a `preToolUse` hook with a `matcher` and `timeout_ms` | an upgraded config of a repo task-init already set up: the merge must leave it alone, and the strip must take out the radio entries and nothing else |
-| `radio-only.json` | the three radio hooks only | the strip empties `hooks` and drops the key |
+| `radio-and-user.json` | the four radio hooks (kiro-gh), plus the user's own `stop` hook and a `preToolUse` hook with a `matcher` and `timeout_ms` | an upgraded config of a repo task-init already set up: the merge must leave it alone, and the strip must take out the radio entries and nothing else |
+| `radio-only.json` | the four radio hooks only | the strip empties `hooks` and drops the key |
 | `user-only.json` | the user's own `agentSpawn` and `stop` hooks | a config with no radio hooks yet: the merge must add them in the universal shape |
 | `no-hooks.json` | none — no `hooks` key | the upgrade writes no `hooks` either, so the merge has no shape to read: it must create an array, not the object-in-a-universal-file hybrid |
 

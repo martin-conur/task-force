@@ -337,6 +337,13 @@ _radio_install_hooks() {
   # kiro honours Stop-hook block JSON (#163's drain) is a separate contract
   # from stdout injection and is untested — #221.
   local ready_cmd="radio ready"
+  # Proof of life mid-turn (#322). A turn that dies on an API error fires
+  # `userPromptSubmit` and never `stop`, leaving the role `busy`; `radio send`
+  # wakes a kiro `busy` that no hook has touched for a while, and this is what
+  # keeps a long turn that is really working inside that window. It rewrites
+  # LAST_HEARTBEAT only, prints nothing and always exits 0, so it can neither
+  # block a tool nor reach the model.
+  local tool_cmd="radio heartbeat"
 # endregion:kiro-radio-hook-cmds
 
   if [[ ! -d "$agents_dir" ]]; then
@@ -376,6 +383,7 @@ _radio_install_hooks() {
       --arg spawn "$register_cmd" \
       --arg ups   "$busy_cmd" \
       --arg stop  "$ready_cmd" \
+      --arg tool  "$tool_cmd" \
       '
       def is_radio: (.command // .action.command? // "") | startswith("radio ");
       def add_radio(arr; cmd):
@@ -398,12 +406,14 @@ _radio_install_hooks() {
                   | add_radio_u("agentSpawn";       $spawn)
                   | add_radio_u("userPromptSubmit"; $ups)
                   | add_radio_u("stop";             $stop)
+                  | add_radio_u("postToolUse";      $tool)
                   | map(select((.trigger == "agentStop" and is_radio) | not)) )
       else
         .hooks //= {}
         | .hooks.agentSpawn       = add_radio(.hooks.agentSpawn;       $spawn)
         | .hooks.userPromptSubmit = add_radio(.hooks.userPromptSubmit; $ups)
         | .hooks.stop             = add_radio(.hooks.stop;             $stop)
+        | .hooks.postToolUse      = add_radio(.hooks.postToolUse;      $tool)
         | .hooks.agentStop        = drop_radio(.hooks.agentStop)
         | if (.hooks.agentStop | length) == 0 then del(.hooks.agentStop) else . end
       end
@@ -428,6 +438,7 @@ _radio_install_hooks() {
     [[ -f "$target" ]] || continue
     one=$(jq -r \
       --arg spawn "$register_cmd" --arg ups "$busy_cmd" --arg stop "$ready_cmd" \
+      --arg tool "$tool_cmd" \
       --arg name "${target##*/}" '
       def entries(evt):
         if (.hooks | type) == "array"
@@ -441,6 +452,7 @@ _radio_install_hooks() {
       ( stray("agentSpawn";       $spawn)
       + stray("userPromptSubmit"; $ups)
       + stray("stop";             $stop)
+      + stray("postToolUse";      $tool)
       ) | .[]
       ' "$target" 2>/dev/null || true)
     if [[ -n "$one" ]]; then stray+="$one"$'\n'; fi

@@ -27,6 +27,11 @@
         "command": "./my-own-stop.sh"
       }
     ],
+    "postToolUse": [
+      {
+        "command": "radio heartbeat"
+      }
+    ],
     "preToolUse": [
       {
         "command": "./guard.sh",

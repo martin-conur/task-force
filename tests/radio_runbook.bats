@@ -173,6 +173,20 @@ runbook_block() {
   done
 }
 
+@test "the stuck-busy kiro row is in the README and every workflow doc (#322)" {
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}" \
+           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    for s in 'TASK_FORCE_KIRO_BUSY_STALE_SECS' 'radio heartbeat' 'but its tab is still open — kiro, waking anyway' '▶? busy?'; do
+      run grep -cF -- "$s" "$f"
+      assert_success
+      refute_output "0"
+    done
+  done
+  # The log line the row quotes is the one radio writes.
+  run grep -cF 'no hook for ${age}s) but its tab is still open — kiro, waking anyway' "$REPO_ROOT_REAL/bin/radio"
+  refute_output "0"
+}
+
 @test "loadout=unknown is a real re-seed outcome, not an invented grep" {
   # Assembled at runtime: the sidecar read falls back to ${TASK_FORCE_LOADOUT:-unknown}
   # and the re-seed line prints `loadout=$loadout`, so the literal string only

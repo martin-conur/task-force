@@ -70,7 +70,11 @@ ignore fields it does not know.
 `role`, `state` (`idle` \| `busy` \| `awaiting` \| null), `last_heartbeat` (the
 session's `LAST_HEARTBEAT`: radio rewrites it on every state change and every
 register, so it is when the session was last heard from, not when it entered
-its current state), `tab`, `tab_id`,
+its current state), `busy_stale` (true for a kiro session at `busy` that no
+hook has touched for `TASK_FORCE_KIRO_BUSY_STALE_SECS`, default 600: its turn
+likely died on an API error, which fires no `stop`, #322. kiro refreshes the
+heartbeat on every tool call, so a working turn stays fresh. Always false for
+claude and with no session; `state` itself stays the raw `STATE=`), `tab`, `tab_id`,
 `zellij_session`, `agent`, `profile` (the agent profile it was launched with,
 `--profile`, #355, or null): all from `radio/sessions/pm-<name>.info`, null when
 there is no session. Then:
@@ -147,7 +151,7 @@ The item fields above, plus:
 | `pr` | `{number, url, title, state, is_draft, head, summary, merged_at, merge_sha}`, found by the `task/<slug>` head branch on every tracker, else null. If no PR has that head, the PR the worker named in its own radio messages is used |
 | `status` | see below |
 | `last_intent` | the latest radio message to or from this worker, or about its PR: `{intent, from, to, pr, at}`. `pr` is a number, or null when the message names none |
-| `session` | the worker's radio session: `{role, state, last_heartbeat, tab, tab_id, zellij_session, agent, profile}`, or null |
+| `session` | the worker's radio session: `{role, state, last_heartbeat, busy_stale, tab, tab_id, zellij_session, agent, profile}`, or null |
 | `reviewers` | `[{pr, role, session}]`. `pr` is a number |
 
 `status` comes from the PR's state plus the latest review intent exchanged about

@@ -413,7 +413,7 @@ _session_auto_submit() {
   STUB_KIRO_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task v3-setting
   assert_success
   assert_output --partial "the worker on its V3 engine and chat.enableAutoAgentUpgrade is"
-  assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade false"
+  assert_output --partial "kiro-cli settings chat.enableAutoAgentUpgrade true"
   # No longer warned off `true`: task-init and task-remove handle the
   # universal format it upgrades the configs into since #267.
   refute_output --partial "cannot merge radio hooks"
@@ -425,7 +425,7 @@ _session_auto_submit() {
   # V3 as kiro-cli's own default (3.0), the engine setting unset.
   STUB_KIRO_DEFAULT_ENGINE=v3 run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task v3-default
   assert_success
-  assert_output --partial "chat.enableAutoAgentUpgrade false"
+  assert_output --partial "chat.enableAutoAgentUpgrade true"
 
   # Either value of the setting skips the dialog, so neither warns.
   for v in false true; do
@@ -442,6 +442,51 @@ _session_auto_submit() {
   STUB_KIRO_DEFAULT_ENGINE= run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task one-engine
   assert_success
   refute_output --partial "chat.enableAutoAgentUpgrade"
+}
+
+# An agent config whose `hooks` is still task-init's object loses them on V3
+# (#370): kiro-cli 3.1 fires none of them with chat.enableAutoAgentUpgrade
+# false, and rewrites the file at launch otherwise, so a git stash or checkout
+# that puts the committed copy back mid-session drops them for the session.
+_kiro_worker_hooks() {   # <object|array>
+  local f="$MAIN_REPO/.kiro/agents/worker.json"
+  if [[ "$1" == object ]]; then
+    printf '%s\n' '{"name":"worker","hooks":{"agentSpawn":[{"command":"radio register --role x"}]}}' > "$f"
+  else
+    printf '%s\n' '{"name":"worker","permissions":{},"hooks":[{"name":"radio-agentSpawn","trigger":"agentSpawn","action":{"type":"command","command":"radio register --role x"},"timeout":10}]}' > "$f"
+  fi
+}
+
+@test "kiro warns on V3 when the worker config's hooks are still object-shaped (#370)" {
+  _kiro_worker_hooks object
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-true
+  assert_success
+  assert_output --partial "$MAIN_REPO/.kiro/agents/worker.json still has task-init's object-shaped"
+  assert_output --partial "a git stash, checkout or reset that puts it back while the worker runs"
+  assert_output --partial "kiro-cli agent upgrade .kiro/agents && git add .kiro/agents && git commit"
+  # Still a warning: the launch goes ahead.
+  assert_stub_called zellij "kiro-cli chat --agent worker"
+
+  # Under false nothing is rewritten, and none of the hooks fire at all.
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=false run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-false
+  assert_success
+  assert_output --partial "fires none of its hooks (kiro-cli 3.1.0): the worker will never"
+  refute_output --partial "puts it back while"
+}
+
+@test "kiro does not warn about the hooks shape off V3, on universal configs, or under --no-launch (#370)" {
+  _kiro_worker_hooks object
+  STUB_KIRO_ENGINE=v2 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-v2
+  assert_success
+  refute_output --partial "object-shaped"
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task --no-launch shape-nolaunch
+  assert_success
+  refute_output --partial "object-shaped"
+
+  _kiro_worker_hooks array
+  STUB_KIRO_ENGINE=v3 STUB_KIRO_AUTO_UPGRADE=true run env AW_IMPL=kiro-gh "$TASK_WORK" --no-task shape-universal
+  assert_success
+  refute_output --partial "object-shaped"
 }
 
 @test "kiro --no-launch neither warns about nor reads the V3 upgrade setting (#257)" {

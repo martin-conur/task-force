@@ -507,3 +507,34 @@ assert_ambient_pr_number_does_not_force_delete() {
   # An empty/unsafe role must never rm -rf the whole mailbox root.
   assert [ -d "$TASK_FORCE_HOME/radio/mailbox/some-other-role" ]
 }
+
+@test "claude-gh: --remove-worktree removes its own role's session sidecars (#375)" {
+  export TASK_FORCE_ROLE="worker-$(basename "$MAIN_REPO")-$SLUG"
+  local s="$TASK_FORCE_HOME/radio/sessions"
+  mkdir -p "$s"
+  for ext in loadout agent auto-submit profile; do
+    printf 'x' > "$s/$TASK_FORCE_ROLE.$ext"
+  done
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  for ext in loadout agent auto-submit profile; do
+    assert [ ! -f "$s/$TASK_FORCE_ROLE.$ext" ]
+  done
+}
+
+@test "claude-gh: --remove-worktree keeps the sidecars of a role that is not this worktree's (#375)" {
+  # task-done typed in the PM's tab must not take the PM's sidecars with it.
+  export TASK_FORCE_ROLE="pm-$(basename "$MAIN_REPO")"
+  local s="$TASK_FORCE_HOME/radio/sessions"
+  mkdir -p "$s"
+  for ext in loadout agent auto-submit profile; do
+    printf 'x' > "$s/$TASK_FORCE_ROLE.$ext"
+  done
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  for ext in loadout agent auto-submit profile; do
+    assert [ -f "$s/$TASK_FORCE_ROLE.$ext" ]
+  done
+}

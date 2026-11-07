@@ -3258,6 +3258,34 @@ _surface_dead_letter_report() {
 # dir. Everything the gate protected still holds: a LIVE role's inbox is never
 # touched at any age, and a dead role still inside the cutoff keeps its mail (it
 # may yet come back).
+# Reclaim <role>'s session sidecars (#188, #375): .loadout, .agent,
+# .auto-submit, .profile. Not .aliases, which is a live primary PM's routing.
+# The caller has already checked that the role has no session file.
+# $2=dry_run, $3=output prefix, $4=cutoff epoch (empty = any age: the role's
+# mailbox was just reclaimed, which is retirement enough), $5=only this one
+# file (the sessions-dir walk visits sidecars one at a time).
+# Sets $RECLAIMED_SIDECARS_N.
+_reclaim_sidecars() {
+  local role="$1" dry="$2" pfx="$3" cutoff="$4" only="${5:-}" f m
+  RECLAIMED_SIDECARS_N=0
+  for f in "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")" \
+           "$(_auto_submit_sidecar "$role")" "$(_profile_sidecar "$role")"; do
+    [[ -n "$only" && "$f" != "$only" ]] && continue
+    [[ -f "$f" ]] || continue
+    if [[ -n "$cutoff" ]]; then
+      m=$(_file_mtime "$f") || true
+      [[ -n "$m" ]] || continue
+      (( m <= cutoff )) || continue
+    fi
+    echo "${pfx}remove sidecar: ${f##*/}"
+    if (( ! dry )); then
+      rm -f "$f"
+      _log "gc: removed sidecar ${f##*/}"
+    fi
+    RECLAIMED_SIDECARS_N=$(( RECLAIMED_SIDECARS_N + 1 ))
+  done
+}
+
 cmd_gc() {
   local dry_run=0 max_age_days=14
   while [[ $# -gt 0 ]]; do
@@ -3276,7 +3304,7 @@ cmd_gc() {
   cutoff=$(( now_epoch - max_age_days * 86400 ))
   (( dry_run )) && pfx="[dry-run] "
 
-  local removed_dirs=0 removed_msgs=0 dead_lettered=0
+  local removed_dirs=0 removed_msgs=0 dead_lettered=0 removed_sidecars=0
 
   if [[ -d "$MAILBOX_DIR" ]]; then
     shopt -s nullglob
@@ -3325,16 +3353,16 @@ cmd_gc() {
           if (( ! dry_run )); then
             rm -rf "$roledir"
             _log "gc: removed dead mailbox role=$role"
-            # Sidecars now outlive `unregister` (#188), so gc is what keeps
-            # them from accumulating one pair per retired worker slug forever.
-            # Stricter gate than the reclaim above: sweep only when there is NO
-            # session file at all, never on the merely-stale-heartbeat arm of
-            # _session_dead — a live-but-quiet role that lost its sidecars is
-            # the #188 bug being fixed here, and gc must not re-create it.
-            if [[ ! -f "$(_session_file "$role")" ]]; then
-              rm -f "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")" \
-                    "$(_auto_submit_sidecar "$role")" "$(_profile_sidecar "$role")"
-            fi
+          fi
+          # Sidecars now outlive `unregister` (#188), so gc is what keeps
+          # them from accumulating one set per retired worker slug forever.
+          # Stricter gate than the reclaim above: sweep only when there is NO
+          # session file at all, never on the merely-stale-heartbeat arm of
+          # _session_dead — a live-but-quiet role that lost its sidecars is
+          # the #188 bug being fixed here, and gc must not re-create it.
+          if [[ ! -f "$(_session_file "$role")" ]]; then
+            _reclaim_sidecars "$role" "$dry_run" "$pfx" ""
+            removed_sidecars=$(( removed_sidecars + RECLAIMED_SIDECARS_N ))
           fi
           removed_dirs=$(( removed_dirs + 1 ))
           continue
@@ -3361,10 +3389,37 @@ cmd_gc() {
     shopt -u nullglob
   fi
 
+  # Sidecars of a role that has no mailbox at all (#375). The sweep above only
+  # visits mailbox dirs, and the normal retirement path takes the mailbox away
+  # first: `task-done --remove-worktree` deletes its own role's mailbox (#169),
+  # and a role that never got mail never had one. Their sidecars were never
+  # visited, so they piled up by the hundred. Walk the sessions dir for them
+  # instead. A role that still has a mailbox dir is left to the sweep above, so
+  # its sidecars go with its mailbox and a dry run counts them once. Same #188
+  # gate: never a role with a session file, stale or not. Age is each file's own
+  # mtime (register rewrites them all), and an unreadable one is kept.
+  if [[ -d "$SESSIONS_DIR" ]]; then
+    local sc srole
+    for sc in "$SESSIONS_DIR"/*.loadout "$SESSIONS_DIR"/*.agent \
+              "$SESSIONS_DIR"/*.auto-submit "$SESSIONS_DIR"/*.profile; do
+      [[ -f "$sc" ]] || continue
+      srole="${sc##*/}"
+      case "$srole" in
+        *.auto-submit) srole="${srole%.auto-submit}" ;;
+        *)             srole="${srole%.*}" ;;
+      esac
+      [[ -n "$srole" ]] || continue
+      [[ -d "$MAILBOX_DIR/$srole" ]] && continue
+      [[ -f "$(_session_file "$srole")" ]] && continue
+      _reclaim_sidecars "$srole" "$dry_run" "$pfx" "$cutoff" "$sc"
+      removed_sidecars=$(( removed_sidecars + RECLAIMED_SIDECARS_N ))
+    done
+  fi
+
   # Rotate the log on a real run only — --dry-run touches nothing on disk.
   (( dry_run )) || _rotate_log
 
-  echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s), $dead_lettered dead-lettered message(s) (max-age ${max_age_days}d)"
+  echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s), $dead_lettered dead-lettered message(s), $removed_sidecars sidecar(s) (max-age ${max_age_days}d)"
 }
 
 # ----- dispatch -------------------------------------------------------------

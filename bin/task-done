@@ -292,6 +292,23 @@ case "$_ROLE" in
     ;;
 esac
 
+# And its session sidecars (#375). They outlive `unregister` on purpose (#188),
+# so a re-seed mid-life keeps the real loadout and agent, but this is
+# retirement, not a re-seed: the worktree goes next, so task-recreate-worker
+# (#230), the one later reader, refuses this slug anyway. Leaving them to gc
+# left hundreds behind. Only for the role that names THIS worktree, so a
+# task-done typed in another role's tab never takes that role's sidecars. The
+# list matches radio's _reclaim_sidecars; .aliases is a PM's and never ours.
+case "$SLUG" in
+  review-pr?*) _OWN_ROLE="reviewer-$REPO_NAME-${SLUG#review-}" ;;
+  *)           _OWN_ROLE="worker-$REPO_NAME-$SLUG" ;;
+esac
+if [[ -n "$_ROLE" && "$_ROLE" == "$_OWN_ROLE" ]]; then
+  _SESSIONS_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
+  rm -f "$_SESSIONS_DIR/$_ROLE.loadout" "$_SESSIONS_DIR/$_ROLE.agent" \
+        "$_SESSIONS_DIR/$_ROLE.auto-submit" "$_SESSIONS_DIR/$_ROLE.profile"
+fi
+
 # Agent processes still running in the worktree (#305), looked for while its
 # path still resolves. The agent running this command is not one of them: the
 # helper leaves out the caller's own agent tree, which goes with the tab. What

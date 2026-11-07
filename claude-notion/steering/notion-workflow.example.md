@@ -123,6 +123,18 @@ process tree goes with the tab. Run from anywhere else, the PM's tab included, a
 worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
 along: `grep 'stray-procs:' ~/.task-force/radio/log`.
 
+The radio state `task-done` takes down (session, mailbox, sidecars) belongs to
+the **worktree's own role** and no other (#377): `worker-<repo>-<slug>`, or
+`reviewer-<repo>-pr<N>` for `review-pr<N>`. Run from the PM's tab after a `cd`
+into a worker's worktree, or from a resumed session with no `$TASK_FORCE_ROLE`
+(#232), it derives that role from the worktree's `.<slug>.info`, says so on
+stderr and leaves the caller's own role alone. It refuses a derived role whose
+session file names another worktree, or whose heartbeat is under an hour old
+(`radio orphans` does not list it): that session belongs to a live process, and
+this one is not it. With no `.<slug>.info` to derive from, it says so and points
+at `radio orphans`. The worktree and the tab go either way. Each decision is
+logged: `grep 'task-done-role:' ~/.task-force/radio/log`.
+
 **Agent profiles** — `--profile <name>` on `task-work`, `task-reviewer`, `task-recreate-worker` and `task-pm` (#355)
 
 A profile runs Claude Code through an Anthropic-compatible gateway (an open model on Fireworks, say). It lives in `$TASK_FORCE_HOME/profiles.toml` (default `~/.task-force/profiles.toml`), one table per profile. This is the worked example from the #354 spike (`docs/agent-profiles-spike.md`):

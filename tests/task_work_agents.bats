@@ -363,6 +363,42 @@ _session_auto_submit() {
   [[ "$line" != *"--tui"* ]]                       || { echo "$line" >&2; return 1; }
 }
 
+# V3 asks "Trust this workspace?" in every folder it has never seen, which is
+# every new worktree, and nobody types in a dispatched tab (#378). The flag that
+# skips it rides the launch line only when kiro-cli lists it, ahead of the
+# prompt, and TASK_WORK_NO_TRUST_WORKSPACE=1 takes it back off.
+@test "kiro passes --trust-workspace when kiro-cli lists it, and not otherwise (#378)" {
+  local line
+  line=$(STUB_KIRO_TRUST_WORKSPACE=1 _launch_line kiro-gh)
+  [[ "$line" == *"kiro-cli chat --agent worker --model claude-opus-5.5 --tui --trust-workspace"* ]] || { echo "$line" >&2; return 1; }
+  line=$(_launch_line kiro-gh)
+  [[ "$line" == *"kiro-cli chat --agent worker"* ]] || { echo "$line" >&2; return 1; }
+  [[ "$line" != *"--trust-workspace"* ]]           || { echo "$line" >&2; return 1; }
+}
+
+@test "kiro TASK_WORK_NO_TRUST_WORKSPACE=1 drops --trust-workspace (#378)" {
+  local line
+  line=$(STUB_KIRO_TRUST_WORKSPACE=1 TASK_WORK_NO_TRUST_WORKSPACE=1 _launch_line kiro-gh)
+  [[ "$line" == *"kiro-cli chat --agent worker --model claude-opus-5.5 --tui"* ]] || { echo "$line" >&2; return 1; }
+  [[ "$line" != *"--trust-workspace"* ]] || { echo "$line" >&2; return 1; }
+}
+
+# On a real dispatch the flag goes ahead of the positional first turn, as --tui
+# does, and the task ref path builds the same line.
+@test "kiro --trust-workspace sits ahead of the task prompt (#378)" {
+  local url="https://github.com/owner/repo/issues/42"
+  STUB_KIRO_TRUST_WORKSPACE=1 run env AW_IMPL=kiro-gh "$TASK_WORK" trust-ws "$url"
+  assert_success
+  assert_stub_called zellij "--tui --trust-workspace \"Implement task: $url\""
+}
+
+@test "claude launches carry no --trust-workspace, whatever kiro-cli lists (#378)" {
+  local line
+  line=$(STUB_KIRO_TRUST_WORKSPACE=1 _launch_line claude-gh)
+  [[ "$line" == *"claude "* ]]           || { echo "$line" >&2; return 1; }
+  [[ "$line" != *"trust-workspace"* ]]   || { echo "$line" >&2; return 1; }
+}
+
 # kiro-cli's trust-all confirmation holds the first turn of a dispatched tab
 # nobody types in (#157). Disabling it is the user's call, so task-work warns
 # and launches anyway — and only when --trust-all is actually on.

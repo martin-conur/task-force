@@ -177,6 +177,14 @@ teardown() {
   assert_output "kiro-cli chat --agent pm --model claude-opus-5.5"
 }
 
+# The PM runs in the main checkout, the user's own folder, in a tab the user
+# types in: whether to trust it is theirs to answer, once (#378, bin/task-pm).
+@test "kiro task-pm does not pass --trust-workspace, even when kiro-cli lists it (#378)" {
+  STUB_KIRO_TRUST_WORKSPACE=1 AW_IMPL=kiro-gh "$TASK_PM"
+  run grep -F "kiro-cli chat --agent pm" "$STUB_CALLS_DIR/kiro-cli.calls"
+  assert_output "kiro-cli chat --agent pm --model claude-opus-5.5 --tui"
+}
+
 @test "kiro task-pm errors out cleanly outside a git repo" {
   local outside
   outside=$(mktemp -d)

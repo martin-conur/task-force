@@ -370,7 +370,7 @@ fn agent_line(
 fn pm_line(repo: &Repo, selected: bool, agent_w: usize, w: usize) -> Line<'static> {
     let pm = &repo.pm;
     let agent = pm_agent(repo);
-    let words = match (&pm.alias_of, pm.state.as_deref()) {
+    let words = match (&pm.alias_of, pm.shown_state()) {
         (Some(primary), _) => format!("via {primary}"),
         (None, None) => "no session".to_string(),
         (None, Some(state)) => state.to_string(),
@@ -393,7 +393,7 @@ fn pm_line(repo: &Repo, selected: bool, agent_w: usize, w: usize) -> Line<'stati
         "PM",
         &agent,
         agent_w,
-        pm.state.as_deref(),
+        pm.shown_state(),
         &words,
         dim(),
         Span::styled(owed.join(" · "), Style::default().fg(Color::Yellow)),
@@ -430,7 +430,7 @@ fn worker_line(
         label,
         &agent,
         agent_w,
-        session.and_then(|s| s.state.as_deref()),
+        session.and_then(|s| s.shown_state()),
         words,
         style,
         Span::styled(
@@ -453,7 +453,7 @@ fn reviewer_line(
     let rev = &item.reviewers[k];
     let session = rev.session.as_ref();
     let agent = reviewer_agent(repo, item, k);
-    let state = session.and_then(|s| s.state.as_deref());
+    let state = session.and_then(|s| s.shown_state());
     let words = match state {
         Some("busy") => "reviewing",
         Some(other) => other,
@@ -598,10 +598,12 @@ pub fn status_words(status: &str) -> &str {
     }
 }
 
-/// `▶` / `⏸` / `❓` for a session `STATE=`, or a dot with no session.
+/// `▶` / `⏸` / `❓` for a session `STATE=`, `▶?` for a stale kiro busy
+/// (#322), or a dot with no session.
 pub fn state_icon(state: Option<&str>) -> &'static str {
     match state {
         Some("busy") => "▶",
+        Some("busy?") => "▶?",
         Some("idle") => "⏸",
         Some("awaiting") => "❓",
         _ => "·",
@@ -642,7 +644,7 @@ fn in_flight_lines(
         w,
     );
     let session = item.session.as_ref();
-    let icon = state_icon(session.and_then(|s| s.state.as_deref()));
+    let icon = state_icon(session.and_then(|s| s.shown_state()));
     let age = session
         .and_then(|s| s.last_heartbeat.as_deref())
         .and_then(parse_time)
@@ -831,7 +833,7 @@ fn detail_view(f: &mut Frame, app: &mut App, area: Rect, now: DateTime<Utc>) {
                 meta.push(format!(
                     "{} {}",
                     r.role.as_deref().unwrap_or("reviewer"),
-                    state_icon(r.session.as_ref().and_then(|s| s.state.as_deref()))
+                    state_icon(r.session.as_ref().and_then(|s| s.shown_state()))
                 ));
             }
             head.push(Line::from(Span::styled(
@@ -1259,6 +1261,32 @@ mod tests {
         // No PM session and no worker session: no zellij session to name.
         assert!(line_with(&s, "jira-repo").ends_with("1 in flight"));
         assert!(screen(&s).contains("! needs you"));
+    }
+
+    #[test]
+    fn a_stale_kiro_busy_shows_as_busy_with_a_question_mark() {
+        // #322: a kiro turn that died on an API error left `busy` behind, and
+        // the snapshot says so. The row must not read as plainly running.
+        let mut doc: serde_json::Value = serde_json::from_str(MULTI).unwrap();
+        doc["repos"][1]["pm"]["busy_stale"] = serde_json::json!(true);
+        doc["repos"][0]["in_flight"][0]["session"]["busy_stale"] = serde_json::json!(true);
+        let mut a = app(&doc.to_string(), false);
+        let s = overview_lines(&mut a, 120);
+        assert!(
+            s[6].starts_with("     PM         kiro    ▶? busy?"),
+            "{}",
+            s[6]
+        );
+        let w = line_with(&s, "#267");
+        assert!(w.starts_with("     #267       claude  ▶? re-review"), "{w}");
+        // Unflagged, the same rows are as before.
+        let mut a = app(MULTI, false);
+        let s = overview_lines(&mut a, 120);
+        assert!(
+            s[6].starts_with("     PM         kiro    ▶  busy"),
+            "{}",
+            s[6]
+        );
     }
 
     /// The overview's lines, from the first repo row on, cut at `w`.

@@ -41,10 +41,21 @@ def decision_intents:
   ["review-complete-clean", "review-complete-with-findings", "changes-requested", "approved-and-merged"];
 def among($set): . as $x | $set | index([$x]) != null;
 
+# A kiro turn that dies on an API error fires no `stop` (#322), so its `busy`
+# outlives it. While a turn runs, every tool call refreshes the heartbeat
+# (`radio heartbeat` on postToolUse), so a kiro `busy` that no hook has touched
+# for $kiro_busy_stale seconds is probably sitting idle on an error. bin/radio's
+# send wakes such a role by the same window. Claude's Stop is reliable.
+def busy_stale($s):
+  $s.AGENT == "kiro" and $s.STATE == "busy"
+  and (($s.LAST_HEARTBEAT // "") as $hb
+       | $hb != "" and (($now | fromdateiso8601) - ($hb | fromdateiso8601) > $kiro_busy_stale));
+
 def session_obj($S; $role):
   $S[$role] as $s
   | if $s == null then null else
       {role: $role, state: ($s.STATE | nonempty), last_heartbeat: ($s.LAST_HEARTBEAT | nonempty),
+       busy_stale: busy_stale($s),
        tab: ($s.TAB | nonempty), tab_id: ($s.TAB_ID | nonempty),
        zellij_session: ($s.ZELLIJ_SESSION | nonempty), agent: ($s.AGENT | nonempty),
        profile: ($s.PROFILE | nonempty)}
@@ -182,7 +193,7 @@ def status($pr; $last_review; $has_reviewer):
     loadout: ($impl | nonempty),
     tracker: ($tracker | nonempty),
     agent: ($agent | nonempty),
-    pm: ((session_obj($S; $pm_role) // {role: $pm_role, state: null, last_heartbeat: null, tab: null,
+    pm: ((session_obj($S; $pm_role) // {role: $pm_role, state: null, last_heartbeat: null, busy_stale: false, tab: null,
                                        tab_id: null, zellij_session: null, agent: null,
                                        profile: null})
          + {alias_of: $alias_of, unread: $unread}),

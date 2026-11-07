@@ -23,6 +23,11 @@
       {
         "command": "radio ready"
       }
+    ],
+    "postToolUse": [
+      {
+        "command": "radio heartbeat"
+      }
     ]
   }
 }

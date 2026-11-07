@@ -19,6 +19,15 @@
       "timeout": 10
     },
     {
+      "name": "postToolUse-0",
+      "trigger": "postToolUse",
+      "action": {
+        "type": "command",
+        "command": "radio heartbeat"
+      },
+      "timeout": 10
+    },
+    {
       "name": "stop-0",
       "trigger": "stop",
       "action": {
@@ -51,7 +60,7 @@
   },
   "kiroUpgrade": {
     "revision": 2,
-    "fingerprint": "sha256:77256a8f5a9fd52c18cb02663fd26845d6f9b4559244a5cdc75a719f3a9bfab0",
+    "fingerprint": "sha256:cc8a078b6ed00d7b3a1c0460dd722b887e1cb9026bdc388d3c9da30ee36114bc",
     "source": "sha256:ed5caa7fd2c7babfe8906be86dc15224183be87a7dfd924f02221b4f4faee8e2"
   }
 }

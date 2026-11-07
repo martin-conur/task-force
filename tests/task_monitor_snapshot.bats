@@ -279,6 +279,38 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.in_flight[0].session.last_heartbeat')" 2026-10-20T10:00:00Z
 }
 
+# #322: a kiro turn that dies on an API error fires no `stop`, so the session
+# stays `busy` with nothing behind it. busy_stale says so; state stays raw.
+@test "busy_stale (#322): a kiro worker busy with no hook for over 600s is flagged" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  HB=$(ago 900) session "worker-$NAME-issue-5" busy AGENT=kiro
+  snap
+  assert_equal "$(q '.in_flight[0].session.state')" busy
+  assert_equal "$(q '.in_flight[0].session.busy_stale')" true
+}
+
+@test "busy_stale (#322): not for a fresh kiro busy, an idle kiro, or any claude session" {
+  sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
+  sidecar issue-6 GH_URL https://github.com/acme/widgets/issues/6
+  sidecar issue-7 GH_URL https://github.com/acme/widgets/issues/7
+  HB=$(ago 120) session "worker-$NAME-issue-5" busy AGENT=kiro
+  HB=$(ago 900) session "worker-$NAME-issue-6" idle AGENT=kiro
+  HB=$(ago 900) session "worker-$NAME-issue-7" busy
+  HB=$(ago 900) session "pm-$NAME" busy
+  snap
+  assert_equal "$(q '[.in_flight[] | {(.slug): .session.busy_stale}] | add | tojson')" \
+    '{"issue-5":false,"issue-6":false,"issue-7":false}'
+  assert_equal "$(q '.pm.busy_stale')" false
+}
+
+@test "busy_stale (#322): the PM is flagged too, and TASK_FORCE_KIRO_BUSY_STALE_SECS moves the window" {
+  HB=$(ago 120) session "pm-$NAME" busy AGENT=kiro
+  snap
+  assert_equal "$(q '.pm.busy_stale')" false
+  TASK_FORCE_KIRO_BUSY_STALE_SECS=60 snap
+  assert_equal "$(q '.pm.busy_stale')" true
+}
+
 @test "in flight gh: issue title and the first prose paragraph of its body" {
   sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
   issue 5 "Fix the widget" $'## Problem\n\nThe widget\nbreaks on Tuesdays.\n\nSecond paragraph.'

@@ -55,6 +55,9 @@ pub struct Pm {
     pub role: Option<String>,
     pub state: Option<String>,
     pub last_heartbeat: Option<String>,
+    /// A kiro `busy` no hook has touched for a while: its turn likely died on
+    /// an API error with no `stop` (#322).
+    pub busy_stale: bool,
     pub tab: Option<String>,
     #[serde(deserialize_with = "scalar")]
     pub tab_id: Option<String>,
@@ -80,12 +83,35 @@ pub struct Session {
     pub role: Option<String>,
     pub state: Option<String>,
     pub last_heartbeat: Option<String>,
+    /// As on [`Pm`] (#322).
+    pub busy_stale: bool,
     pub tab: Option<String>,
     #[serde(deserialize_with = "scalar")]
     pub tab_id: Option<String>,
     pub zellij_session: Option<String>,
     pub agent: Option<String>,
     pub profile: Option<String>,
+}
+
+/// The state a row shows: `STATE=`, except `busy?` for a stale busy (#322).
+fn shown(state: &Option<String>, busy_stale: bool) -> Option<&str> {
+    if busy_stale {
+        Some("busy?")
+    } else {
+        state.as_deref()
+    }
+}
+
+impl Session {
+    pub fn shown_state(&self) -> Option<&str> {
+        shown(&self.state, self.busy_stale)
+    }
+}
+
+impl Pm {
+    pub fn shown_state(&self) -> Option<&str> {
+        shown(&self.state, self.busy_stale)
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -103,6 +103,10 @@ MONITOR_HOME="$TF_HOME/monitor"
 NEXT_LIMIT=10
 DONE_MIN=10
 MERGED_INDEX_LIMIT=50
+# A kiro `busy` with no hook for this long reads as `busy_stale` (#322): the
+# same variable and default bin/radio's send wakes such a role by.
+KIRO_BUSY_STALE_SECS="${TASK_FORCE_KIRO_BUSY_STALE_SECS:-600}"
+[[ "$KIRO_BUSY_STALE_SECS" =~ ^[0-9]+$ ]] || KIRO_BUSY_STALE_SECS=600
 
 if [[ "$LOCAL_ONLY" == 1 ]]; then
   # The whole of --local's "no forge calls" guarantee. Every forge read in this
@@ -546,6 +550,7 @@ _snapshot_repo() {
     --arg agent "$agent" --arg now "$NOW" --arg fetched_at "$fetched_at" \
     --arg next_source "$next_source" --argjson next_limit "$NEXT_LIMIT" \
     --argjson forge_ok "$forge_ok" --argjson names "$names_json" \
+    --argjson kiro_busy_stale "$KIRO_BUSY_STALE_SECS" \
     --argjson open_prs "$open_prs" --argjson merged "$merged_index" \
     --slurpfile sessions "$WORK/sessions.json" \
     --slurpfile messages "$WORK/messages.ndjson" \

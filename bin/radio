@@ -28,6 +28,8 @@ Usage:
   radio ready                            mark this role idle
   radio busy                             mark this role busy
   radio awaiting                         mark this role awaiting user input
+  radio heartbeat                        refresh this role's LAST_HEARTBEAT, state unchanged
+                                         (kiro's postToolUse hook, #322)
   radio stop-hook                        Stop-hook entrypoint: empty inbox -> mark idle; unread
                                          messages -> mark busy + emit block JSON so the agent
                                          continues and drains them (reads hook payload on stdin)
@@ -57,10 +59,11 @@ A session that never registered (a resume whose environment lost that variable)
 has none, so `check` / `read` / `ack` / `send` derive it from disk — the worktree's
 `.<slug>.info` gives `worker-<repo>-<slug>`, a main checkout gives `pm-<repo>` —
 and refuse rather than act anonymously when they cannot (#229). Hook entrypoints
-(`busy` / `ready` / `awaiting` / `stop-hook` / `prompt-hook`, and `register` with
-no `--role`) stay silent no-ops in a plain `claude` session (#93). To repair such
-a session, `radio register --role <role> --tab <tab> …` works even with no
-$TASK_FORCE_ROLE — run it from the tab that role owns, so the tab binding resolves.
+(`busy` / `ready` / `awaiting` / `heartbeat` / `stop-hook` / `prompt-hook`, and
+`register` with no `--role`) stay silent no-ops in a plain `claude` session
+(#93). To repair such a session, `radio register --role <role> --tab <tab> …`
+works even with no $TASK_FORCE_ROLE — run it from the tab that role owns, so the
+tab binding resolves.
 Override the mailbox root with $TASK_FORCE_HOME (defaults to ~/.task-force).
 EOF
   exit "${1:-1}"
@@ -1106,8 +1109,15 @@ _ensure_session_file() {
 # Update STATE=… and LAST_HEARTBEAT=… on the current session file.
 _update_state() {
   local new_state="$1"
+  _touch_session "STATE=$new_state" || return 0
+  _rename_tab "$new_state"
+}
+
+# Rewrite LAST_HEARTBEAT, plus any KEY=VALUE given, on the current session
+# file. Returns 1 when there was nothing to update.
+_touch_session() {
   _require_role
-  _ensure_session_file || { _log "update_state: no identity env for $TASK_FORCE_ROLE"; return 0; }
+  _ensure_session_file || { _log "update_state: no identity env for $TASK_FORCE_ROLE"; return 1; }
   local f
   f=$(_session_file "$TASK_FORCE_ROLE")
 
@@ -1122,12 +1132,10 @@ _update_state() {
   # _ensure_session_file failure path above.
   local content
   content=$(cat "$f" 2>/dev/null || true)
-  [[ -n "$content" ]] || { _log "update_state: session file vanished for $TASK_FORCE_ROLE — skipping"; return 0; }
+  [[ -n "$content" ]] || { _log "update_state: session file vanished for $TASK_FORCE_ROLE — skipping"; return 1; }
 
-  # Replace STATE/LAST_HEARTBEAT, preserve everything else (shared grammar #167 review #5).
-  _session_set_fields "$f" "STATE=$new_state" "LAST_HEARTBEAT=$(_now)"
-
-  _rename_tab "$new_state"
+  # Replace the given fields, preserve everything else (shared grammar #167 review #5).
+  _session_set_fields "$f" "$@" "LAST_HEARTBEAT=$(_now)"
 }
 
 # Prefix the role's recorded zellij tab with an emoji reflecting STATE. No-op
@@ -2120,6 +2128,10 @@ cmd_unregister() {
 cmd_ready() { _hook_role_gate ready; _update_state idle; }
 cmd_busy()  { _hook_role_gate busy; _update_state busy; }
 cmd_awaiting() { _hook_role_gate awaiting; _update_state awaiting; }
+# kiro's postToolUse hook (#322): proof of life mid-turn, so a busy role whose
+# heartbeat goes quiet can be told from one that is still working. STATE and
+# the tab are left alone; this runs on every tool call.
+cmd_heartbeat() { _hook_role_gate heartbeat; _touch_session || true; }
 
 # Stop-hook entrypoint (#163). `radio send` makes exactly one wake attempt, at
 # send time — a message sent while the recipient is busy/awaiting queues with
@@ -2715,12 +2727,29 @@ cmd_send() {
     # `radio orphans`), the "drains on its next Stop" promise is a lie — no Stop
     # is coming — so escalate to a warning instead of falsely reassuring the
     # sender. Full self-heal of the stale session stays #127's job.
-    local hb hb_epoch now_epoch age
+    local hb hb_epoch now_epoch age=""
     hb=$(_session_field "$rs" LAST_HEARTBEAT || true)
     hb_epoch=$(_iso_to_epoch "$hb")
     now_epoch=$(date -u +%s)
-    if [[ -n "$hb_epoch" ]] && (( now_epoch - hb_epoch > 3600 )); then
-      age=$(( now_epoch - hb_epoch ))
+    [[ -n "$hb_epoch" ]] && age=$(( now_epoch - hb_epoch ))
+    # A kiro turn that dies on an API error fires `userPromptSubmit` and never
+    # `stop` (#322, probed on kiro-cli 3.1.0), so `radio busy` ran and `radio
+    # ready` never will. While a kiro turn really runs, every tool call's
+    # `postToolUse` hook refreshes the heartbeat, so a `busy` that no hook has
+    # touched for TASK_FORCE_KIRO_BUSY_STALE_SECS is most likely that dead
+    # turn, sitting idle at the prompt. #370's open-tab rule decides whether to
+    # wake it: the same evidence, a shorter window. Claude's Stop is reliable,
+    # and its busy keeps queueing.
+    if [[ -n "$age" && "$ragent" == kiro && "$rstate" == busy ]] \
+        && (( age <= 3600 && age > $(_kiro_busy_stale_secs) )) \
+        && _stale_role_tab_open "$rs"; then
+      _log "send: $to is busy (state=$rstate, no hook for ${age}s) but its tab is still open — kiro, waking anyway (id=$id)"
+      if _resolve_wake_pane "$rs" "$to" send "queued (id=$id)" \
+          && _send_wake "$rs" "$to" "$id" \
+               "although it has been busy with no hook for ${age}s: its turn likely ended on an error"; then
+        return 0
+      fi
+    elif [[ -n "$age" ]] && (( age > 3600 )); then
       # A kiro role can look dead while its agent is alive in an open tab
       # (#370): kiro-cli's V3 engine drops every hook of an agent whose config
       # it hot-reloaded in the old `hooks` shape, so nothing refreshes the
@@ -2768,12 +2797,20 @@ cmd_send() {
     || _send_outcome_wake_failed "$to" "write-chars failed" "$ragent"
 }
 
+# How long a kiro role may sit at `busy` with no hook before radio treats its
+# turn as dead (#322). task-monitor-snapshot reads the same variable with the
+# same default, for its `busy_stale`.
+_kiro_busy_stale_secs() {
+  local s="${TASK_FORCE_KIRO_BUSY_STALE_SECS:-600}"
+  [[ "$s" =~ ^[0-9]+$ ]] || s=600
+  printf '%s' "$s"
+}
+
 # _stale_role_tab_open <session file>: true when the tab at the recorded TAB_ID
 # is still listed under the role's own name — _live_tab_id's rc 0, never its
 # rc 3 recovery by name, since a same-named tab at another id is a weaker claim
 # than a stale heartbeat can stand against. The one rule for waking a role the
-# heartbeat calls dead (#370); #322's kiro role stuck busy is meant to reuse it
-# rather than grow a second.
+# heartbeat calls dead (#370), and a kiro role stuck busy (#322).
 _stale_role_tab_open() {
   local rs="$1" rtab rc=0
   [[ -n "${ZELLIJ:-}" ]] || return 1
@@ -3403,6 +3440,7 @@ case "$sub" in
   ready)       cmd_ready ;;
   busy)        cmd_busy ;;
   awaiting)    cmd_awaiting ;;
+  heartbeat)   cmd_heartbeat ;;
   stop-hook)   cmd_stop_hook ;;
   prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister "$@" ;;

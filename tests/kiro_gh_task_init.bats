@@ -285,7 +285,7 @@ teardown() {
 # radio hooks: .kiro/hooks/*.json
 # ---------------------------------------------------------------------------
 
-@test "merges the 3 radio hooks into every agent config, where kiro-cli reads them (#218)" {
+@test "merges the 4 radio hooks into every agent config, where kiro-cli reads them (#218, #322)" {
   # NOT .kiro/hooks/*.json: that is the Kiro IDE's directory, which kiro-cli
   # never reads. Writing there is what made radio dead on kiro — the hooks
   # parsed fine and simply never ran.
@@ -299,6 +299,10 @@ teardown() {
     assert_output --partial "radio register"
     assert_output --partial "radio busy"
     assert_output --partial "radio ready"
+    # Proof of life mid-turn: what tells a working kiro turn from one that
+    # died on an API error with no `stop` (#322).
+    run jq -r '.hooks.postToolUse | map(.command) | join(",")' "$TARGET_DIR/.kiro/agents/$agent.json"
+    assert_output "radio heartbeat"
   done
 }
 
@@ -318,9 +322,9 @@ teardown() {
   assert_success
   run "$KIRO_GH_TASK_INIT"
   assert_success
-  run jq -r '[.hooks.agentSpawn, .hooks.userPromptSubmit, .hooks.stop] | map(length) | @tsv' \
+  run jq -r '[.hooks.agentSpawn, .hooks.userPromptSubmit, .hooks.stop, .hooks.postToolUse] | map(length) | @tsv' \
     "$TARGET_DIR/.kiro/agents/worker.json"
-  assert_output "1	1	1"
+  assert_output "1	1	1	1"
 }
 
 @test "hooks are merged even when the policy KEEPS a customized agent config (#218)" {
@@ -409,6 +413,7 @@ teardown() {
   assert_line --index 0 --partial $'--loadout ${TASK_FORCE_LOADOUT:-kiro-gh}\t10'
   assert_line --index 1 $'radio-userPromptSubmit\tuserPromptSubmit\tcommand\tradio busy\t10'
   assert_line --index 2 $'radio-stop\tstop\tcommand\tradio ready\t10'
+  assert_line --index 3 $'radio-postToolUse\tpostToolUse\tcommand\tradio heartbeat\t10'
   # The user's own entries are untouched, first in line as they were.
   run jq -c '.hooks[0:2]' "$TARGET_DIR/.kiro/agents/planner.json"
   assert_output "$(jq -c '.hooks' "$KIRO_UNIVERSAL/user-only.json")"
@@ -431,7 +436,7 @@ teardown() {
   assert_output "array"
   run jq -r '[.hooks[] | "\(.name)=\(.action.command | split(" ")[0:2] | join(" "))"] | join(",")' \
     "$TARGET_DIR/.kiro/agents/reviewer.json"
-  assert_output "radio-agentSpawn=radio register,radio-userPromptSubmit=radio busy,radio-stop=radio ready"
+  assert_output "radio-agentSpawn=radio register,radio-userPromptSubmit=radio busy,radio-stop=radio ready,radio-postToolUse=radio heartbeat"
   run bash -c "diff <(jq -S . '$KIRO_UNIVERSAL/no-hooks.json') <(jq -S 'del(.hooks)' '$TARGET_DIR/.kiro/agents/reviewer.json')"
   assert_success
 }
@@ -462,7 +467,7 @@ teardown() {
   assert_success
   run jq -r '[.hooks[] | .trigger] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' \
     "$TARGET_DIR/.kiro/agents/planner.json"
-  assert_output "agentSpawn=2 stop=2 userPromptSubmit=1"
+  assert_output "agentSpawn=2 postToolUse=1 stop=2 userPromptSubmit=1"
 }
 
 @test "universal format: object-shaped configs beside it stay objects (#267)" {
@@ -491,6 +496,19 @@ teardown() {
   run jq -r '[.hooks[] | select(.trigger == "stop") | .action.command] | join(",")' \
     "$TARGET_DIR/.kiro/agents/worker.json"
   assert_output "radio ready && radio check,./my-own-stop.sh"
+}
+
+@test "a stale radio command on postToolUse is warned about, not rewritten (#322)" {
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  jq '.hooks.postToolUse = [{"command":"radio busy"}]' "$TARGET_DIR/.kiro/agents/worker.json" > "$TARGET_DIR/w.tmp"
+  mv "$TARGET_DIR/w.tmp" "$TARGET_DIR/.kiro/agents/worker.json"
+
+  run "$KIRO_GH_TASK_INIT"
+  assert_success
+  assert_output --partial "worker.json postToolUse: radio busy — replace with: radio heartbeat"
+  run jq -r '.hooks.postToolUse | map(.command) | join(",")' "$TARGET_DIR/.kiro/agents/worker.json"
+  assert_output "radio busy"
 }
 
 @test "radio-register hook embeds the loadout name (env-overridable) on agentSpawn" {

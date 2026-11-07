@@ -414,7 +414,7 @@ JSON
   assert_success
   printf '%s\n' "$output" > "$MAIN_REPO/.kiro/agents/worker.json"
   run jq -r '[.hooks | keys[]] | join(",")' "$MAIN_REPO/.kiro/agents/worker.json"
-  assert_output "agentSpawn,stop,userPromptSubmit"
+  assert_output "agentSpawn,postToolUse,stop,userPromptSubmit"
 
   run "$TASK_CONFIG" set assistant claude --yes
   assert_success

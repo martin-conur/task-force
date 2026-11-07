@@ -61,9 +61,41 @@ AW_KIRO_REVIEWER_MODEL=claude-sonnet-5.5
 # Captured, not piped into `grep -q`: grep exits on its match, kiro-cli takes
 # SIGPIPE writing the rest, and under the callers' pipefail the pipeline fails.
 aw_kiro_ui_flag() {
-  local help
+  _aw_kiro_chat_flag --tui
+}
+
+# aw_kiro_trust_workspace_flag
+#
+# Prints ` --trust-workspace` when the installed kiro-cli advertises it, and
+# nothing otherwise or under TASK_WORK_NO_TRUST_WORKSPACE=1 (#378). The V3
+# engine stores trust per folder and asks "Trust this workspace?" in one it has
+# never seen, which is every worktree task-work creates; nobody types in a
+# dispatched tab, so the worker would wait there for good. The flag skips that
+# prompt for one launch and saves nothing.
+#
+# Unlike the trust-all confirmation above, this is ours to skip. task-force made
+# the folder, from the user's own repo, and what the prompt guards (the
+# folder's hooks, agents and MCP servers) is that repo's committed config with
+# task-force's radio hooks in it.
+# TASK_WORK_NO_TRUST_WORKSPACE=1 puts the prompt back for a user who wants it.
+#
+# Gated on --help alone, not on aw_kiro_engine: kiro-cli 3.1.0 takes the flag on
+# the v2 engine and ignores it (probed: a `--v2 --no-interactive` run with it
+# answered as one without, exit 0), and parses it with `--agent-engine v1`. A
+# kiro-cli older than the flag gets nothing.
+aw_kiro_trust_workspace_flag() {
+  [[ "${TASK_WORK_NO_TRUST_WORKSPACE:-}" == 1 ]] && return 0
+  _aw_kiro_chat_flag --trust-workspace
+}
+
+# _aw_kiro_chat_flag <flag>
+#
+# Prints " <flag>" when `kiro-cli chat --help` lists it, and nothing otherwise.
+# Captured, not piped into `grep -q`, for the reason given above.
+_aw_kiro_chat_flag() {
+  local help flag="$1"
   help=$(kiro-cli chat --help 2>/dev/null) || return 0
-  [[ "$help" =~ (^|[[:space:],])--tui([[:space:],]|$) ]] && printf ' --tui'
+  [[ "$help" =~ (^|[[:space:],])"$flag"([[:space:],]|$) ]] && printf ' %s' "$flag"
   return 0
 }
 

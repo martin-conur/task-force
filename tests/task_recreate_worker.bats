@@ -802,6 +802,25 @@ dead_worker_symlinked_base() {
   refute_output --partial "claude-opus-4.6"
 }
 
+# The recovered worktree may predate this kiro-cli, or the folder trust record,
+# so it gets the same --trust-workspace a fresh worker does (#378).
+@test "kiro: the recovered worker gets --trust-workspace when kiro-cli lists it, unless opted out (#378)" {
+  dead_worker issue-42
+  STUB_KIRO_TRUST_WORKSPACE=1 AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "kiro-cli chat --agent worker --model claude-opus-5.5 --tui --trust-workspace \"Implement task: https://github.com/owner/repo/issues/42\""
+}
+
+@test "kiro: TASK_WORK_NO_TRUST_WORKSPACE=1 keeps --trust-workspace off the recovered worker (#378)" {
+  dead_worker issue-42
+  STUB_KIRO_TRUST_WORKSPACE=1 TASK_WORK_NO_TRUST_WORKSPACE=1 AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "kiro-cli chat --agent worker --model claude-opus-5.5 --tui \"Implement task:"
+  refute_output --partial "--trust-workspace"
+}
+
 @test "claude: --auto --resume keeps the auto permission mode on the resume line (#239)" {
   dead_worker issue-42
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42 --auto --resume

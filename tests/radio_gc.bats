@@ -240,6 +240,91 @@ put_msg() {
   assert [ -f "$SESSIONS/deadworker.loadout" ]
 }
 
+# --- sidecars of a role with no mailbox (#375) -----------------------------
+
+# Write all four sidecars for <role>, aged to <ts> when given.
+seed_sidecars() {
+  local role="$1" ts="${2:-}" ext
+  for ext in loadout agent auto-submit profile; do
+    printf 'x' > "$SESSIONS/$role.$ext"
+    [[ -n "$ts" ]] && touch -t "$ts" "$SESSIONS/$role.$ext"
+  done
+  return 0
+}
+
+@test "gc reclaims aged sidecars of a role with no mailbox and no session file (#375)" {
+  # The normal retirement path: task-done removed the mailbox (#169), so the
+  # mailbox sweep never visits this role.
+  seed_sidecars goneworker "$OLD_TS"
+
+  run "$RADIO" gc
+  assert_success
+  for ext in loadout agent auto-submit profile; do
+    assert [ ! -f "$SESSIONS/goneworker.$ext" ]
+  done
+  assert_output --partial "4 sidecar(s)"
+}
+
+@test "gc keeps mailbox-less sidecars still inside the cutoff (#375)" {
+  seed_sidecars freshworker
+
+  run "$RADIO" gc
+  assert_success
+  for ext in loadout agent auto-submit profile; do
+    assert [ -f "$SESSIONS/freshworker.$ext" ]
+  done
+  assert_output --partial "0 sidecar(s)"
+}
+
+@test "gc keeps aged sidecars of a role with a session file, stale or not (#375)" {
+  seed_sidecars staleone "$OLD_TS"
+  seed_stale_session staleone
+  seed_sidecars liveone "$OLD_TS"
+  seed_session liveone
+  seed_sidecars goneworker "$OLD_TS"   # control: the same age with no session file goes
+
+  run "$RADIO" gc
+  assert_success
+  assert [ ! -f "$SESSIONS/goneworker.loadout" ]
+  for ext in loadout agent auto-submit profile; do
+    assert [ -f "$SESSIONS/staleone.$ext" ]
+    assert [ -f "$SESSIONS/liveone.$ext" ]
+  done
+}
+
+@test "gc --dry-run counts mailbox-less sidecars it would reclaim and removes none (#375)" {
+  seed_sidecars goneworker "$OLD_TS"
+
+  run "$RADIO" gc --dry-run
+  assert_success
+  assert_output --partial "[dry-run] remove sidecar: goneworker.loadout"
+  assert_output --partial "4 sidecar(s)"
+  for ext in loadout agent auto-submit profile; do
+    assert [ -f "$SESSIONS/goneworker.$ext" ]
+  done
+}
+
+@test "gc never touches a PM's .aliases sidecar (#375)" {
+  printf 'pm-other|/x\n' > "$SESSIONS/pm-gone.aliases"
+  touch -t "$OLD_TS" "$SESSIONS/pm-gone.aliases"
+  seed_sidecars pm-gone "$OLD_TS"   # control: its other sidecars do go
+
+  run "$RADIO" gc
+  assert_success
+  assert [ ! -f "$SESSIONS/pm-gone.agent" ]
+  assert [ -f "$SESSIONS/pm-gone.aliases" ]
+}
+
+@test "gc --dry-run counts a reclaimed mailbox's sidecars once (#375)" {
+  seed_mailbox deadworker
+  put_msg "$MAILBOX/deadworker/processed/old.md" "$OLD_TS"
+  seed_sidecars deadworker "$OLD_TS"
+
+  run "$RADIO" gc --dry-run
+  assert_success
+  assert_output --partial "4 sidecar(s)"
+}
+
 # --- dead-letter (#201) ----------------------------------------------------
 
 # Write a realistic message (frontmatter + body) into a role's inbox and age it.

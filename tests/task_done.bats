@@ -507,3 +507,47 @@ assert_ambient_pr_number_does_not_force_delete() {
   # An empty/unsafe role must never rm -rf the whole mailbox root.
   assert [ -d "$TASK_FORCE_HOME/radio/mailbox/some-other-role" ]
 }
+
+@test "claude-gh: --remove-worktree removes its own role's session sidecars (#375)" {
+  # A valid radio role has no dot (radio's _validate_role), and mktemp names the
+  # setup repo `tmp.XXXX`, so rebuild it under a dotless name first.
+  local old_repo="$MAIN_REPO" old_base="$WORKTREE_BASE"
+  cd "$BATS_TEST_TMPDIR"
+  git -C "$old_repo" worktree remove --force "$old_base/$SLUG"
+  rm -rf "$old_repo" "$old_base"
+  MAIN_REPO=$(mktemp -d "$BATS_TEST_TMPDIR/repoXXXXXX")
+  REPO_NAME=$(basename "$MAIN_REPO")
+  WORKTREE_BASE="${MAIN_REPO}/../${REPO_NAME}-worktrees"
+  git -C "$MAIN_REPO" init -q -b main
+  git -C "$MAIN_REPO" -c user.email=t@t.local -c user.name=T commit -q --allow-empty -m init
+  setup_worktree "$SLUG"
+  cd "$WORKTREE_BASE/$SLUG"
+  export TASK_FORCE_ROLE="worker-$REPO_NAME-$SLUG"
+  local s="$TASK_FORCE_HOME/radio/sessions"
+  mkdir -p "$s"
+  for ext in loadout agent auto-submit profile; do
+    printf 'x' > "$s/$TASK_FORCE_ROLE.$ext"
+  done
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  for ext in loadout agent auto-submit profile; do
+    assert [ ! -f "$s/$TASK_FORCE_ROLE.$ext" ]
+  done
+}
+
+@test "claude-gh: --remove-worktree keeps the sidecars of a role that is not this worktree's (#375)" {
+  # task-done typed in the PM's tab must not take the PM's sidecars with it.
+  export TASK_FORCE_ROLE="pm-otherrepo"
+  local s="$TASK_FORCE_HOME/radio/sessions"
+  mkdir -p "$s"
+  for ext in loadout agent auto-submit profile; do
+    printf 'x' > "$s/$TASK_FORCE_ROLE.$ext"
+  done
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  for ext in loadout agent auto-submit profile; do
+    assert [ -f "$s/$TASK_FORCE_ROLE.$ext" ]
+  done
+}

@@ -745,8 +745,10 @@ sidecars sit beside it — `<role>.loadout`, `<role>.agent` and `<role>.auto-sub
 (#246) — holding the values a re-seed cannot read out of the `.info` file it
 is replacing, and they deliberately **survive `unregister`**, `task-done`'s
 `--manual` one included.
-Only a genuine `register` overwrites them, and `radio gc` reclaims them once
-the role has no session file left at all. So when a wipe is followed by a
+Only a genuine `register` overwrites them. `task-done --remove-worktree`
+removes its own role's set, since that role is retired for good (#375), and
+`radio gc` reclaims any others of a role with no session file: with its
+mailbox when it reclaims one, else once they are older than the cutoff. So when a wipe is followed by a
 `busy` / `ready` self-heal, the rebuilt session keeps the real `LOADOUT` /
 `AGENT` instead of `unknown` / `claude`, and it recovers `TAB_ID` from the
 task-work-owned `<worktree-base>/.<slug>.info` when the zellij name lookup

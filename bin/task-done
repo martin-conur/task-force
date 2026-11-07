@@ -303,11 +303,14 @@ case "$SLUG" in
   review-pr?*) _OWN_ROLE="reviewer-$REPO_NAME-${SLUG#review-}" ;;
   *)           _OWN_ROLE="worker-$REPO_NAME-$SLUG" ;;
 esac
-if [[ -n "$_ROLE" && "$_ROLE" == "$_OWN_ROLE" ]]; then
-  _SESSIONS_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
-  rm -f "$_SESSIONS_DIR/$_ROLE.loadout" "$_SESSIONS_DIR/$_ROLE.agent" \
-        "$_SESSIONS_DIR/$_ROLE.auto-submit" "$_SESSIONS_DIR/$_ROLE.profile"
-fi
+case "$_ROLE" in
+  ""|-*|*/*|*..*|*[!a-zA-Z0-9_-]*) : ;;   # unset or unsafe — skip, as above
+  "$_OWN_ROLE")
+    _SESSIONS_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
+    rm -f "$_SESSIONS_DIR/$_ROLE.loadout" "$_SESSIONS_DIR/$_ROLE.agent" \
+          "$_SESSIONS_DIR/$_ROLE.auto-submit" "$_SESSIONS_DIR/$_ROLE.profile"
+    ;;
+esac
 
 # Agent processes still running in the worktree (#305), looked for while its
 # path still resolves. The agent running this command is not one of them: the

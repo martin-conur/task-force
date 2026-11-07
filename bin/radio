@@ -3243,21 +3243,6 @@ _surface_dead_letter_report() {
   return 0
 }
 
-# Garbage-collect the radio home (#169): drop expired processed messages, reclaim
-# whole mailbox dirs for roles that are dead (no session file OR >1h-stale
-# heartbeat) AND quiescent (newest entry older than the cutoff), and rotate the
-# log. Amortized via a throttled piggyback on cmd_register — no cron needed.
-# `--dry-run` reports without touching anything; `--max-age-days N` (default 14)
-# sets the cutoff.
-#
-# Unread mail is never destroyed, but since #201 it no longer makes its mailbox
-# immortal either. The old empty-inbox gate had no second stage, so a dead role
-# holding undelivered mail was protected by the very sweep meant to clean it up —
-# mail nobody would ever read, kept forever. gc now archives that inbox to
-# dead-letter/<role>/ first (see _dead_letter_inbox) and then reclaims the emptied
-# dir. Everything the gate protected still holds: a LIVE role's inbox is never
-# touched at any age, and a dead role still inside the cutoff keeps its mail (it
-# may yet come back).
 # Reclaim <role>'s session sidecars (#188, #375): .loadout, .agent,
 # .auto-submit, .profile. Not .aliases, which is a live primary PM's routing.
 # The caller has already checked that the role has no session file.
@@ -3286,6 +3271,21 @@ _reclaim_sidecars() {
   done
 }
 
+# Garbage-collect the radio home (#169): drop expired processed messages, reclaim
+# whole mailbox dirs for roles that are dead (no session file OR >1h-stale
+# heartbeat) AND quiescent (newest entry older than the cutoff), and rotate the
+# log. Amortized via a throttled piggyback on cmd_register — no cron needed.
+# `--dry-run` reports without touching anything; `--max-age-days N` (default 14)
+# sets the cutoff.
+#
+# Unread mail is never destroyed, but since #201 it no longer makes its mailbox
+# immortal either. The old empty-inbox gate had no second stage, so a dead role
+# holding undelivered mail was protected by the very sweep meant to clean it up —
+# mail nobody would ever read, kept forever. gc now archives that inbox to
+# dead-letter/<role>/ first (see _dead_letter_inbox) and then reclaims the emptied
+# dir. Everything the gate protected still holds: a LIVE role's inbox is never
+# touched at any age, and a dead role still inside the cutoff keeps its mail (it
+# may yet come back).
 cmd_gc() {
   local dry_run=0 max_age_days=14
   while [[ $# -gt 0 ]]; do

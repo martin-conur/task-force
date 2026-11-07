@@ -19,11 +19,16 @@ echo "TASK_FORCE_HOME=${TASK_FORCE_HOME-<unset>}" >> "${STUB_CALLS_DIR}/kiro-cli
 #                            kiro-cli with one engine
 #   STUB_KIRO_AUTO_UPGRADE   the value of chat.enableAutoAgentUpgrade; unset
 #                            prints null
+# And the V3 workspace-trust flag (#378), which kiro-cli 3.1.0 has:
+#   STUB_KIRO_TRUST_WORKSPACE=1  `chat --help` lists --trust-workspace. Off by
+#                                default, so every other test's launch line is
+#                                an older kiro-cli's
 if [[ "${1:-}" == chat && "${2:-}" == --help ]]; then
   echo "Usage: kiro-cli-chat chat [OPTIONS] [INPUT]"
   echo "      --agent <AGENT>"
   [[ -n "${STUB_KIRO_NO_TUI:-}" ]] || echo "      --tui"
   echo "      --legacy-ui"
+  [[ -z "${STUB_KIRO_TRUST_WORKSPACE:-}" ]] || echo "      --trust-workspace"
   if [[ -n "${STUB_KIRO_DEFAULT_ENGINE-v2}" ]]; then
     echo "      --agent-engine <ENGINE>"
     echo "          Agent engine to use: \"v1\", \"${STUB_KIRO_DEFAULT_ENGINE-v2}\" (default), or \"v3\""

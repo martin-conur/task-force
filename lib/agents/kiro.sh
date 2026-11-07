@@ -120,12 +120,15 @@ aw_agent_preflight() {
 # kiro takes it as a bare positional — kiro-cli's documented first turn — with
 # no /worker wrapper: the agent is selected by --agent instead. MODEL is %q'd
 # here for the same `bash -ic` re-parse (#157). --tui keeps the classic UI's
-# startup dialog from holding the first turn hostage (#157, see kiro-launch.sh).
+# startup dialog from holding the first turn hostage (#157, see kiro-launch.sh),
+# and --trust-workspace V3's prompt in a folder it has never seen, which every
+# new worktree is (#378).
 aw_agent_launch_cmd() {
   local prompt="$2" cmd="kiro-cli chat --agent worker"
   [[ -n "$MODEL" ]] && cmd+=" --model $(printf %q "$MODEL")"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
   cmd+="$(aw_kiro_ui_flag)"
+  cmd+="$(aw_kiro_trust_workspace_flag)"
   [[ -n "$prompt" ]] && cmd+=" \"$prompt\""
   echo "$cmd"
 }

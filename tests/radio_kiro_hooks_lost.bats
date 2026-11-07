@@ -78,10 +78,8 @@ _register_frozen() {
   _register_frozen worker-foo kiro
   # Tab 7 is somebody else's now, and a worker-foo tab exists at another id:
   # _live_tab_id would recover it by name (rc 3), which is not enough here.
-  export STUB_ZELLIJ_TABS_JSON='[
-    {"name": "worker-bar", "tab_id": 7},
-    {"name": "worker-foo", "tab_id": 9}
-  ]'
+  # Both tabs have a pane, so a wake would land if anything tried it (#381).
+  seed_lookalike_tab worker-foo worker-bar
 
   TASK_FORCE_ROLE=pm-foo run "$RADIO" send --to worker-foo --intent changes-requested --body "x"
   assert_success

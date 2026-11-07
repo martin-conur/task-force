@@ -178,6 +178,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Queued Notion pages no longer share one label on the board (#317).** #306 labelled a page `notion:` plus the first 8 hex digits of its page id, but Notion ids are time-ordered, so pages made in one batch share their head: on one board three of five queued pages all read `notion:402d9a72…`. The notion `aw_tracker_item_describe` in `lib/trackers/notion.sh` now takes the last 8 digits, the random part: `notion:…6d5dd526`, `notion:…b0551492`, `notion:…589b5b1c`. The URL is still the item's `url`, and a URL with no page id still keeps its last path segment. A new test in `tests/task_monitor_snapshot.bats` runs the describer on the three real ids from that board and checks for three distinct labels; it goes red with the prefix restored. The describer, snapshot, queue and Rust fixtures that pinned the old form are updated, as are the README, `docs/task-monitor-schema.md`, `.claude/gh-workflow.md` and the seven steering templates.
   No `task-init` re-run is needed: `lib/` is read from the checkout. Re-running it only refreshes the example label quoted in the workflow doc.
 
+### Internal
+- **The #370 look-alike tab test now guards the rule it names (#381).** `tests/radio_kiro_hooks_lost.bats` seeded the look-alike tab with no pane, so its no-wake assertion held with `_stale_role_tab_open` removed too: the wake failed for want of a pane. Both look-alike tests, there and in `tests/radio_kiro_stuck_busy.bats`, now take their tabs and panes from one helper, `seed_lookalike_tab` in `tests/helpers/common.bash`. With the same-id check or the open-tab check removed, the test now goes red at its first assertion. Test-only: no `task-init` re-run is needed.
+
 ## [0.4.0] — 2026-10-22
 
 ### Fixed

@@ -2464,7 +2464,7 @@ cmd_prompt_hook() {
   # printed before the repaint, which comes last and is bounded like every
   # zellij call.
   local touched=0
-  _touch_session "STATE=busy" && touched=1 || true
+  if _touch_session "STATE=busy"; then touched=1; fi
   _prompt_hook_summary || true
   (( touched == 0 )) || _rename_tab busy || true
 }

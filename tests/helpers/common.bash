@@ -270,6 +270,17 @@ setup_worktree() {
     > "$WORKTREE_BASE/.$slug.info"
 }
 
+# The radio role names task-work / task-pm build for this fixture: the main
+# repo name sanitized to the role charset (mktemp's `tmp.XXXX` runs as
+# `tmpxxxx`) plus the slug. Derived independently of bin/, so an assertion
+# using them has teeth. task-done acts on the worktree's role only (#377), so a
+# test that hands it a role must hand it this one.
+expected_radio_repo_name() {
+  printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g'
+}
+expected_worker_role() { printf 'worker-%s-%s' "$(expected_radio_repo_name)" "$1"; }
+expected_pm_role() { printf 'pm-%s' "$(expected_radio_repo_name)"; }
+
 # Drop the radio identity env a task-force agent tab exports into every child.
 # The suite is routinely run from inside such a tab (`./run_tests.sh` from a
 # worker or PM), so without this these leak in as ambient defaults and make

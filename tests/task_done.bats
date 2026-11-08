@@ -31,6 +31,9 @@ load helpers/common
 
 SLUG="my-feature"
 
+# The role that owns this suite's worktree; task-done acts on it and no other (#377).
+own_role() { expected_worker_role "$SLUG"; }
+
 # Run task-done from inside the worktree, auto-confirming prompts.
 # Usage: run_task_done <impl> [extra args...]
 #
@@ -281,7 +284,8 @@ add_submodule_to_worktree() {
 assert_task_done_unregisters() {
   local impl="$1"
   local script="env AW_IMPL=$impl $TASK_DONE"
-  local role="worker-task-force-$SLUG"
+  local role
+  role=$(own_role)
 
   cp "$RADIO" "$STUB_BIN/radio"
   chmod +x "$STUB_BIN/radio"
@@ -475,7 +479,7 @@ assert_ambient_pr_number_does_not_force_delete() {
 @test "task-done cleanup tolerates radio binary missing from PATH (#94)" {
   # The `|| true` safety net: if radio isn't installed (or PATH doesn't
   # include it), cleanup must still succeed.
-  export TASK_FORCE_ROLE="worker-task-force-$SLUG"
+  TASK_FORCE_ROLE=$(own_role); export TASK_FORCE_ROLE
   # Note: deliberately do NOT install radio into $STUB_BIN here.
 
   run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force"
@@ -488,7 +492,7 @@ assert_ambient_pr_number_does_not_force_delete() {
 # ---------------------------------------------------------------------------
 
 @test "claude-gh: --remove-worktree sweeps its own radio mailbox" {
-  export TASK_FORCE_ROLE="worker-task-force-$SLUG"
+  TASK_FORCE_ROLE=$(own_role); export TASK_FORCE_ROLE
   local mbx="$TASK_FORCE_HOME/radio/mailbox/$TASK_FORCE_ROLE"
   mkdir -p "$mbx/inbox" "$mbx/processed"
   printf 'stranded approved-and-merged\n' > "$mbx/inbox/msg.md"
@@ -522,7 +526,7 @@ assert_ambient_pr_number_does_not_force_delete() {
   git -C "$MAIN_REPO" -c user.email=t@t.local -c user.name=T commit -q --allow-empty -m init
   setup_worktree "$SLUG"
   cd "$WORKTREE_BASE/$SLUG"
-  export TASK_FORCE_ROLE="worker-$REPO_NAME-$SLUG"
+  TASK_FORCE_ROLE=$(own_role); export TASK_FORCE_ROLE
   local s="$TASK_FORCE_HOME/radio/sessions"
   mkdir -p "$s"
   for ext in loadout agent auto-submit profile; do
@@ -550,4 +554,135 @@ assert_ambient_pr_number_does_not_force_delete() {
   for ext in loadout agent auto-submit profile; do
     assert [ -f "$s/$TASK_FORCE_ROLE.$ext" ]
   done
+}
+
+# ---------------------------------------------------------------------------
+# Whose radio state task-done takes down (#377, #232)
+# Always the worktree's own role. A task-done typed in the PM's tab after a
+# `cd` into a worker's worktree used to unregister the PM and delete its
+# mailbox; a roleless one (every resumed session, #229) cleaned up nobody's.
+# ---------------------------------------------------------------------------
+
+# Seed role $1's radio state: a session file naming worktree $2 with heartbeat
+# $3, an unread inbox message and the four sidecars.
+seed_role_state() {
+  local role="$1" repo="$2" hb="$3" r="$TASK_FORCE_HOME/radio" ext
+  mkdir -p "$r/sessions" "$r/mailbox/$role/inbox" "$r/mailbox/$role/processed"
+  printf 'ROLE=%s\nTAB=%s\nTAB_ID=\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=claude\nLOADOUT=claude-gh\n' \
+    "$role" "$role" "$repo" "$hb" > "$r/sessions/$role.info"
+  printf 'unread for %s\n' "$role" > "$r/mailbox/$role/inbox/msg.md"
+  for ext in loadout agent auto-submit profile; do
+    printf 'x' > "$r/sessions/$role.$ext"
+  done
+}
+
+assert_role_state_kept() {
+  local role="$1" r="$TASK_FORCE_HOME/radio" ext
+  assert [ -f "$r/sessions/$role.info" ]
+  assert [ -f "$r/mailbox/$role/inbox/msg.md" ]
+  for ext in loadout agent auto-submit profile; do
+    assert [ -f "$r/sessions/$role.$ext" ]
+  done
+}
+
+assert_role_state_gone() {
+  local role="$1" r="$TASK_FORCE_HOME/radio" ext
+  assert [ ! -f "$r/sessions/$role.info" ]
+  assert [ ! -d "$r/mailbox/$role" ]
+  for ext in loadout agent auto-submit profile; do
+    assert [ ! -f "$r/sessions/$role.$ext" ]
+  done
+}
+
+STALE_HB="2020-01-01T00:00:00Z"
+
+install_real_radio() {
+  cp "$RADIO" "$STUB_BIN/radio"
+  chmod +x "$STUB_BIN/radio"
+}
+
+
+@test "claude-gh: task-done from the PM's tab keeps the PM's session and mailbox, cleans up the worker's (#377)" {
+  install_real_radio
+  local pm worker wt
+  pm=$(expected_pm_role); worker=$(own_role); wt=$(pwd -P)
+  seed_role_state "$pm" "$MAIN_REPO" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  seed_role_state "$worker" "$wt" "$STALE_HB"
+  export TASK_FORCE_ROLE="$pm"
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  assert_role_state_kept "$pm"
+  assert_role_state_gone "$worker"
+  assert_output --partial "this session is $pm, not this worktree's $worker"
+  assert_output --partial "$pm is left alone"
+}
+
+@test "claude-gh: roleless task-done cleans up the worktree's role (#232)" {
+  install_real_radio
+  unset TASK_FORCE_ROLE
+  local worker
+  worker=$(own_role)
+  seed_role_state "$worker" "$(pwd -P)" "$STALE_HB"
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  assert_role_state_gone "$worker"
+  assert_output --partial "no \$TASK_FORCE_ROLE in this session; cleaning up $worker"
+}
+
+@test "claude-gh: roleless task-done sweeps the worktree role's mailbox and sidecars when it has no session file (#232)" {
+  unset TASK_FORCE_ROLE
+  local worker r="$TASK_FORCE_HOME/radio"
+  worker=$(own_role)
+  seed_role_state "$worker" "$(pwd -P)" "$STALE_HB"
+  rm -f "$r/sessions/$worker.info"
+  # No radio on PATH at all: with no session file there is nothing to ask it.
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  assert_role_state_gone "$worker"
+}
+
+@test "claude-gh: a derived role with a fresh heartbeat is refused, not wiped (#232)" {
+  install_real_radio
+  local pm worker
+  pm=$(expected_pm_role); worker=$(own_role)
+  seed_role_state "$worker" "$(pwd -P)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  export TASK_FORCE_ROLE="$pm"
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  assert_role_state_kept "$worker"
+  assert_output --partial "$worker still has a live session"
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+}
+
+@test "claude-gh: a derived role whose session names another worktree is refused (#232)" {
+  install_real_radio
+  unset TASK_FORCE_ROLE
+  local worker
+  worker=$(own_role)
+  seed_role_state "$worker" "/elsewhere/other-checkout-worktrees/$SLUG" "$STALE_HB"
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  assert_role_state_kept "$worker"
+  assert_output --partial "session names /elsewhere/other-checkout-worktrees/$SLUG"
+}
+
+@test "claude-gh: roleless task-done with nothing derivable still removes the worktree and names radio orphans (#232)" {
+  install_real_radio
+  unset TASK_FORCE_ROLE
+  local worker
+  worker=$(own_role)
+  seed_role_state "$worker" "$(pwd -P)" "$STALE_HB"
+  rm -f "$WORKTREE_BASE/.$SLUG.info"
+
+  run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
+  assert_success
+  assert [ ! -d "$WORKTREE_BASE/$SLUG" ]
+  assert_role_state_kept "$worker"
+  assert_output --partial "no role for this worktree can be derived"
+  assert_output --partial '`radio orphans`'
 }

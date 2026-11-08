@@ -706,6 +706,27 @@ made that the default; #254 reversed it). Either way nothing is lost: the
 message waits in the inbox for the PM's own `radio check`. `--also` aliases inherit the primary
 PM's setting.
 
+To switch a **running** PM without relaunching it (#385), the PM or you runs
+`radio auto-submit on|off|status`, on the caller's own role: `! radio
+auto-submit on` from the claude prompt or the kiro one (kiro-cli 3.x takes
+`!command` too), or the PM through its own shell tool. It rewrites
+`AUTO_SUBMIT` in the session file and the sidecar, so the next wake follows it,
+and it outranks the launch setting on every re-register: `on` holds through a
+`/compact`, a `/clear` and a fresh PM start until its expiry or an `off`; an
+`off` gives way to a fresh launch that states its own setting. `on --for 8h`
+or `--until 07:30` (an ISO time works too; `Z` for UTC) sets an expiry, stored
+as `AUTO_SUBMIT_UNTIL=`: the first send after it types LF again, logs
+`auto-submit: expired role=…` and clears the setting. `--note <text>` (`--note
+-` reads stdin) is the away mandate, such as "finish #377 and #384, review but
+don't merge". While auto-submit is on, every `radio check` opens with it as
+`[away]` lines, and so does every register of the role, so it stays in front
+of the PM after a `/compact`, a `/clear` or a rotation. The wake itself stays
+the literal `radio check`. Conditions in the note are instructions to the PM,
+not radio logic: the PM judges them and runs `radio auto-submit off` itself.
+The PM prompt says to turn it on when you say you are away, honour the note on
+each wake and turn it off when its conditions are met or you are back.
+task-monitor shows `auto-submit` and its expiry beside the PM.
+
 Workers are the other way round: `task-work` launches them auto-submitting and
 leaves focus on your tab, because the PM's tab is where you work and nobody
 types in a worker's. The one exception is a worker you step into to steer by
@@ -856,7 +877,7 @@ mailbox.
 |---------|-----------------|
 | Pinged a role, nothing happened | Re-read the sender's own outcome line — only `delivered` means a keystroke landed; every other line names its own reason. Then `ls ~/.task-force/radio/sessions/` (is the role there, spelled exactly?) and `radio orphans` (a >1h-stale heartbeat means the tab is gone). In the recipient's own tab, `radio check` tells you whether the message arrived and simply wasn't acted on. |
 | A wake typed `radio check` into a shell, `task-watch` or `task-monitor` pane beside the agent | The wake went to the tab's focused pane, not the agent's (#336). `register` records the agent's pane as `PANE_ID=` off `$ZELLIJ_PANE_ID`, and `send` writes there while zellij still lists it as a terminal pane on the role's tab; otherwise it falls back to the focused pane. Each `send: woke` log line ends in `(src=recorded)` or `(src=focused)`, and `recorded PANE_ID=… falling back` says a recorded pane went stale. A session registered before #336 has no `PANE_ID` until its next register: a `/clear` in the agent, or the hand `radio register` above, run in the agent's pane. |
-| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. On a **PM** that is the default since #254 — the box is yours, and a submitting wake would send whatever you had half-typed; relaunch with `task-pm --auto-submit` only if the PM is meant to run unattended. On a **worker** it is not the default: it was launched with `--no-auto-submit`, or registered before #254 without `--auto` / `--auto-submit`. Relaunch it with plain `task-work` (or `task-recreate-worker --auto-submit`) to stop it recurring; here auto-submit is the default and independent of the permission model, which stays `-a/--trust-all` (#206). The flag is read off the **recipient's** file, after any `--also` alias hop. Auto-submit only makes a wake that *lands* complete itself; nothing backs up a wake that never lands, so the poll model below still carries delivery. |
+| `radio check` sitting unsubmitted in a prompt box | The wake was delivered but not submitted: that role's session file has no `AUTO_SUBMIT=1`, so the wake ended with LF instead of CR (#189). Press Enter to finish this one. On a **PM** that is the default since #254 — the box is yours, and a submitting wake would send whatever you had half-typed; relaunch with `task-pm --auto-submit` only if the PM is meant to run unattended, or switch the running one with `radio auto-submit on` (#385). A PM that auto-submitted until some hour and now waits again had an expiry: `radio auto-submit status` says `expired`, and `grep 'auto-submit: expired' ~/.task-force/radio/log` gives the time. On a **worker** it is not the default: it was launched with `--no-auto-submit`, or registered before #254 without `--auto` / `--auto-submit`. Relaunch it with plain `task-work` (or `task-recreate-worker --auto-submit`) to stop it recurring; here auto-submit is the default and independent of the permission model, which stays `-a/--trust-all` (#206). The flag is read off the **recipient's** file, after any `--also` alias hop. Auto-submit only makes a wake that *lands* complete itself; nothing backs up a wake that never lands, so the poll model below still carries delivery. |
 | A role keeps vanishing from `sessions/` | Session flapping — something fires a session-end wipe on an intra-session event and takes `TAB_ID` with it. Compare `grep -c 'unregister role='`, `'unregister: proceeding'` and `'unregister: skipping'` in the log: post-#187 `skipping` should carry the bulk of the traffic, and `role=` should be close to `proceeding` plus however many `--manual` calls were made. A gap has two causes, and `--manual` is the likelier: it short-circuits the block that emits *both* other lines, so it writes only `role=`, and anything calling it in a loop inflates that counter alone — a test suite that has not isolated `$TASK_FORCE_HOME` will do exactly this against your live role. Otherwise an **old `radio` binary** is on `PATH`, since every non-`--manual` call now logs one or the other; `PATH`'s `radio` is a symlink into a checkout, so run `ls -l "$(command -v radio)"` and confirm that tree is current. |
 | `radio unregister` did nothing | Expected since #198, not a bug. With no payload naming a real exit it refuses, printing `refusing to wipe <role> … re-run with --manual` on stderr and logging a `skipping` line. Pass `--manual` if you meant to tear the session down. |
 | PM merged but the worker never cleaned up | The `approved-and-merged` ping arrived after that worker had exited, so it was never delivered. Since #201 gc archives such mail instead of keeping a mailbox nobody will open alive forever — look in `~/.task-force/radio/dead-letter/<role>/`, and `grep 'gc: dead-lettered' ~/.task-force/radio/log` for everything it has archived. The message is intact with its id and frontmatter; only the worktree needs cleaning by hand. |

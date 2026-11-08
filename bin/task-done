@@ -414,7 +414,8 @@ if [[ -n "$RADIO_ROLE" ]]; then
   # left hundreds behind. The list matches radio's _reclaim_sidecars; .aliases
   # is a PM's and never ours.
   rm -f "$RADIO_DIR/sessions/$RADIO_ROLE.loadout" "$RADIO_DIR/sessions/$RADIO_ROLE.agent" \
-        "$RADIO_DIR/sessions/$RADIO_ROLE.auto-submit" "$RADIO_DIR/sessions/$RADIO_ROLE.profile"
+        "$RADIO_DIR/sessions/$RADIO_ROLE.auto-submit" "$RADIO_DIR/sessions/$RADIO_ROLE.profile" \
+        "$RADIO_DIR/sessions/$RADIO_ROLE.away" "$RADIO_DIR/sessions/$RADIO_ROLE.away-note"
 fi
 
 # Move out of worktree before removing it

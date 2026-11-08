@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-11-05T18:21:48Z",
+  "generated_at": "2026-11-08T17:34:04Z",
   "mode": "full",
   "repos": [
     {
@@ -13,19 +13,21 @@
       "pm": {
         "role": "pm-widgets",
         "state": "idle",
-        "last_heartbeat": "2026-11-05T18:20:48Z",
+        "last_heartbeat": "2026-11-08T17:33:04Z",
         "busy_stale": false,
         "tab": "pm-widgets",
         "tab_id": "4",
         "zellij_session": "zs",
         "agent": "claude",
         "profile": null,
+        "auto_submit": false,
+        "auto_submit_until": null,
         "alias_of": null,
         "unread": 0
       },
       "forge": {
         "available": true,
-        "fetched_at": "2026-11-05T18:21:48Z",
+        "fetched_at": "2026-11-08T17:34:04Z",
         "stale": false
       },
       "in_flight": [
@@ -70,13 +72,15 @@
           "session": {
             "role": "worker-widgets-issue-5",
             "state": "idle",
-            "last_heartbeat": "2026-11-05T18:20:48Z",
+            "last_heartbeat": "2026-11-08T17:33:04Z",
             "busy_stale": false,
             "tab": "worker-widgets-issue-5",
             "tab_id": "4",
             "zellij_session": "zs",
             "agent": "claude",
-            "profile": null
+            "profile": null,
+            "auto_submit": false,
+            "auto_submit_until": null
           },
           "tab_id": "4",
           "profile": null,
@@ -87,13 +91,15 @@
               "session": {
                 "role": "reviewer-widgets-pr9",
                 "state": "busy",
-                "last_heartbeat": "2026-11-05T18:20:48Z",
+                "last_heartbeat": "2026-11-08T17:33:04Z",
                 "busy_stale": false,
                 "tab": "reviewer-widgets-pr9",
                 "tab_id": "4",
                 "zellij_session": "zs",
                 "agent": "claude",
-                "profile": null
+                "profile": null,
+                "auto_submit": false,
+                "auto_submit_until": null
               }
             }
           ]

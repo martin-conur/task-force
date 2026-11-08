@@ -48,6 +48,11 @@ Usage:
                                          #334): the re-register that follows prints the
                                          board digest and handoff note. claude, idle and
                                          auto-submitting roles only
+  radio auto-submit on [--for DURATION | --until HH:MM|ISO] [--note TEXT | --note -]
+  radio auto-submit off | status         switch this role's wakes between auto-submitted and
+                                         Enter-gated at runtime (#385): a PM left running while
+                                         the user is away. The note is the away mandate; every
+                                         `radio check` repeats it while auto-submit is on
   radio orphans                          list session files with stale (>1h) heartbeat
   radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
                                          messages (default N=14) and rotate the log.
@@ -946,8 +951,28 @@ _auto_submit_sidecar() {
 #                                    the prior state instead of asking for it.
 # Every launcher sets it explicitly, so inheritance only ever applies to a
 # session nobody launched with an opinion.
+#
+# A runtime setting (`radio auto-submit on|off`, #385) outranks all three, so
+# it survives the /compact and /clear re-registers of a process whose launch
+# env says otherwise. An `on` also survives a fresh launch (a PM rotation, a
+# handoff to the other assistant): it is the away mandate, and it ends at its
+# expiry or at an `off`. An `off` gives way to a fresh launch that states its
+# own setting, since a new `task-pm --auto-submit` is a newer opinion than it.
+# $2=1 marks the caller as such a fresh register.
 _resolve_auto_submit() {
-  local env="${TASK_FORCE_AUTO_SUBMIT:-}" recorded
+  local env="${TASK_FORCE_AUTO_SUBMIT:-}" recorded mode
+  _auto_submit_expire_if_due "$1" || true
+  mode=$(_session_field "$(_away_file "$1")" MODE || true)
+  case "$mode" in
+    on) printf '1'; return 0 ;;
+    off)
+      if [[ "${2:-0}" == 1 && -n "$env" ]]; then
+        rm -f "$(_away_file "$1")"
+        _log "auto-submit: fresh register of $1 states its own setting (TASK_FORCE_AUTO_SUBMIT=$env) — runtime off dropped"
+      else
+        return 0
+      fi ;;
+  esac
   if [[ -n "$env" ]]; then
     [[ "$env" == "1" ]] && printf '1'
     return 0
@@ -955,6 +980,91 @@ _resolve_auto_submit() {
   recorded=$(cat "$(_auto_submit_sidecar "$1")" 2>/dev/null || true)
   [[ "$recorded" == "1" ]] && printf '1'
   return 0
+}
+
+# The runtime auto-submit setting (#385): `radio auto-submit on|off`, for a PM
+# the user leaves running while away. <role>.away holds MODE=on|off, UNTIL=
+# (UTC ISO, empty for no expiry) and SET_AT=; <role>.away-note holds the away
+# mandate, verbatim. Sidecars like the others: they survive unregister, so the
+# setting outlives a rotation, and gc and task-done reclaim them with the rest.
+_away_file()      { printf '%s/%s.away' "$SESSIONS_DIR" "$1"; }
+_away_note_file() { printf '%s/%s.away-note' "$SESSIONS_DIR" "$1"; }
+
+# UNTIL of <role>'s runtime `on`, or nothing.
+_auto_submit_until() {
+  local a
+  a=$(_away_file "$1")
+  [[ "$(_session_field "$a" MODE || true)" == on ]] || return 0
+  _session_field "$a" UNTIL || true
+}
+
+_epoch_to_iso() {
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || true
+}
+
+# Remove KEY= lines from a session file; the inverse of _session_set_fields.
+_session_drop_fields() {
+  local f="$1"; shift
+  [[ -f "$f" ]] || return 0
+  local content
+  content=$(cat "$f" 2>/dev/null || true)
+  [[ -n "$content" ]] || return 0
+  printf '%s\n' "$content" | RADIO_DROP_KEYS="$*" awk '
+    BEGIN { n = split(ENVIRON["RADIO_DROP_KEYS"], arr, " "); for (i = 1; i <= n; i++) drop[arr[i]] = 1 }
+    { eq = index($0, "="); if (eq > 0 && (substr($0, 1, eq - 1) in drop)) next; print }
+  ' | _atomic_write "$f"
+}
+
+# Write a resolved setting (<on>: 1 or empty) to the records cmd_send and a
+# re-register read: the sidecar, and the session file when there is one.
+_auto_submit_apply() {
+  local role="$1" on="$2" until="$3" f
+  printf '%s' "${on:-0}" | _atomic_write "$(_auto_submit_sidecar "$role")"
+  f=$(_session_file "$role")
+  [[ -f "$f" ]] || return 0
+  _session_drop_fields "$f" AUTO_SUBMIT AUTO_SUBMIT_UNTIL
+  if [[ -n "$on" ]]; then
+    _session_set_fields "$f" "AUTO_SUBMIT=1"
+    [[ -z "$until" ]] || _session_set_fields "$f" "AUTO_SUBMIT_UNTIL=$until"
+  fi
+}
+
+# An `on` past its UNTIL is off (#385): turn it into an `off`, drop the note,
+# rewrite the records and log it. The rewrite is what makes the log line a
+# one-off. Returns 0 only when it expired the setting just now.
+_auto_submit_expire_if_due() {
+  local role="$1" until ue
+  until=$(_auto_submit_until "$role")
+  [[ -n "$until" ]] || return 1
+  ue=$(_iso_to_epoch "$until")
+  [[ -n "$ue" ]] || return 1
+  (( $(date -u +%s) >= ue )) || return 1
+  printf 'MODE=off\nUNTIL=\nSET_AT=%s\nEXPIRED=%s\n' "$(_now)" "$until" | _atomic_write "$(_away_file "$role")"
+  rm -f "$(_away_note_file "$role")"
+  _auto_submit_apply "$role" "" ""
+  _log "auto-submit: expired role=$role until=$until"
+  return 0
+}
+
+# The `[away]` lines for <role>: its note, one line each, while its wakes
+# auto-submit. Printed by `radio check`, which is what every wake types, so an
+# auto-submitted wake carries the mandate and a manual one (no AUTO_SUBMIT)
+# does not. The wake itself stays the literal `radio check`: nothing a caller
+# wrote is ever typed into a pane.
+_away_lines() {
+  local role="$1" nf until line
+  nf=$(_away_note_file "$role")
+  [[ -s "$nf" ]] || return 0
+  [[ "$(_session_field "$(_session_file "$role")" AUTO_SUBMIT || true)" == 1 ]] || return 0
+  until=$(_auto_submit_until "$role")
+  # shellcheck disable=SC2016  # backticks are literal output, not a subshell
+  printf '[away] auto-submit is on%s. The user left this mandate; honour it, and run `radio auto-submit off` once it is met or the user is back:\n' \
+    "${until:+ until $until}"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '[away] %s\n' "$line"
+  done <"$nf"
 }
 
 # Profile sidecar (#355): the name of the agent profile the role was launched
@@ -1158,6 +1268,9 @@ _ensure_session_file() {
     fi
     if [[ -n "$(_resolve_auto_submit "$TASK_FORCE_ROLE")" ]]; then
       printf 'AUTO_SUBMIT=1\n'
+    fi
+    if [[ -n "$(_auto_submit_until "$TASK_FORCE_ROLE")" ]]; then
+      printf 'AUTO_SUBMIT_UNTIL=%s\n' "$(_auto_submit_until "$TASK_FORCE_ROLE")"
     fi
     # The profile (#355), off the sidecar register wrote.
     if [[ -n "$profile" ]]; then
@@ -1702,8 +1815,9 @@ cmd_register() {
   printf '%s' "$agent" | _atomic_write "$(_agent_sidecar "$role")"
   # Resolved before the sidecar is rewritten, so an unset env re-records the
   # prior value rather than clearing it (#246). Same sidecar-first order as above.
-  local auto_submit
-  auto_submit=$(_resolve_auto_submit "$role")
+  local auto_submit auto_submit_until
+  auto_submit=$(_resolve_auto_submit "$role" "$fresh")
+  auto_submit_until=$(_auto_submit_until "$role")
   printf '%s' "${auto_submit:-0}" | _atomic_write "$(_auto_submit_sidecar "$role")"
   local profile
   profile=$(_resolve_profile "$role" "$explicit_repair")
@@ -1727,6 +1841,10 @@ cmd_register() {
     # register on every non-auto worker.
     if [[ -n "$auto_submit" ]]; then
       printf 'AUTO_SUBMIT=1\n'
+    fi
+    # The expiry of a runtime `radio auto-submit on --for/--until` (#385).
+    if [[ -n "$auto_submit_until" ]]; then
+      printf 'AUTO_SUBMIT_UNTIL=%s\n' "$auto_submit_until"
     fi
     if [[ -n "$pane_id" ]]; then
       printf 'PANE_ID=%s\n' "$pane_id"
@@ -1912,6 +2030,12 @@ cmd_register() {
     rm -f "$marker"
     _log "register: rotation marker consumed, printing the board digest and handoff note role=$role"
     _print_board_digest "$role" "$repo" || true
+  fi
+  # The away mandate (#385), on every register of its role — fresh, /compact,
+  # /clear — since each one starts the agent on a context that no longer holds
+  # it. Nothing unless the role auto-submits with a note.
+  if [[ -z "$existing_alias" ]]; then
+    _away_lines "$role" || true
   fi
 }
 
@@ -2925,6 +3049,10 @@ _send_wake() {
   # The decision is driven by the *recipient's* session file, never the
   # sender's env — and `$rs` is resolved after the #165 alias hop, so a
   # `--also` alias inherits its primary PM's setting.
+  #
+  # A runtime `on` past its expiry (#385) is off: expiring it here rewrites
+  # $rs before AUTO_SUBMIT is read, so this wake already types LF.
+  _auto_submit_expire_if_due "$to" || true
   local wake_term=$'\n'
   if [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" == "1" ]]; then
     wake_term=$'\r'
@@ -3052,7 +3180,7 @@ cmd_clear() {
     why="agent is $(_session_field "$rs" AGENT), not claude"
   elif [[ "$(_session_field "$rs" STATE || true)" != idle ]]; then
     why="not idle (state=$(_session_field "$rs" STATE || true))"
-  elif [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" != 1 ]]; then
+  elif _auto_submit_expire_if_due "$to" || [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" != 1 ]]; then
     why="not auto-submitting"
   fi
   if [[ -z "$why" ]] && ! _resolve_wake_pane "$rs" "$to" clear "not cleared"; then
@@ -3076,6 +3204,159 @@ cmd_clear() {
   printf 'radio: cleared %s (tab_id=%s)\n' "$to" "$WAKE_TAB_ID"
 }
 
+# `--for <duration>`: whole units of s, m, h, d, combinable (`1h30m`). Prints
+# seconds, or nothing when it does not parse.
+_parse_duration_secs() {
+  local d="$1" total=0 n u
+  [[ "$d" =~ ^([0-9]+[smhd])+$ ]] || return 0
+  while [[ "$d" =~ ^([0-9]+)([smhd])(.*)$ ]]; do
+    n=$((10#${BASH_REMATCH[1]})) u="${BASH_REMATCH[2]}" d="${BASH_REMATCH[3]}"
+    case "$u" in
+      s) total=$(( total + n )) ;;
+      m) total=$(( total + n * 60 )) ;;
+      h) total=$(( total + n * 3600 )) ;;
+      d) total=$(( total + n * 86400 )) ;;
+    esac
+  done
+  (( total > 0 )) && printf '%s' "$total"
+  return 0
+}
+
+# `--until <time>`: `HH:MM` local (the next one: tomorrow's once today's has
+# passed), or an ISO date-time, `YYYY-MM-DDTHH:MM[:SS]`, UTC with a `Z` and
+# local without. Prints epoch seconds, or nothing when it does not parse.
+_parse_until_epoch() {
+  local t="$1" e="" d hms
+  if [[ "$t" =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+    (( 10#${BASH_REMATCH[1]} < 24 && 10#${BASH_REMATCH[2]} < 60 )) || return 0
+    hms=$(printf '%02d:%02d:00' "$((10#${BASH_REMATCH[1]}))" "$((10#${BASH_REMATCH[2]}))")
+    e=$(date -d "$hms" +%s 2>/dev/null || date -j -f '%H:%M:%S' "$hms" +%s 2>/dev/null || true)
+    [[ -n "$e" ]] || return 0
+    (( e > $(date -u +%s) )) || e=$(( e + 86400 ))
+  elif [[ "$t" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})[T\ ]([0-9]{2}:[0-9]{2})(:[0-9]{2})?(Z?)$ ]]; then
+    d="${BASH_REMATCH[1]}" hms="${BASH_REMATCH[2]}${BASH_REMATCH[3]:-:00}"
+    if [[ -n "${BASH_REMATCH[4]}" ]]; then
+      e=$(_iso_to_epoch "${d}T${hms}Z")
+    else
+      e=$(date -d "$d $hms" +%s 2>/dev/null || date -j -f '%Y-%m-%d %H:%M:%S' "$d $hms" +%s 2>/dev/null || true)
+    fi
+  fi
+  printf '%s' "$e"
+}
+
+# One status line for <role>, plus its note.
+_auto_submit_status() {
+  local role="$1" a mode until nf line
+  _auto_submit_expire_if_due "$role" || true
+  a=$(_away_file "$role")
+  mode=$(_session_field "$a" MODE || true)
+  until=$(_auto_submit_until "$role")
+  # What the next wake does: the session file's AUTO_SUBMIT, which a send
+  # reads. Only a role with no session file falls back to the resolution its
+  # next register would make; the caller's launch env never decides it here.
+  local sf on
+  sf=$(_session_file "$role")
+  if [[ -f "$sf" ]]; then
+    [[ "$(_session_field "$sf" AUTO_SUBMIT || true)" == 1 ]] && on=1
+  else
+    on=$(TASK_FORCE_AUTO_SUBMIT='' _resolve_auto_submit "$role")
+  fi
+  if [[ -n "${on:-}" ]]; then
+    printf 'radio: auto-submit on for %s (%s; %s)\n' "$role" \
+      "$([[ -n "$until" ]] && printf 'until %s' "$until" || printf 'no expiry')" \
+      "$([[ "$mode" == on ]] && echo 'set with radio auto-submit' || echo 'from its launch')"
+  else
+    printf 'radio: auto-submit off for %s (%s)\n' "$role" \
+      "$([[ "$mode" == off ]] && echo "set with radio auto-submit$( [[ -n "$(_session_field "$a" EXPIRED || true)" ]] && printf ', expired %s' "$(_session_field "$a" EXPIRED)")" || echo 'from its launch')"
+  fi
+  nf=$(_away_note_file "$role")
+  if [[ -s "$nf" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      printf 'note: %s\n' "$line"
+    done <"$nf"
+  fi
+  [[ -f "$(_session_file "$role")" ]] \
+    || printf 'radio: %s has no session file; the setting takes effect when it registers\n' "$role" >&2
+  return 0
+}
+
+# radio auto-submit on|off|status (#385): switch the caller's own role between
+# auto-submitted and Enter-gated wakes without a relaunch. Meant for a PM the
+# user leaves running: `on` while away, `off` once back. Rewrites AUTO_SUBMIT
+# in the session file and the sidecar, so the next send picks it up, and
+# records the setting in <role>.away so re-registers keep it (see
+# _resolve_auto_submit). `on --for <duration>` / `--until <time>` set an
+# expiry; `--note <text>` (`-` reads stdin) is the away mandate, repeated by
+# every `radio check` the role's wakes type. Radio only stores and repeats it:
+# conditions in it are the agent's to evaluate.
+cmd_auto_submit() {
+  local action="${1:-}"
+  [[ $# -eq 0 ]] || shift
+  case "$action" in
+    on|off|status) ;;
+    -h|--help|"")
+      echo "usage: radio auto-submit on [--for <duration> | --until <HH:MM|ISO time>] [--note <text> | --note -] | off | status" >&2
+      exit 2 ;;
+    *) echo "auto-submit: unknown action '$action' (on, off or status)" >&2; exit 2 ;;
+  esac
+  local for="" until_arg="" note="" note_set=0
+  while [[ $# -gt 0 ]]; do
+    [[ "$action" == on ]] || { echo "auto-submit $action: takes no flags (got $1)" >&2; exit 2; }
+    case "$1" in
+      --for|--until|--note)
+        [[ $# -ge 2 ]] || { echo "auto-submit on: $1 needs a value" >&2; exit 2; } ;;
+    esac
+    case "$1" in
+      --for)   for="$2"; shift 2 ;;
+      --until) until_arg="$2"; shift 2 ;;
+      --note)  note="$2"; note_set=1; shift 2 ;;
+      *) echo "auto-submit on: unknown flag $1" >&2; exit 2 ;;
+    esac
+  done
+  if [[ -n "$for" && -n "$until_arg" ]]; then
+    echo "auto-submit on: --for and --until are exclusive" >&2; exit 2
+  fi
+  local now until_epoch="" until_iso=""
+  now=$(date -u +%s)
+  if [[ -n "$for" ]]; then
+    local secs
+    secs=$(_parse_duration_secs "$for")
+    [[ -n "$secs" ]] || { echo "auto-submit on: --for '$for' is not a duration (e.g. 30m, 8h, 1h30m, 2d)" >&2; exit 2; }
+    until_epoch=$(( now + secs ))
+  elif [[ -n "$until_arg" ]]; then
+    until_epoch=$(_parse_until_epoch "$until_arg")
+    [[ -n "$until_epoch" ]] || { echo "auto-submit on: --until '$until_arg' is not HH:MM or an ISO time (2026-11-09T07:00, Z for UTC)" >&2; exit 2; }
+    (( until_epoch > now )) || { echo "auto-submit on: --until '$until_arg' is in the past" >&2; exit 2; }
+  fi
+  [[ -z "$until_epoch" ]] || until_iso=$(_epoch_to_iso "$until_epoch")
+  if [[ "$note_set" == 1 && "$note" == - ]]; then
+    note=$(cat)
+  fi
+
+  # The caller's own role, recovered or refused like check / send (#229).
+  _require_role_or_recover auto-submit
+  local role="$TASK_FORCE_ROLE"
+  case "$action" in
+    on)
+      printf 'MODE=on\nUNTIL=%s\nSET_AT=%s\n' "$until_iso" "$(_now)" | _atomic_write "$(_away_file "$role")"
+      if [[ -n "$note" ]]; then
+        printf '%s\n' "$note" | _atomic_write "$(_away_note_file "$role")"
+      else
+        rm -f "$(_away_note_file "$role")"
+      fi
+      _auto_submit_apply "$role" 1 "$until_iso"
+      _log "auto-submit: on role=$role until=${until_iso:-none} note=${#note} chars"
+      ;;
+    off)
+      printf 'MODE=off\nUNTIL=\nSET_AT=%s\n' "$(_now)" | _atomic_write "$(_away_file "$role")"
+      rm -f "$(_away_note_file "$role")"
+      _auto_submit_apply "$role" "" ""
+      _log "auto-submit: off role=$role"
+      ;;
+  esac
+  _auto_submit_status "$role"
+}
+
 cmd_check() {
   # NOT _silent_exit_if_no_role (#229). `check` is typed by an agent or a human
   # on purpose — it is also what a radio wake types into the recipient's prompt
@@ -3090,6 +3371,8 @@ cmd_check() {
   # should be told so in words. `check` printing nothing at all is the shape this
   # ticket is about.
   [[ -d "$inbox" ]] || mkdir -p "$inbox"
+  _auto_submit_expire_if_due "$TASK_FORCE_ROLE" || true
+  _away_lines "$TASK_FORCE_ROLE"
   shopt -s nullglob
   local any=0
   for f in "$inbox"/*.md; do
@@ -3361,7 +3644,7 @@ _surface_dead_letter_report() {
 }
 
 # Reclaim <role>'s session sidecars (#188, #375): .loadout, .agent,
-# .auto-submit, .profile. Not .aliases, which is a live primary PM's routing.
+# .auto-submit, .profile, .away, .away-note. Not .aliases, which is a live primary PM's routing.
 # The caller has already checked that the role has no session file.
 # $2=dry_run, $3=output prefix, $4=cutoff epoch (empty = any age: the role's
 # mailbox was just reclaimed, which is retirement enough), $5=only this one
@@ -3371,7 +3654,8 @@ _reclaim_sidecars() {
   local role="$1" dry="$2" pfx="$3" cutoff="$4" only="${5:-}" f m
   RECLAIMED_SIDECARS_N=0
   for f in "$(_loadout_sidecar "$role")" "$(_agent_sidecar "$role")" \
-           "$(_auto_submit_sidecar "$role")" "$(_profile_sidecar "$role")"; do
+           "$(_auto_submit_sidecar "$role")" "$(_profile_sidecar "$role")" \
+           "$(_away_file "$role")" "$(_away_note_file "$role")"; do
     [[ -n "$only" && "$f" != "$only" ]] && continue
     [[ -f "$f" ]] || continue
     if [[ -n "$cutoff" ]]; then
@@ -3518,11 +3802,13 @@ cmd_gc() {
   if [[ -d "$SESSIONS_DIR" ]]; then
     local sc srole
     for sc in "$SESSIONS_DIR"/*.loadout "$SESSIONS_DIR"/*.agent \
-              "$SESSIONS_DIR"/*.auto-submit "$SESSIONS_DIR"/*.profile; do
+              "$SESSIONS_DIR"/*.auto-submit "$SESSIONS_DIR"/*.profile \
+              "$SESSIONS_DIR"/*.away "$SESSIONS_DIR"/*.away-note; do
       [[ -f "$sc" ]] || continue
       srole="${sc##*/}"
       case "$srole" in
         *.auto-submit) srole="${srole%.auto-submit}" ;;
+        *.away-note)   srole="${srole%.away-note}" ;;
         *)             srole="${srole%.*}" ;;
       esac
       [[ -n "$srole" ]] || continue
@@ -3580,6 +3866,7 @@ case "$sub" in
   prompt-hook) cmd_prompt_hook ;;
   unregister)  cmd_unregister "$@" ;;
   clear)       cmd_clear "$@" ;;
+  auto-submit) cmd_auto_submit "$@" ;;
   orphans)     cmd_orphans ;;
   gc)          cmd_gc "$@" ;;
   -h|--help)   usage 0 ;;

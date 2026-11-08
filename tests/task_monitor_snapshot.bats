@@ -218,6 +218,25 @@ gh_calls() { cat "$STUB_CALLS_DIR/gh.calls" 2>/dev/null || true; }
   assert_equal "$(q '.pm.profile')" null
 }
 
+@test "auto-submit (#385): the PM's AUTO_SUBMIT and its expiry reach the snapshot" {
+  session "pm-$NAME" idle AUTO_SUBMIT=1 AUTO_SUBMIT_UNTIL=2099-01-01T00:00:00Z
+  snap --local
+  assert_success
+  assert_equal "$(q .pm.auto_submit)" true
+  assert_equal "$(q .pm.auto_submit_until)" 2099-01-01T00:00:00Z
+}
+
+@test "auto-submit (#385): off with none, and off once the expiry has passed" {
+  session "pm-$NAME" idle
+  snap --local
+  assert_equal "$(q .pm.auto_submit)" false
+  assert_equal "$(q .pm.auto_submit_until)" null
+  session "pm-$NAME" idle AUTO_SUBMIT=1 AUTO_SUBMIT_UNTIL=2001-01-01T00:00:00Z
+  snap --local
+  assert_equal "$(q .pm.auto_submit)" false
+  assert_equal "$(q .pm.auto_submit_until)" null
+}
+
 @test "in flight: a sidecar with no radio session is still in flight" {
   sidecar issue-5 GH_URL https://github.com/acme/widgets/issues/5
   snap

@@ -11,7 +11,7 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{pm_needs_you, rows, worker_needs_you, App, OvRow, Row, View};
-use crate::snapshot::{DoneItem, Handoff, InFlight, NextItem, Repo};
+use crate::snapshot::{DoneItem, Handoff, InFlight, NextItem, Pm, Repo};
 
 /// How long a flash message stays in the footer.
 const FLASH_SECS: i64 = 6;
@@ -119,6 +119,10 @@ fn repo_title(repo: Option<&Repo>) -> Line<'static> {
         ),
     };
     spans.push(Span::raw(format!(" · {}", pm_text.trim_end())));
+    if let Some(text) = auto_submit_text(pm) {
+        spans.push(Span::raw(" · "));
+        spans.push(Span::styled(text, Style::default().fg(Color::Cyan)));
+    }
     if pm.unread > 0 {
         spans.push(Span::raw(" · "));
         spans.push(Span::styled(
@@ -367,6 +371,31 @@ fn agent_line(
     fit(left, right, w)
 }
 
+/// `auto-submit`, with its expiry in local time, for a PM whose wakes submit
+/// themselves (#385): a PM left on while the user is away, or one launched
+/// with `task-pm --auto-submit`, so it does not go unnoticed.
+fn auto_submit_text(pm: &Pm) -> Option<String> {
+    if !pm.auto_submit {
+        return None;
+    }
+    let until = pm
+        .auto_submit_until
+        .as_deref()
+        .and_then(|u| DateTime::parse_from_rfc3339(u).ok())
+        .map(|u| {
+            let u = u.with_timezone(&Local);
+            if u.signed_duration_since(Local::now()).num_hours() < 24 {
+                u.format("%H:%M").to_string()
+            } else {
+                u.format("%Y-%m-%d %H:%M").to_string()
+            }
+        });
+    Some(match until {
+        Some(u) => format!("auto-submit until {u}"),
+        None => "auto-submit".to_string(),
+    })
+}
+
 fn pm_line(repo: &Repo, selected: bool, agent_w: usize, w: usize) -> Line<'static> {
     let pm = &repo.pm;
     let agent = pm_agent(repo);
@@ -388,6 +417,8 @@ fn pm_line(repo: &Repo, selected: bool, agent_w: usize, w: usize) -> Line<'stati
         })
         .filter_map(|s| s.text.as_deref())
         .collect();
+    let auto = auto_submit_text(pm);
+    let title: Vec<&str> = auto.as_deref().into_iter().chain(owed).collect();
     agent_line(
         selected,
         "PM",
@@ -396,7 +427,7 @@ fn pm_line(repo: &Repo, selected: bool, agent_w: usize, w: usize) -> Line<'stati
         pm.shown_state(),
         &words,
         dim(),
-        Span::styled(owed.join(" · "), Style::default().fg(Color::Yellow)),
+        Span::styled(title.join(" · "), Style::default().fg(Color::Yellow)),
         pm_needs_you(repo),
         w,
     )
@@ -1364,6 +1395,47 @@ mod tests {
         assert!(line_with(&s, "PROJ-42 ").starts_with("     PROJ-42    kiro    ·  implementing"));
         let marked: Vec<&str> = rows.iter().filter(|r| r.1).map(|r| r.0).collect();
         assert_eq!(marked, vec!["PM", "#262", "12"]);
+    }
+
+    #[test]
+    fn an_auto_submitting_pm_says_so_with_its_expiry() {
+        // #385: a PM left on while the user is away must be visible.
+        let mut snap = parse(MULTI).unwrap();
+        let until = (Utc::now() + chrono::Duration::hours(3)).to_rfc3339();
+        let local = DateTime::parse_from_rfc3339(&until)
+            .unwrap()
+            .with_timezone(&Local)
+            .format("%H:%M")
+            .to_string();
+        snap.repos[0].pm.auto_submit = true;
+        snap.repos[0].pm.auto_submit_until = Some(until);
+        snap.repos[1].pm.auto_submit = true;
+        let mut a = app(MULTI, false);
+        a.offer(Instant::now(), crate::refresh::Mode::Local, snap, now());
+        let s = overview_lines(&mut a, 140);
+        assert!(
+            s[1].contains(&format!("auto-submit until {local}")),
+            "{}",
+            s[1]
+        );
+        assert!(
+            s[6].contains("auto-submit") && !s[6].contains("until"),
+            "{}",
+            s[6]
+        );
+        let title: String = repo_title(Some(&a.repos()[0]))
+            .spans
+            .iter()
+            .map(|sp| sp.content.to_string())
+            .collect();
+        assert!(
+            title.contains(&format!("auto-submit until {local}")),
+            "{title}"
+        );
+        // Off by default: no word of it.
+        let mut b = app(MULTI, false);
+        let s = overview_lines(&mut b, 140);
+        assert!(!s[1].contains("auto-submit"), "{}", s[1]);
     }
 
     #[test]

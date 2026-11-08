@@ -25,7 +25,6 @@ bats_load_library bats-assert
 load helpers/common
 
 SLUG="my-feature"
-ROLE="worker-task-force-$SLUG"
 
 setup() {
   setup_repo
@@ -33,6 +32,8 @@ setup() {
   setup_worktree "$SLUG"
   setup_task_force_home
   cd "$WORKTREE_BASE/$SLUG"
+  # The worktree's own role: task-done acts on it and no other (#377).
+  ROLE=$(expected_worker_role "$SLUG")
   # Make the real radio binary available so the unregister step inside
   # task-done's cleanup region runs against it (matches assert_task_done_unregisters
   # in task_done.bats). TAB_ID capture in task-done happens *before*
@@ -455,7 +456,7 @@ assert_leftovers_cleaned() {
   # An agent harness resets a shell whose cwd is gone, so the worker may be
   # dropped back into the main checkout before it ever runs task-done.
   use_dotless_repo
-  local role="worker-$REPO_NAME-$SLUG"
+  local role; role=$(expected_worker_role "$SLUG")
   seed_live_worker_state "$role"
   vanish_worktree
   cd "$MAIN_REPO"
@@ -468,7 +469,7 @@ assert_leftovers_cleaned() {
 }
 
 @test "from the main checkout, a worker role whose worktree still exists is refused as before (#271)" {
-  local role="worker-$REPO_NAME-$SLUG"
+  local role; role=$(expected_worker_role "$SLUG")
   seed_live_worker_state "$role"
   cd "$MAIN_REPO"
 
@@ -483,7 +484,7 @@ assert_leftovers_cleaned() {
 @test "from the main checkout, a role naming a worktree that never existed is refused (#271)" {
   # No sidecar and no registration: nothing says this was ever a worktree, so
   # there is nothing of ours to clean up.
-  local role="worker-$REPO_NAME-never-was"
+  local role; role=$(expected_worker_role never-was)
   export TASK_FORCE_ROLE="$role"
   cd "$MAIN_REPO"
 

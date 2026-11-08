@@ -32,6 +32,8 @@ source "$AW_ROOT/lib/detect-impl.sh"
 source "$AW_ROOT/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-procs.sh
 source "$AW_ROOT/lib/worktree-procs.sh"
+# shellcheck source=lib/repo-name.sh
+source "$AW_ROOT/lib/repo-name.sh"
 
 aw_parse_impl_flag "$@" || exit 1
 
@@ -133,6 +135,27 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in 
 MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/worktree //')
 REPO_NAME=$(basename "$MAIN_WORKTREE")
 WORKTREE_BASE="${MAIN_WORKTREE}/../${REPO_NAME}-worktrees"
+# The repo segment of a radio role, sanitized as task-work built it: a repo named
+# `my.app` runs as worker-myapp-<slug>, not as an invalid worker-my.app-<slug>.
+REPO_RADIO_NAME=$(aw_sanitize_repo_name "$REPO_NAME")
+RADIO_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio"
+
+# The radio role that owns worktree <slug>, named the way task-work and
+# task-reviewer named it: worker-<repo>-<slug>, or reviewer-<repo>-pr<N> for a
+# reviewer's review-pr<N>. The tail must be all digits, as in radio's own
+# recovery (#229), so a worker slug like review-pr-flow stays a worker.
+_worktree_role() {
+  local slug="$1" digits
+  case "$slug" in
+    review-pr?*)
+      digits=${slug#review-pr}
+      if [[ -z "${digits//[0-9]/}" ]]; then
+        printf 'reviewer-%s-pr%s' "$REPO_RADIO_NAME" "$digits"
+        return
+      fi ;;
+  esac
+  printf 'worker-%s-%s' "$REPO_RADIO_NAME" "$slug"
+}
 
 # Check we're actually in a worktree (not the main repo). One exception (#271):
 # a worker whose worktree vanished may have been dropped back into the main
@@ -142,8 +165,8 @@ WORKTREE_BASE="${MAIN_WORKTREE}/../${REPO_NAME}-worktrees"
 if [[ -z "$VANISHED_WT" && "$REPO_ROOT" == "$MAIN_WORKTREE" ]]; then
   _role_slug=""
   case "${TASK_FORCE_ROLE:-}" in
-    worker-"$REPO_NAME"-?*) _role_slug=${TASK_FORCE_ROLE#worker-"$REPO_NAME"-} ;;
-    reviewer-"$REPO_NAME"-pr?*) _role_slug=review-${TASK_FORCE_ROLE#reviewer-"$REPO_NAME"-} ;;
+    worker-"$REPO_RADIO_NAME"-?*) _role_slug=${TASK_FORCE_ROLE#worker-"$REPO_RADIO_NAME"-} ;;
+    reviewer-"$REPO_RADIO_NAME"-pr?*) _role_slug=review-${TASK_FORCE_ROLE#reviewer-"$REPO_RADIO_NAME"-} ;;
   esac
   if [[ -n "$_role_slug" && ! -d "$WORKTREE_BASE/$_role_slug" ]] \
      && { [[ -f "$WORKTREE_BASE/.$_role_slug.info" ]] \
@@ -164,6 +187,9 @@ else
   SLUG="${BRANCH#task/}"
 fi
 INFO_FILE="${WORKTREE_BASE}/.${SLUG}.info"
+# Read before the source below, which overwrites $SLUG with the file's own.
+INFO_SLUG=$(awk -F= '/^SLUG=/ { print $2; exit }' "$INFO_FILE" 2>/dev/null || true)
+OWN_ROLE=$(_worktree_role "$SLUG")
 
 # Load base branch written by task-work; fall back to "main"
 BASE_BRANCH="main"
@@ -242,8 +268,8 @@ _WORKER_TAB_ID=""
 if [[ -n "${ZELLIJ:-}" && -f "$INFO_FILE" ]]; then
   _WORKER_TAB_ID=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$INFO_FILE")
 fi
-if [[ -z "$_WORKER_TAB_ID" && -n "${ZELLIJ:-}" && -n "${TASK_FORCE_ROLE:-}" ]]; then
-  _SESSION_FILE="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions/${TASK_FORCE_ROLE}.info"
+if [[ -z "$_WORKER_TAB_ID" && -n "${ZELLIJ:-}" ]]; then
+  _SESSION_FILE="$RADIO_DIR/sessions/${OWN_ROLE}.info"
   if [[ -f "$_SESSION_FILE" ]]; then
     _WORKER_TAB_ID=$(awk -F= '/^TAB_ID=/ { print $2; exit }' "$_SESSION_FILE")
   fi
@@ -262,11 +288,108 @@ if [[ -z "$_WORKER_TAB_ID" ]]; then
   fi
 fi
 
-# Unregister radio session before tearing down the worktree (#94). The
-# `|| true` is a safety net: $TASK_FORCE_ROLE should be set inside a worker
-# tab, but if it isn't (e.g., task-done invoked from an unexpected shell)
-# the no-op must not abort cleanup. `radio unregister` itself already
-# silently exits when $TASK_FORCE_ROLE is unset (#93).
+# Agent processes still running in the worktree (#305), looked for while its
+# path still resolves. The agent running this command is not one of them: the
+# helper leaves out the caller's own agent tree, which goes with the tab. What
+# is left is an agent from an earlier tab that closed without taking it along.
+# Warned about, never stopped: whether they are stray is the PM's call. Logged
+# as well, because this tab is about to close and take this output with it.
+# Scanned once, here: the role decision below reads the same answer (#377).
+_STRAY_PROCS=$(aw_worktree_agent_procs "$WORKTREE_DIR")
+if [[ -n "$_STRAY_PROCS" ]]; then
+  _STRAY_PIDS=$(cut -f1 <<<"$_STRAY_PROCS" | tr '\n' ' ')
+  echo "⚠ Agent processes are still running in this worktree, and removing it will not stop them:"
+  aw_print_worktree_procs "    " "$_STRAY_PROCS"
+  echo "  They outlived the tab that started them. Check they are stray, then: kill ${_STRAY_PIDS% }"
+  echo ""
+  aw_radio_log "stray-procs: task-done left ${_STRAY_PIDS}running in $WORKTREE_DIR slug=$SLUG"
+fi
+
+# Which role's radio state this cleanup takes down (#377, #232). Always the
+# worktree's own, never whatever $TASK_FORCE_ROLE says: a task-done typed in the
+# PM's tab after a `cd` into a worker's worktree used to unregister the PM and
+# delete its mailbox, unread mail included, and leave the worker's behind. A
+# roleless session (every resumed one, #229) cleaned up nobody's.
+#
+# When the caller IS the worktree's role, that is the worker retiring itself and
+# nothing needs checking. Otherwise the role is derived, as radio's recovery
+# derives it (#229): from the .<slug>.info task-work wrote for this slug. Taking
+# down an inferred identity is destructive, so two refusals guard it. A session
+# file that names another worktree is another checkout's role of the same name.
+# And a role that is still alive is not ours to wipe: alive means an agent
+# process is still running in this worktree, by the #305 scan above, which
+# leaves out the caller's own agent (so a roleless worker retiring itself is
+# not alive to itself). The heartbeat is only a guess at that, fresh for a tab
+# closed ten minutes ago and stale for an agent alive after a machine sleep, so
+# it decides only when the scan is off (TASK_FORCE_NO_PROC_SCAN=1), and then
+# staleness is radio orphans' call, as in task-recreate-worker. Sets
+# $RADIO_ROLE, empty when nothing is to be touched.
+_phys_path() {
+  local d
+  d=$(cd -P "$(dirname "$1")" 2>/dev/null && pwd) || { printf '%s' "$1"; return; }
+  printf '%s/%s' "$d" "$(basename "$1")"
+}
+
+_resolve_radio_role() {
+  RADIO_ROLE=""
+  local caller="${TASK_FORCE_ROLE:-}" sf repo orphans who
+  case "$OWN_ROLE" in
+    -*|*/*|*..*|*[!a-zA-Z0-9_-]*)   # never a path out of the radio dir
+      echo "task-done: '$OWN_ROLE' is not a valid radio role — leaving radio state alone; check \`radio orphans\`." >&2
+      return ;;
+  esac
+  if [[ "$caller" == "$OWN_ROLE" ]]; then
+    RADIO_ROLE="$OWN_ROLE"
+    return
+  fi
+  if [[ -n "$caller" ]]; then
+    who="this session is $caller, not this worktree's $OWN_ROLE"
+  else
+    # shellcheck disable=SC2016  # a literal $VAR for the reader
+    who='no $TASK_FORCE_ROLE in this session'
+  fi
+  if [[ "$INFO_SLUG" != "$SLUG" ]]; then
+    echo "task-done: $who, and no role for this worktree can be derived ($INFO_FILE does not record SLUG=$SLUG)." >&2
+    echo "  Radio state for this worktree may be left behind; check \`radio orphans\`.${caller:+ $caller is left alone.}" >&2
+    aw_radio_log "task-done-role: none derivable for slug=$SLUG (caller=${caller:-<unset>})"
+    return
+  fi
+  sf="$RADIO_DIR/sessions/$OWN_ROLE.info"
+  if [[ -f "$sf" ]]; then
+    repo=$(awk '/^REPO=/ { sub(/^REPO=/, ""); print; exit }' "$sf")
+    if [[ -n "$repo" && "$(_phys_path "$repo")" != "$(_phys_path "$WORKTREE_DIR")" ]]; then
+      echo "task-done: $who, and $OWN_ROLE's session names $repo, not $WORKTREE_DIR." >&2
+      echo "  That is another checkout's role of the same name; leaving its session, mailbox and sidecars alone.${caller:+ $caller is left alone too.}" >&2
+      aw_radio_log "task-done-role: refused $OWN_ROLE, its session names $repo not $WORKTREE_DIR (caller=${caller:-<unset>})"
+      return
+    fi
+  fi
+  if [[ "${TASK_FORCE_NO_PROC_SCAN:-}" != 1 ]]; then
+    if [[ -n "$_STRAY_PROCS" ]]; then
+      echo "task-done: $who, and $OWN_ROLE is still alive: agent processes are running in this worktree (listed above)." >&2
+      echo "  Leaving its session, mailbox and sidecars alone. Once they are stopped: TASK_FORCE_ROLE=$OWN_ROLE radio unregister --manual${caller:+. $caller is left alone.}" >&2
+      aw_radio_log "task-done-role: refused $OWN_ROLE, agent processes running in $WORKTREE_DIR (caller=${caller:-<unset>})"
+      return
+    fi
+  elif [[ -f "$sf" ]]; then
+    orphans=$(radio orphans 2>/dev/null || true)
+    if ! grep -q "^${OWN_ROLE}[[:space:]]" <<<"$orphans"; then
+      echo "task-done: $who, and $OWN_ROLE still has a live session (process scan off, and a heartbeat under 1h: radio orphans does not list it)." >&2
+      echo "  Leaving its session, mailbox and sidecars alone: if it is really gone, \`radio orphans\` lists it within the hour, and then: TASK_FORCE_ROLE=$OWN_ROLE radio unregister --manual${caller:+. $caller is left alone.}" >&2
+      aw_radio_log "task-done-role: refused $OWN_ROLE, live session by heartbeat, process scan off (caller=${caller:-<unset>})"
+      return
+    fi
+  fi
+  RADIO_ROLE="$OWN_ROLE"
+  echo "task-done: $who; cleaning up $OWN_ROLE's radio state (derived from $(basename "$INFO_FILE")).${caller:+ $caller is left alone.}" >&2
+  aw_radio_log "task-done-role: acting on $OWN_ROLE, derived from $(basename "$INFO_FILE") (caller=${caller:-<unset>})"
+}
+_resolve_radio_role
+
+# Unregister radio session before tearing down the worktree (#94), for the role
+# resolved above and no other: the env prefix names it, so the caller's own
+# session is never the one wiped. `|| true` because cleanup must not abort on a
+# missing or failing radio binary (#94).
 #
 # `--manual` is the explicit opt-in (#187). On hook-shaped stdin `radio
 # unregister` now defaults to NOT wiping: an empty payload is byte-identical
@@ -276,56 +399,22 @@ fi
 # of letting radio infer intent from the shape of its stdin. Keep the
 # /dev/null redirect regardless, so the payload read can't swallow whatever
 # the calling shell piped in (under `--force` that may be a stray `y`).
-radio unregister --manual </dev/null 2>/dev/null || true
+if [[ -n "$RADIO_ROLE" ]]; then
+  TASK_FORCE_ROLE="$RADIO_ROLE" radio unregister --manual </dev/null 2>/dev/null || true
 
-# Sweep this worker's radio mailbox (#169). Once the worktree and tab are gone
-# the role is dead by definition, so its inbox/processed dirs are pure residue —
-# e.g. an `approved-and-merged` ping that landed after the tab closed. Guard the
-# role name against empty / traversal so a stray env value can't turn this into
-# an `rm -rf` of the whole mailbox root.
-_ROLE="${TASK_FORCE_ROLE:-}"
-case "$_ROLE" in
-  ""|-*|*/*|*..*|*[!a-zA-Z0-9_-]*) : ;;   # unset or unsafe — skip
-  *)
-    _MAILBOX_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/mailbox/$_ROLE"
-    [[ -d "$_MAILBOX_DIR" ]] && rm -rf "$_MAILBOX_DIR"
-    ;;
-esac
+  # Sweep its radio mailbox (#169). Once the worktree and tab are gone the role
+  # is dead by definition, so its inbox/processed dirs are pure residue — e.g.
+  # an `approved-and-merged` ping that landed after the tab closed.
+  [[ -d "$RADIO_DIR/mailbox/$RADIO_ROLE" ]] && rm -rf "$RADIO_DIR/mailbox/$RADIO_ROLE"
 
-# And its session sidecars (#375). They outlive `unregister` on purpose (#188),
-# so a re-seed mid-life keeps the real loadout and agent, but this is
-# retirement, not a re-seed: the worktree goes next, so task-recreate-worker
-# (#230), the one later reader, refuses this slug anyway. Leaving them to gc
-# left hundreds behind. Only for the role that names THIS worktree, so a
-# task-done typed in another role's tab never takes that role's sidecars. The
-# list matches radio's _reclaim_sidecars; .aliases is a PM's and never ours.
-case "$SLUG" in
-  review-pr?*) _OWN_ROLE="reviewer-$REPO_NAME-${SLUG#review-}" ;;
-  *)           _OWN_ROLE="worker-$REPO_NAME-$SLUG" ;;
-esac
-case "$_ROLE" in
-  ""|-*|*/*|*..*|*[!a-zA-Z0-9_-]*) : ;;   # unset or unsafe — skip, as above
-  "$_OWN_ROLE")
-    _SESSIONS_DIR="${TASK_FORCE_HOME:-$HOME/.task-force}/radio/sessions"
-    rm -f "$_SESSIONS_DIR/$_ROLE.loadout" "$_SESSIONS_DIR/$_ROLE.agent" \
-          "$_SESSIONS_DIR/$_ROLE.auto-submit" "$_SESSIONS_DIR/$_ROLE.profile"
-    ;;
-esac
-
-# Agent processes still running in the worktree (#305), looked for while its
-# path still resolves. The agent running this command is not one of them: the
-# helper leaves out the caller's own agent tree, which goes with the tab. What
-# is left is an agent from an earlier tab that closed without taking it along.
-# Warned about, never stopped: whether they are stray is the PM's call. Logged
-# as well, because this tab is about to close and take this output with it.
-_STRAY_PROCS=$(aw_worktree_agent_procs "$WORKTREE_DIR")
-if [[ -n "$_STRAY_PROCS" ]]; then
-  _STRAY_PIDS=$(cut -f1 <<<"$_STRAY_PROCS" | tr '\n' ' ')
-  echo "⚠ Agent processes are still running in this worktree, and removing it will not stop them:"
-  aw_print_worktree_procs "    " "$_STRAY_PROCS"
-  echo "  They outlived the tab that started them. Check they are stray, then: kill ${_STRAY_PIDS% }"
-  echo ""
-  aw_radio_log "stray-procs: task-done left ${_STRAY_PIDS}running in $WORKTREE_DIR slug=$SLUG"
+  # And its session sidecars (#375). They outlive `unregister` on purpose
+  # (#188), so a re-seed mid-life keeps the real loadout and agent, but this is
+  # retirement, not a re-seed: the worktree goes next, so task-recreate-worker
+  # (#230), the one later reader, refuses this slug anyway. Leaving them to gc
+  # left hundreds behind. The list matches radio's _reclaim_sidecars; .aliases
+  # is a PM's and never ours.
+  rm -f "$RADIO_DIR/sessions/$RADIO_ROLE.loadout" "$RADIO_DIR/sessions/$RADIO_ROLE.agent" \
+        "$RADIO_DIR/sessions/$RADIO_ROLE.auto-submit" "$RADIO_DIR/sessions/$RADIO_ROLE.profile"
 fi
 
 # Move out of worktree before removing it

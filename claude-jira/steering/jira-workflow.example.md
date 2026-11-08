@@ -104,6 +104,20 @@ process tree goes with the tab. Run from anywhere else, the PM's tab included, a
 worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
 along: `grep 'stray-procs:' ~/.task-force/radio/log`.
 
+The radio state `task-done` takes down (session, mailbox, sidecars) belongs to
+the **worktree's own role** and no other (#377): `worker-<repo>-<slug>`, or
+`reviewer-<repo>-pr<N>` for `review-pr<N>`. Run from the PM's tab after a `cd`
+into a worker's worktree, or from a resumed session with no `$TASK_FORCE_ROLE`
+(#232), it derives that role from the worktree's `.<slug>.info`, says so on
+stderr and leaves the caller's own role alone. It refuses a derived role whose
+session file names another worktree, or that is still alive: agent processes
+are running in the worktree, by the same scan as the warning above (the
+caller's own agent is never counted). With `TASK_FORCE_NO_PROC_SCAN=1` it falls
+back to the heartbeat, refusing one under an hour old (`radio orphans` does not
+list it). With no `.<slug>.info` to derive from, it says so and points at
+`radio orphans`. The worktree and the tab go either way. Each decision is
+logged: `grep 'task-done-role:' ~/.task-force/radio/log`.
+
 ### Auto intake (`task-watch`)
 
 `task-watch [--once]` — poll Jira for labelled bugs, claim each once, radio the PM (#328)

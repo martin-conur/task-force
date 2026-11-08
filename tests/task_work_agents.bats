@@ -363,6 +363,17 @@ _session_auto_submit() {
   [[ "$line" != *"--tui"* ]]                       || { echo "$line" >&2; return 1; }
 }
 
+# A tab close does not reach kiro's backend, a session leader of its own, so
+# the worker runs under bin/agent-supervise, which reaps it once the agent has
+# gone (#388). claude goes with its tab and is left as it was.
+@test "kiro runs the worker under agent-supervise; claude does not (#388)" {
+  local line
+  line=$(_launch_line kiro-gh)
+  [[ "$line" == *"/bin/agent-supervise kiro-cli chat --agent worker"* ]] || { echo "$line" >&2; return 1; }
+  line=$(_launch_line claude-gh)
+  [[ "$line" != *"agent-supervise"* ]] || { echo "$line" >&2; return 1; }
+}
+
 # V3 asks "Trust this workspace?" in every folder it has never seen, which is
 # every new worktree, and nobody types in a dispatched tab (#378). The flag that
 # skips it rides the launch line only when kiro-cli lists it, ahead of the

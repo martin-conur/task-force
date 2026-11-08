@@ -457,7 +457,10 @@ _dq_escape() {
   printf '%s' "$v"
 }
 build_kiro_cmd() {
-  local cmd="kiro-cli chat --agent reviewer"
+  # Under bin/agent-supervise, so the backend the tab close leaves running is
+  # stopped once the reviewer's task-done has closed it (#388).
+  local cmd
+  cmd="$(aw_kiro_supervise_prefix)kiro-cli chat --agent reviewer"
   [[ -n "$MODEL" ]] && cmd+=" --model $(printf %q "$MODEL")"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
   # Pin the terminal UI: the classic one opens on a dialog that holds the

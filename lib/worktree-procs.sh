@@ -62,6 +62,12 @@ _aw_proc_candidates() {
     function is_agent(i, a0, s) {
       a0 = base($8)
       if (agent_word(a0)) return 1
+      # The bun and node kiro-cli ships, by where they live. On macOS that is under
+      # "Application Support", whose space splits the path across fields, so
+      # base($8) reads "Application": rejoin the path first (#388).
+      s = $8
+      for (i = 9; i <= NF && $i !~ /^[\/-]/; i++) s = s " " $i
+      if (s ~ /^\/.*\/kiro-cli\/(bun|node)$/) return 1
       if (a0 == "bun" || a0 == "node") {
         for (i = 9; i <= NF; i++) if ($i !~ /^-/) break
         return i <= NF && (agent_word($i) || $i ~ /kiro-cli/)

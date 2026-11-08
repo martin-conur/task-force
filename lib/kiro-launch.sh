@@ -88,6 +88,18 @@ aw_kiro_trust_workspace_flag() {
   _aw_kiro_chat_flag --trust-workspace
 }
 
+# aw_kiro_supervise_prefix
+#
+# Prints the launch-line prefix that runs kiro under bin/agent-supervise
+# (#388): `<path> ` with a trailing space, %q-quoted for the tab's `bash -ic`.
+# A tab close does not reach kiro's backend, which runs in a session of its
+# own; the supervisor outlives the agent and stops what it left in the
+# worktree. Worker and reviewer launches only: the PM runs in the main
+# checkout, which is no one tab's to reap, and execs kiro in place.
+aw_kiro_supervise_prefix() {
+  printf '%q ' "$AW_ROOT/bin/agent-supervise"
+}
+
 # _aw_kiro_chat_flag <flag>
 #
 # Prints " <flag>" when `kiro-cli chat --help` lists it, and nothing otherwise.

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# agent-supervise <command>... — run a kiro agent, then reap what it leaves in
+# its worktree (#388).
+#
+# Not a user command: the kiro launch lines of task-work, task-recreate-worker
+# and task-reviewer put it in front of `kiro-cli chat`, by absolute path, so it
+# needs no symlink on PATH.
+#
+# Closing a kiro tab does not take kiro with it. Probed on kiro-cli 3.1.0 by
+# zellij close-tab-by-id, by closing the pane and by kill-session: each one
+# HUPs the pane's foreground process group (`kiro-cli chat` and its bun
+# `tui.js` front end), but the backend runs in a session of its own, with no
+# controlling terminal, and the HUP never reaches it. On the V3 engine that is
+# `…/kiro-cli/node … acp-server.js`, which outlived every one of those closes,
+# reparented to pid 1; idle, it exited by itself 35-90s later, and a busy one
+# was not probed. On V2 it is `kiro-cli acp`, which outlived the tab by 2-4s.
+# #305's strays outlived theirs by two days.
+#
+# So this runs the agent as its child, in the foreground. When the tab closes,
+# its HUP reaches this script and the agent alike. A trapped signal waits for
+# the foreground child (bash runs the trap once the child is done), so this
+# script outlives the agent, and that is the point: once the agent has exited,
+# it scans the worktree with #305's aw_worktree_agent_procs, which finds agent
+# processes by their cwd whatever session they are in, and stops what it lists
+# with aw_kill_worktree_procs: TERM, KILL after $AW_PROC_TERM_WAIT, each pid
+# re-checked against its start time just before the signal. The same runs when
+# the agent exits on its own (a /quit). Traps, not ignores: an ignored signal
+# stays ignored across exec, and the agent would inherit it.
+#
+# The scan leaves out the outermost agent above this script, the tab's
+# `bash -ic` wrapper, and its tree, which is this script; it is gone anyway
+# once a close has HUPed it. A SIGKILL to this script stops nothing, which is
+# what `--kill-stale` and task-done's warning are still there for.
+#
+# The worktree is the cwd at launch, taken physically: task-done removes the
+# worktree before it closes the tab, and the kernel (lsof, /proc) still names
+# a deleted cwd by its physical path. Reaping happens only in a linked
+# worktree, never in a main checkout, where other agents run too.
+#
+# Everything goes to radio's log, `reap:` lines, never to the terminal: by the
+# time it runs the pane may be gone.
+#
+# Environment:
+#   TASK_FORCE_NO_REAP=1       run the agent, reap nothing.
+#   TASK_FORCE_NO_PROC_SCAN=1  the scan lists nothing, so nothing is reaped.
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src="$dir/$src"
+done
+AW_ROOT=$(dirname "$(cd -P "$(dirname "$src")" && pwd)")
+# shellcheck source=lib/zellij-tab.sh
+source "$AW_ROOT/lib/zellij-tab.sh"
+# shellcheck source=lib/worktree-procs.sh
+source "$AW_ROOT/lib/worktree-procs.sh"
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: agent-supervise <command>..." >&2
+  exit 2
+fi
+
+WT_DIR=$(pwd -P 2>/dev/null) || WT_DIR="$PWD"
+LABEL="slug=${ZELLIJ_TAB:-$(basename "$WT_DIR")} role=${TASK_FORCE_ROLE:-<unset>}"
+# A linked worktree's git dir is not its common dir; a main checkout's is.
+IS_LINKED=""
+_gd=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || _gd=""
+_cd=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || _cd=""
+[[ -n "$_gd" && -n "$_cd" && "$_gd" != "$_cd" ]] && IS_LINKED=1
+
+SIG=""
+trap 'SIG=${SIG:-HUP}' HUP
+trap 'SIG=${SIG:-TERM}' TERM
+trap 'SIG=${SIG:-INT}' INT
+
+"$@"
+RC=$?
+
+# The agent is gone. Nothing below may be cut short by the rest of the close,
+# nor write to a terminal that may no longer exist.
+trap '' HUP TERM INT
+exec </dev/null >/dev/null 2>&1
+
+WHY="agent exited rc=$RC${SIG:+ after SIG$SIG}"
+if [[ "${TASK_FORCE_NO_REAP:-}" == 1 ]]; then
+  aw_radio_log "reap: off (TASK_FORCE_NO_REAP=1), $WHY in $WT_DIR $LABEL"
+  exit "$RC"
+fi
+if [[ -z "$IS_LINKED" ]]; then
+  aw_radio_log "reap: skipped, $WT_DIR is not a linked worktree, $WHY $LABEL"
+  exit "$RC"
+fi
+
+LEFT=$(aw_worktree_agent_procs "$WT_DIR" | awk -F'\t' -v me="$$" '$1 != me')
+if [[ -z "$LEFT" ]]; then
+  aw_radio_log "reap: nothing left in $WT_DIR, $WHY $LABEL"
+  exit "$RC"
+fi
+while IFS=$'\t' read -r pid start cmd; do
+  [[ -n "$pid" ]] || continue
+  aw_radio_log "reap: $pid started $start: $cmd $LABEL"
+done <<<"$LEFT"
+if OUT=$(aw_kill_worktree_procs "$WT_DIR" "$LEFT" 2>&1); then
+  status=stopped
+else
+  status=failed
+fi
+while IFS= read -r line; do
+  [[ -n "$line" ]] && aw_radio_log "reap: $line $LABEL"
+done <<<"$OUT"
+aw_radio_log "reap: $status $(cut -f1 <<<"$LEFT" | tr '\n' ' ')in $WT_DIR, $WHY $LABEL"
+exit "$RC"

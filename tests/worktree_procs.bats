@@ -480,3 +480,140 @@ assert_worker_role_gone() {
   task_done_from_pm_tab issue-42
   assert_worker_role_gone "$role"
 }
+
+# ---------------------------------------------------------------------------
+# bin/agent-supervise: what a closed kiro tab leaves behind is reaped (#388)
+# A tab close HUPs the pane's foreground group (`kiro-cli chat`, the bun
+# front end) but not kiro's backend, which runs in a session of its own. The
+# supervisor runs the agent as its child and, once it has exited, stops the
+# worktree's agent processes. Probed on kiro-cli 3.1.0, macOS paths below.
+# ---------------------------------------------------------------------------
+
+SUPERVISE="$REPO_ROOT_REAL/bin/agent-supervise"
+KIRO_APP="/Users/u/Library/Application Support/kiro-cli"
+
+# What a V3 kiro tab leaves once its pane has gone: the front end and the
+# acp-server backend, both reparented to pid 1. Plus a claude in another
+# worktree and a non-agent in this one, neither of them the supervisor's.
+orphaned_kiro_v3_in() {
+  local wt="$1"
+  proc 5000031 1 "$wt" "$KIRO_APP/bun" --no-env-file "--config=$KIRO_APP/bunfig.toml" "$KIRO_APP/tui.js" chat --tui
+  proc 5000032 1 "$wt" "$KIRO_APP/node" --experimental-wasm-modules "$KIRO_APP/kas/3.1.0/node_modules/@kiro/agent/dist/server/acp-server.js" --transport=stdio
+  proc 5000004 1 "$WT_PHYS/other-slug" claude /worker
+  proc 5000005 1 "$wt" vim notes.md
+}
+
+supervise_in() {
+  local dir="$1"; shift
+  cd "$dir"
+  run env ZELLIJ_TAB=issue-42 "$SUPERVISE" "$@"
+}
+
+@test "helper: kiro's own bun and node count under a path with a space in it (#388)" {
+  orphaned_kiro_v3_in /work/wt
+  proc 5000033 1 /work/wt cat Application Support/kiro-cli/node
+  proc 5000034 1 /work/wt less "$KIRO_APP/node"
+  run lib "aw_worktree_agent_procs /work/wt"
+  assert_success
+  assert_line --index 0 --partial $'5000031\t'
+  assert_line --index 1 --partial $'5000032\t'
+  assert_equal "${#lines[@]}" 2
+}
+
+@test "supervise: once the agent exits, stops what kiro left in the worktree and logs each" {
+  setup_worktree issue-42
+  orphaned_kiro_v3_in "$WT_PHYS/issue-42"
+  supervise_in "$WORKTREE_BASE/issue-42" true
+  assert_success
+  assert_output ""
+  run grep -E '^-(TERM|KILL)' "$STUB_CALLS_DIR/kill.calls"
+  assert_output "-TERM 5000031 5000032"
+  local log="$TASK_FORCE_HOME/radio/log"
+  run grep -c 'reap: 500003[12] started Thu Oct 22 19:47:43 2026: ' "$log"
+  assert_output 2
+  run grep "reap: 5000032 started .*acp-server.js .* slug=issue-42" "$log"
+  assert_success
+  run grep "reap: stopped 5000031 5000032 in $WT_PHYS/issue-42, agent exited rc=0 slug=issue-42" "$log"
+  assert_success
+  run grep -c '5000004\|5000005' "$log"
+  assert_output 0
+}
+
+@test "supervise: a HUP from the tab close does not cut it short, and the agent's status comes back" {
+  # The child stands in for kiro at a tab close: the HUP reaches the
+  # supervisor and the agent alike, and the agent dies of it (129).
+  setup_worktree issue-42
+  orphaned_kiro_v3_in "$WT_PHYS/issue-42"
+  supervise_in "$WORKTREE_BASE/issue-42" bash -c 'kill -HUP $PPID; exit 129'
+  assert_equal "$status" 129
+  run grep -E '^-TERM' "$STUB_CALLS_DIR/kill.calls"
+  assert_output "-TERM 5000031 5000032"
+  run grep "reap: stopped 5000031 5000032 in .*, agent exited rc=129 after SIGHUP" "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "supervise: KILLs what survives the TERM, and logs it" {
+  setup_worktree issue-42
+  orphaned_kiro_v3_in "$WT_PHYS/issue-42"
+  echo 5000032 > "$PROC_FIX/alive.after-term"
+  supervise_in "$WORKTREE_BASE/issue-42" true
+  run grep -E '^-(TERM|KILL)' "$STUB_CALLS_DIR/kill.calls"
+  assert_line --index 0 "-TERM 5000031 5000032"
+  assert_line --index 1 "-KILL 5000032"
+  run grep 'reap: Still running after 0s; sending KILL to: 5000032' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "supervise: says so in the log when a process will not stop" {
+  setup_worktree issue-42
+  orphaned_kiro_v3_in "$WT_PHYS/issue-42"
+  echo 5000032 > "$PROC_FIX/immortal"
+  supervise_in "$WORKTREE_BASE/issue-42" true
+  assert_success
+  run grep 'reap: Could not stop: 5000032' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+  run grep 'reap: failed 5000031 5000032 in' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "supervise: with nothing left in the worktree, signals nothing and logs that" {
+  setup_worktree issue-42
+  proc 5000004 1 "$WT_PHYS/other-slug" claude /worker
+  supervise_in "$WORKTREE_BASE/issue-42" true
+  assert_success
+  assert_equal "$(kill_calls)" ""
+  run grep "reap: nothing left in $WT_PHYS/issue-42, agent exited rc=0" "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "supervise: never reaps in a main checkout" {
+  orphaned_kiro_v3_in "$(cd "$MAIN_REPO" && pwd -P)"
+  supervise_in "$MAIN_REPO" true
+  assert_success
+  assert_equal "$(kill_calls)" ""
+  run grep "reap: skipped, .* is not a linked worktree" "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "supervise: TASK_FORCE_NO_REAP=1 runs the agent and reaps nothing" {
+  setup_worktree issue-42
+  orphaned_kiro_v3_in "$WT_PHYS/issue-42"
+  cd "$WORKTREE_BASE/issue-42"
+  run env TASK_FORCE_NO_REAP=1 "$SUPERVISE" sh -c 'exit 3'
+  assert_equal "$status" 3
+  assert_equal "$(kill_calls)" ""
+  run grep 'reap: off (TASK_FORCE_NO_REAP=1), agent exited rc=3' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "supervise: finds the worktree after task-done has removed it" {
+  # task-done removes the worktree, then closes the tab: the reap runs in a
+  # cwd that no longer exists, which the kernel still names physically.
+  setup_worktree issue-42
+  orphaned_kiro_v3_in "$WT_PHYS/issue-42"
+  supervise_in "$WORKTREE_BASE/issue-42" git -C "$MAIN_REPO" worktree remove --force "$WORKTREE_BASE/issue-42"
+  assert_success
+  [[ ! -d "$WT_PHYS/issue-42" ]]
+  run grep -E '^-TERM' "$STUB_CALLS_DIR/kill.calls"
+  assert_output "-TERM 5000031 5000032"
+}

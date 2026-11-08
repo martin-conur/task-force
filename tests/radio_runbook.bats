@@ -188,6 +188,22 @@ runbook_block() {
   refute_output "0"
 }
 
+@test "the tab-close reap row is in the README and every workflow doc (#388)" {
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}" \
+           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    for s in "grep 'reap:' ~/.task-force/radio/log" 'bin/agent-supervise' 'reap: nothing left' 'reap: failed' 'reap: skipped'; do
+      run grep -cF -- "$s" "$f"
+      assert_success
+      refute_output "0"
+    done
+  done
+  # The outcomes the row names are the ones the supervisor logs.
+  for s in 'reap: nothing left in' 'reap: $status ' 'status=failed' 'reap: skipped, '; do
+    run grep -cF -- "$s" "$REPO_ROOT_REAL/bin/agent-supervise"
+    refute_output "0"
+  done
+}
+
 @test "loadout=unknown is a real re-seed outcome, not an invented grep" {
   # Assembled at runtime: the sidecar read falls back to ${TASK_FORCE_LOADOUT:-unknown}
   # and the re-seed line prints `loadout=$loadout`, so the literal string only
@@ -257,16 +273,18 @@ runbook_block() {
   setup_kiro_agents
   setup_stubs
   mkdir -p "$MAIN_REPO/tasks"
-  local impl
+  local impl SUPERVISE
+  # The kiro command runs under the tab-close reaper (#388).
+  SUPERVISE="$(cd "$REPO_ROOT_REAL" && pwd -P)/bin/agent-supervise"
   for impl in $(bash -c "source '$REPO_ROOT_REAL/lib/detect-impl.sh'; aw_all_impls" | grep '^kiro-'); do
     : > "$STUB_CALLS_DIR/zellij.calls"
     run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'plain-$impl' --no-task"
     assert_success
-    assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1 kiro-cli"
+    assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=1 $SUPERVISE kiro-cli"
     : > "$STUB_CALLS_DIR/zellij.calls"
     run bash -c "cd '$MAIN_REPO' && AW_IMPL=$impl '$REPO_ROOT_REAL/bin/task-work' 'off-$impl' --no-auto-submit --no-task"
     assert_success
-    assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0 kiro-cli"
+    assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0 $SUPERVISE kiro-cli"
   done
   for f in "${KIRO_TEMPLATES[@]}"; do
     run grep -cF 'Relaunch it with plain `task-work`' "$f"

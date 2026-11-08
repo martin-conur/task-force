@@ -99,7 +99,10 @@ only the remote branch after a merge: `git push origin --delete task/<slug>`.
 
 `task-done` also warns about, and lists, any agent processes still running in
 the worktree it removes (#305): an agent from an earlier tab that closed
-without taking it along. It never stops them; that is the PM's or your call.
+without taking it along. It never stops them itself; that is the PM's or your
+call. On a kiro worker or reviewer the tab's own supervisor does it once the tab
+has closed (#388, below), so what is left to list is a claude agent, a tab
+launched before #388, or a process the supervisor could not stop.
 Run from the worker's own tab, the worker itself is not listed, since its whole
 process tree goes with the tab. Run from anywhere else, the PM's tab included, a
 worker that is still up is listed too, and is not necessarily stray. The warning is also logged, because that tab closes and takes it
@@ -220,6 +223,22 @@ stops them first, re-checking each pid's start time just before the signal so a
 recycled pid is left alone. Whether a process is still running is decided by
 scanning again, not by `kill -0`, so one that survives the KILL or refuses the
 signal (EPERM) stops the recovery. `TASK_FORCE_NO_PROC_SCAN=1` turns the scan off.
+
+**A kiro tab now takes its processes with it** (#388). kiro's backend runs in a
+session of its own with no terminal, so a tab close, however it happens
+(`close-tab`, a closed pane, `task-done`, a killed zellij session), HUPs the
+front end and never reaches the backend. Probed on kiro-cli 3.1.0: the V3
+engine's `…/kiro-cli/node … acp-server.js` outlived every one of those
+closes, reparented to pid 1; V2's `kiro-cli acp` outlived it by a few
+seconds. So `task-work`, `task-recreate-worker` and `task-reviewer` launch kiro
+under `bin/agent-supervise`, which runs the agent as its child, survives the
+HUP, and once the agent has exited stops the worktree's agent processes by this
+same scan: TERM, then KILL, with the same start-time re-check. It logs each one:
+`grep 'reap:' ~/.task-force/radio/log`. It reaps only in a linked worktree,
+never a main checkout, so the PM is not supervised. `TASK_FORCE_NO_REAP=1` in
+your shell turns it off. claude goes with its tab and is launched as before.
+The scan also learned to see kiro's own `bun` and `node` under macOS's
+`Application Support` path, whose space hid an orphaned backend from it.
 
 The sidecar's `TAB_ID` is **stripped before the tab is spawned** and rewritten
 afterwards, never carried over: zellij's server restarted, so that id is stale by
@@ -852,6 +871,7 @@ mailbox.
 | A hook timed out after 30s (`UserPromptSubmit hook [radio prompt-hook] timed out after 30s — output discarded`), or a launch lost focus with no `tab-focus:` line | A zellij server that stalls, busy opening a tab or loaded with agents across sessions, used to hold every radio call that talked to it, and Claude Code kills a hook at 30s with its output (#384). Since #384 every zellij call radio and the snap-back make is bounded by `TASK_FORCE_ZELLIJ_TIMEOUT` seconds (default 3). The first that runs out logs `zellij-timeout: <action> <secs>s role=<role>` (`caller=snap-back slug=<slug>` from a launch), and the rest of that radio run skips zellij. The state write, the heartbeat and prompt-hook's unread summary never wait on zellij; what is lost is the tab repaint, or the wake, which queues as on any failed wake. `grep 'zellij-timeout:' ~/.task-force/radio/log`, and time `zellij action list-tabs --json` while it recurs. A few lines are a busy moment; many in a row are a zellij server worth restarting (then `task-recreate-worker`). |
 | A kiro role's heartbeat froze at its register, and `send` says `looks dead` while its tab is open | kiro-cli's V3 engine stopped firing the agent's hooks (#370). It hot-reloads `.kiro/agents/<agent>.json` when the file changes, and a reload that finds task-init's object-shaped `hooks` drops every hook for the rest of the session, even once the universal file is back (probed on kiro-cli 3.1.0). The usual way in is a `git stash`, `checkout` or `reset` that puts the committed object-shaped copy back over the one kiro rewrote at launch. kiro's own log shows it: `grep -c ContextualHookInvoked ~/.kiro/logs/<start>-<pid>/kiro.log` stops growing at that reload. `send` now wakes a kiro role that looks dead while the tab at its `TAB_ID` still bears its name, and logs `but its tab is still open — kiro, waking anyway`; claude is unchanged. For good, commit the configs in universal shape: `kiro-cli agent upgrade .kiro/agents`, commit, then `git merge <base>` in each live worktree. The kiro launchers warn on V3 while a config is still object-shaped. A hook that runs with no `$TASK_FORCE_ROLE` now logs `hook-noop: <entrypoint>`, at most hourly. |
 | A kiro role stays `busy` after its turn ended on an error, and `send` queues behind it | A kiro turn whose request fails at the API fires `userPromptSubmit` and never `stop` (#322). Probed on kiro-cli 3.1.0 with the network cut: kiro retried for 1m41s, printed `A network error occurred` and went back to its prompt, so `radio busy` ran and `radio ready` never will. A usage limit did the same in #278's probe. Every tool call now runs `radio heartbeat` (the `postToolUse` hook), so a kiro `busy` that no hook has touched for `TASK_FORCE_KIRO_BUSY_STALE_SECS` (default 600) is taken for that dead turn. `send` wakes it when the tab at its `TAB_ID` still bears its name, and logs `no hook for <N>s) but its tab is still open — kiro, waking anyway`. task-monitor shows it as `▶? busy?`. The wake's `radio check` starts a new turn, and that turn's `stop` clears the state. Claude is unchanged. An agent launched before `task-init` was re-run has no `postToolUse` hook, so a long turn of its own can be woken mid-turn. |
+| An agent's processes are still running after its tab closed | A tab close never reaches kiro's backend, which runs in a session of its own (#388): the V3 engine's `acp-server.js` outlived `close-tab`, a closed pane and a killed session on kiro-cli 3.1.0. Since #388 a kiro worker or reviewer runs under `bin/agent-supervise`, which stops the worktree's agent processes once the agent has exited, and logs each: `grep 'reap:' ~/.task-force/radio/log`. `reap: nothing left` is a close with nothing to stop, `reap: failed` one it could not finish, `reap: skipped` a launch outside a linked worktree. No `reap:` line for the slug means the tab predates #388, the agent is claude, or the supervisor itself was killed (a SIGKILL stops nothing). Then `task-recreate-worker <slug>` lists the pids and `--kill-stale` stops them; `task-done` lists them and logs `stray-procs:`. |
 
 The log is the only place several of these states are distinguishable at all.
 It is shared by every repo and role on the machine, so read timestamps rather

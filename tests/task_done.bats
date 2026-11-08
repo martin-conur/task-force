@@ -529,13 +529,13 @@ assert_ambient_pr_number_does_not_force_delete() {
   TASK_FORCE_ROLE=$(own_role); export TASK_FORCE_ROLE
   local s="$TASK_FORCE_HOME/radio/sessions"
   mkdir -p "$s"
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     printf 'x' > "$s/$TASK_FORCE_ROLE.$ext"
   done
 
   run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
   assert_success
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     assert [ ! -f "$s/$TASK_FORCE_ROLE.$ext" ]
   done
 }
@@ -545,13 +545,13 @@ assert_ambient_pr_number_does_not_force_delete() {
   export TASK_FORCE_ROLE="pm-otherrepo"
   local s="$TASK_FORCE_HOME/radio/sessions"
   mkdir -p "$s"
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     printf 'x' > "$s/$TASK_FORCE_ROLE.$ext"
   done
 
   run bash -c "echo y | env AW_IMPL=claude-gh $TASK_DONE --force --remove-worktree"
   assert_success
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     assert [ -f "$s/$TASK_FORCE_ROLE.$ext" ]
   done
 }
@@ -571,7 +571,7 @@ seed_role_state() {
   printf 'ROLE=%s\nTAB=%s\nTAB_ID=\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=claude\nLOADOUT=claude-gh\n' \
     "$role" "$role" "$repo" "$hb" > "$r/sessions/$role.info"
   printf 'unread for %s\n' "$role" > "$r/mailbox/$role/inbox/msg.md"
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     printf 'x' > "$r/sessions/$role.$ext"
   done
 }
@@ -580,7 +580,7 @@ assert_role_state_kept() {
   local role="$1" r="$TASK_FORCE_HOME/radio" ext
   assert [ -f "$r/sessions/$role.info" ]
   assert [ -f "$r/mailbox/$role/inbox/msg.md" ]
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     assert [ -f "$r/sessions/$role.$ext" ]
   done
 }
@@ -589,7 +589,7 @@ assert_role_state_gone() {
   local role="$1" r="$TASK_FORCE_HOME/radio" ext
   assert [ ! -f "$r/sessions/$role.info" ]
   assert [ ! -d "$r/mailbox/$role" ]
-  for ext in loadout agent auto-submit profile; do
+  for ext in loadout agent auto-submit profile away away-note; do
     assert [ ! -f "$r/sessions/$role.$ext" ]
   done
 }

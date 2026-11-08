@@ -51,6 +51,14 @@ def busy_stale($s):
   and (($s.LAST_HEARTBEAT // "") as $hb
        | $hb != "" and (($now | fromdateiso8601) - ($hb | fromdateiso8601) > $kiro_busy_stale));
 
+# Whether its wakes auto-submit (#385): AUTO_SUBMIT=1, unless a runtime
+# `radio auto-submit on --for/--until` has passed its AUTO_SUBMIT_UNTIL, which
+# radio clears only at the next send or check.
+def auto_submit($s):
+  $s.AUTO_SUBMIT == "1"
+  and (($s.AUTO_SUBMIT_UNTIL // "") as $u
+       | $u == "" or (($u | fromdateiso8601) > ($now | fromdateiso8601)));
+
 def session_obj($S; $role):
   $S[$role] as $s
   | if $s == null then null else
@@ -58,7 +66,9 @@ def session_obj($S; $role):
        busy_stale: busy_stale($s),
        tab: ($s.TAB | nonempty), tab_id: ($s.TAB_ID | nonempty),
        zellij_session: ($s.ZELLIJ_SESSION | nonempty), agent: ($s.AGENT | nonempty),
-       profile: ($s.PROFILE | nonempty)}
+       profile: ($s.PROFILE | nonempty),
+       auto_submit: auto_submit($s),
+       auto_submit_until: (if auto_submit($s) then ($s.AUTO_SUBMIT_UNTIL | nonempty) else null end)}
     end;
 
 # Message order. created_at has one-second resolution, and a radio id does NOT
@@ -195,7 +205,7 @@ def status($pr; $last_review; $has_reviewer):
     agent: ($agent | nonempty),
     pm: ((session_obj($S; $pm_role) // {role: $pm_role, state: null, last_heartbeat: null, busy_stale: false, tab: null,
                                        tab_id: null, zellij_session: null, agent: null,
-                                       profile: null})
+                                       profile: null, auto_submit: false, auto_submit_until: null})
          + {alias_of: $alias_of, unread: $unread}),
     # `available`: the forge has answered for this repo at least once. A repo
     # with no GitHub remote never has, and would otherwise read as permanently

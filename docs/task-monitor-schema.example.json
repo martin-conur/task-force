@@ -20,6 +20,8 @@
         "zellij_session": "task-force",
         "agent": "claude",
         "profile": null,
+        "auto_submit": false,
+        "auto_submit_until": null,
         "alias_of": null,
         "unread": 1
       },
@@ -60,7 +62,9 @@
             "tab_id": "1",
             "zellij_session": "task-force",
             "agent": "claude",
-            "profile": "fireworks-glm"
+            "profile": "fireworks-glm",
+            "auto_submit": true,
+            "auto_submit_until": null
           },
           "tab_id": "1",
           "profile": "fireworks-glm",

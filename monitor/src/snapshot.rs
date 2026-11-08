@@ -65,6 +65,11 @@ pub struct Pm {
     pub agent: Option<String>,
     /// The agent profile it was launched with (`--profile`, #355).
     pub profile: Option<String>,
+    /// Its wakes submit themselves (#385): `task-pm --auto-submit`, or a
+    /// runtime `radio auto-submit on`.
+    pub auto_submit: bool,
+    /// When a runtime `radio auto-submit on --for/--until` ends (UTC ISO).
+    pub auto_submit_until: Option<String>,
     pub alias_of: Option<String>,
     pub unread: u64,
 }
@@ -91,6 +96,9 @@ pub struct Session {
     pub zellij_session: Option<String>,
     pub agent: Option<String>,
     pub profile: Option<String>,
+    /// As on [`Pm`] (#385).
+    pub auto_submit: bool,
+    pub auto_submit_until: Option<String>,
 }
 
 /// The state a row shows: `STATE=`, except `busy?` for a stale busy (#322).

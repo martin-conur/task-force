@@ -76,8 +76,12 @@ likely died on an API error, which fires no `stop`, #322. kiro refreshes the
 heartbeat on every tool call, so a working turn stays fresh. Always false for
 claude and with no session; `state` itself stays the raw `STATE=`), `tab`, `tab_id`,
 `zellij_session`, `agent`, `profile` (the agent profile it was launched with,
-`--profile`, #355, or null): all from `radio/sessions/pm-<name>.info`, null when
-there is no session. Then:
+`--profile`, #355, or null), `auto_submit` (true when its wakes submit
+themselves: `AUTO_SUBMIT=1`, from `task-pm --auto-submit` or a runtime `radio
+auto-submit on`, #385, and false once that setting's `AUTO_SUBMIT_UNTIL` has
+passed), `auto_submit_until` (that expiry, UTC ISO, while `auto_submit` is
+true; else null): all from `radio/sessions/pm-<name>.info`, null (false for
+the booleans) when there is no session. Then:
 
 - `alias_of`: the primary PM's role when this repo's PM is a `task-pm --also`
   alias, else null.
@@ -151,7 +155,7 @@ The item fields above, plus:
 | `pr` | `{number, url, title, state, is_draft, head, summary, merged_at, merge_sha}`, found by the `task/<slug>` head branch on every tracker, else null. If no PR has that head, the PR the worker named in its own radio messages is used |
 | `status` | see below |
 | `last_intent` | the latest radio message to or from this worker, or about its PR: `{intent, from, to, pr, at}`. `pr` is a number, or null when the message names none |
-| `session` | the worker's radio session: `{role, state, last_heartbeat, busy_stale, tab, tab_id, zellij_session, agent, profile}`, or null |
+| `session` | the worker's radio session: `{role, state, last_heartbeat, busy_stale, tab, tab_id, zellij_session, agent, profile, auto_submit, auto_submit_until}`, or null |
 | `reviewers` | `[{pr, role, session}]`. `pr` is a number |
 
 `status` comes from the PR's state plus the latest review intent exchanged about

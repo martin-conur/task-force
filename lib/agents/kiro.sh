@@ -122,9 +122,11 @@ aw_agent_preflight() {
 # here for the same `bash -ic` re-parse (#157). --tui keeps the classic UI's
 # startup dialog from holding the first turn hostage (#157, see kiro-launch.sh),
 # and --trust-workspace V3's prompt in a folder it has never seen, which every
-# new worktree is (#378).
+# new worktree is (#378). bin/agent-supervise goes in front, so the kiro
+# processes a tab close leaves behind are stopped (#388, see kiro-launch.sh).
 aw_agent_launch_cmd() {
-  local prompt="$2" cmd="kiro-cli chat --agent worker"
+  local prompt="$2" cmd
+  cmd="$(aw_kiro_supervise_prefix)kiro-cli chat --agent worker"
   [[ -n "$MODEL" ]] && cmd+=" --model $(printf %q "$MODEL")"
   [[ -n "$TRUST_ALL" ]] && cmd+=" --trust-all-tools"
   cmd+="$(aw_kiro_ui_flag)"

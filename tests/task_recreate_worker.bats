@@ -802,6 +802,16 @@ dead_worker_symlinked_base() {
   refute_output --partial "claude-opus-4.6"
 }
 
+# The rebuilt worker's tab is closed like any other, so it gets the same
+# supervisor a fresh one does (#388).
+@test "kiro: the recovered worker runs under agent-supervise (#388)" {
+  dead_worker issue-42
+  AW_IMPL=kiro-gh run "$TASK_RECREATE_WORKER" issue-42
+  assert_success
+  run launch_cmd_for issue-42
+  assert_output --partial "/bin/agent-supervise kiro-cli chat --agent worker"
+}
+
 # The recovered worktree may predate this kiro-cli, or the folder trust record,
 # so it gets the same --trust-workspace a fresh worker does (#378).
 @test "kiro: the recovered worker gets --trust-workspace when kiro-cli lists it, unless opted out (#378)" {

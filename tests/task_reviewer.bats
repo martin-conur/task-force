@@ -679,6 +679,14 @@ teardown() {
   assert_stub_called zellij "Review PR https://github.com/owner/repo/pull/42"
 }
 
+# The reviewer's own task-done closes its tab, which leaves kiro's backend
+# running unless something reaps it (#388).
+@test "kiro task-reviewer: runs the reviewer under agent-supervise (#388)" {
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_stub_called zellij "/bin/agent-supervise kiro-cli chat --agent reviewer"
+}
+
 @test "kiro task-reviewer: defaults to Sonnet 5.5, in kiro's dotted spelling (#259)" {
   AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success

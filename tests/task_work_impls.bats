@@ -78,7 +78,9 @@ _tracker_help_token() {
 # The launch line's agent binary + the flag a launch with $2 must carry.
 _agent_launch_prefix() {
   case "$1" in
-    claude) echo 'claude ' ;; kiro) echo 'kiro-cli chat --agent worker' ;;
+    # kiro runs under the tab-close reaper (#388), by its absolute path.
+    claude) echo 'claude ' ;;
+    kiro)   echo "$(cd "$REPO_ROOT_REAL" && pwd -P)/bin/agent-supervise kiro-cli chat --agent worker" ;;
     *)      echo "no _agent_launch_prefix expectation for agent '$1' — add one" >&2; return 1 ;;
   esac
 }

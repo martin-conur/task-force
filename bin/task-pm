@@ -311,6 +311,10 @@ case "$AGENT" in
   # The model rides the launch line because a --model flag is the only thing
   # that outranks the user's chat.defaultModel (#259, lib/kiro-launch.sh).
   # --tui is pinned as on every other kiro launch (#157), when kiro-cli has it.
+  # --trust-workspace is not (#378): the PM runs in the main checkout, the
+  # user's own folder rather than one task-force made, in a tab the user types
+  # in. V3 saves the answer there, so it asks once per checkout, and whether
+  # to trust it is the user's call.
   kiro)
     _ui=()
     [[ -n "$(aw_kiro_ui_flag)" ]] && _ui=(--tui)

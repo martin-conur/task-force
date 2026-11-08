@@ -82,6 +82,8 @@ Under kiro-cli's V3 engine (`chat.agentEngine = v3` today; kiro-cli's help calls
 
 Then commit the upgraded configs. A rewrite at launch leaves the committed copy in the old shape, and when a `git stash`, `checkout` or `reset` puts that copy back while the agent runs, V3 reloads it and drops every radio hook for the rest of the session: the heartbeat freezes and radio calls the role dead (#370). Run `kiro-cli agent upgrade .kiro/agents` in the main checkout, commit `.kiro/agents`, and `git merge <base>` in any live worktree. `task-work`, `task-reviewer`, `task-recreate-worker` and `task-pm` warn on V3 while the agent's config is still in the old shape. Until #350 ships the configs in universal shape, a fresh `task-init` writes the old one.
 
+V3 also asks "Trust this workspace?" the first time it opens a folder, and every worktree `task-work` creates is a folder it has never seen (#378). So `task-work`, `task-recreate-worker` and `task-reviewer` pass `--trust-workspace` when the installed kiro-cli lists it in `kiro-cli chat --help`, and an older kiro-cli gets the launch line it always did. The flag skips the prompt for that one launch and saves nothing. task-force created the folder from your own repo, and what the prompt guards is that repo's committed `.kiro/` config with the radio hooks in it. `task-pm` does not pass it: the PM runs in your main checkout, in the tab you type in, and V3 remembers the answer you give there. Set `TASK_WORK_NO_TRUST_WORKSPACE=1` to get the prompt back on dispatched launches.
+
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
 Examples:

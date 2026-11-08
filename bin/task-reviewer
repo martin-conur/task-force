@@ -463,6 +463,9 @@ build_kiro_cmd() {
   # Pin the terminal UI: the classic one opens on a dialog that holds the
   # positional first turn until someone answers it (#157, lib/kiro-launch.sh).
   cmd+="$(aw_kiro_ui_flag)"
+  # A review worktree is one kiro's V3 engine has never seen, and it would ask
+  # "Trust this workspace?" before the first turn (#378, lib/kiro-launch.sh).
+  cmd+="$(aw_kiro_trust_workspace_flag)"
   local prompt spec_noun="spec"
   [[ "$TRACKER" == gh ]] && spec_noun="spec issue"
   prompt="Review PR $(_dq_escape "$PR_URL")"

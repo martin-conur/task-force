@@ -364,6 +364,24 @@ seed_zellij_tabs() {
   ]"
 }
 
+# Seed the zellij stub with a look-alike of <role>'s tab: the recorded tab id 7
+# now names <other>, and a tab named <role> exists at id 9 (_live_tab_id's rc 3
+# recovery by name). Both tabs get a terminal pane (700, 900), so a wake into
+# either would land: a test that refutes the wake then fails on the rule under
+# test, not for want of a writable pane (#381).
+# Usage: seed_lookalike_tab worker-foo worker-bar
+seed_lookalike_tab() {
+  local role="$1" other="$2"
+  export STUB_ZELLIJ_TABS_JSON="[
+    {\"name\": \"$other\", \"tab_id\": 7},
+    {\"name\": \"$role\", \"tab_id\": 9}
+  ]"
+  export STUB_ZELLIJ_PANES_JSON='[
+    {"id": 700, "is_plugin": false, "is_focused": true, "tab_id": 7},
+    {"id": 900, "is_plugin": false, "is_focused": true, "tab_id": 9}
+  ]'
+}
+
 # Read the recorded calls for a stub command.
 # Usage: stub_calls zellij
 stub_calls() {

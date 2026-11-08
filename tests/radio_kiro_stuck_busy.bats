@@ -118,15 +118,8 @@ _register_stuck() {
   _register_stuck worker-foo kiro 20
   # Tab 7 is somebody else's now, and a worker-foo tab exists at another id:
   # _live_tab_id would recover it by name (rc 3), which #370's rule refuses.
-  export STUB_ZELLIJ_TABS_JSON='[
-    {"name": "worker-bar", "tab_id": 7},
-    {"name": "worker-foo", "tab_id": 9}
-  ]'
-  # Panes on both tabs, so a wake into tab 9 would land if anything tried it.
-  export STUB_ZELLIJ_PANES_JSON='[
-    {"id": 700, "is_plugin": false, "is_focused": true, "tab_id": 7},
-    {"id": 900, "is_plugin": false, "is_focused": true, "tab_id": 9}
-  ]'
+  # Both tabs have a pane, so a wake would land if anything tried it.
+  seed_lookalike_tab worker-foo worker-bar
 
   TASK_FORCE_ROLE=pm-foo run "$RADIO" send --to worker-foo --intent changes-requested --body "x"
   assert_success

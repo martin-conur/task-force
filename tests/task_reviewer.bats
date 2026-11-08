@@ -761,6 +761,33 @@ teardown() {
   assert_failure
 }
 
+# A review worktree is as new to kiro's V3 engine as a worker's (#378).
+@test "kiro task-reviewer: passes --trust-workspace when kiro-cli lists it, unless opted out (#378)" {
+  STUB_KIRO_TRUST_WORKSPACE=1 AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_stub_called zellij "--trust-all-tools --tui --trust-workspace \"Review PR https://github.com/owner/repo/pull/42"
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  AW_IMPL=kiro-gh run "$TASK_REVIEWER" 43
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  run grep -F -- "--trust-workspace" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+  : > "$STUB_CALLS_DIR/zellij.calls"
+  STUB_KIRO_TRUST_WORKSPACE=1 TASK_WORK_NO_TRUST_WORKSPACE=1 AW_IMPL=kiro-gh run "$TASK_REVIEWER" 44
+  assert_success
+  assert_stub_called zellij "kiro-cli chat --agent reviewer"
+  run grep -F -- "--trust-workspace" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
+@test "claude task-reviewer: no --trust-workspace, whatever kiro-cli lists (#378)" {
+  STUB_KIRO_TRUST_WORKSPACE=1 AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
+  assert_success
+  assert_stub_called zellij "/reviewer"
+  run grep -F -- "--trust-workspace" "$STUB_CALLS_DIR/zellij.calls"
+  assert_failure
+}
+
 @test "kiro task-reviewer: warns about kiro's trust-all confirmation unless disabled (#157)" {
   AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success

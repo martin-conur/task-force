@@ -239,21 +239,116 @@ _focus_log() { grep 'tab-focus:' "$TASK_FORCE_HOME/radio/log" 2>/dev/null || tru
   assert_equal "$(grep -c . <<<"$output")" 1
 }
 
-@test "snap-back: list-tabs unusable mid-loop → stops quietly, no log line, no warning (#311)" {
+@test "snap-back: list-tabs unusable mid-loop → stops, logs it and warns (#311, #384)" {
   # Pre-lookup sees the caller, the first check sees the new tab (so a retry
   # follows), then list-tabs answers something that is not JSON. The loop
-  # cannot tell who has focus, so it ends without claiming a failure.
+  # cannot tell who has focus, so it stops; before #384 it stopped silently,
+  # which is how a lost focus left no `tab-focus:` line at all.
   local q="$BATS_TEST_TMPDIR/tabs.queue"
   printf '%s\n%s\n%s\n' "$CALLER_ACTIVE" "$NEW_ACTIVE" "not json" > "$q"
   ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 STUB_ZELLIJ_TABS_JSON_QUEUE="$q" \
     STUB_ZELLIJ_TABS_JSON="$NEW_ACTIVE" \
     run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
   assert_success
-  refute_output --partial "Could not keep focus on your tab"
+  assert_output --partial "Could not confirm focus on your tab: zellij's tab list did not answer"
   assert_equal "$(_goto_count)" 2
   assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 3
   run _focus_log
+  assert_output --partial 'tab-focus: list-tabs unusable after 2 check(s), 2 go-to-tab(s) slug=new-worker caller_position=0'
+  assert_equal "$(grep -c . <<<"$output")" 1
+}
+
+@test "snap-back: list-tabs empty on the first check → logged, not silent (#384)" {
+  # The pre-lookup answers; every list-tabs after the new-tab answers nothing.
+  local q="$BATS_TEST_TMPDIR/tabs.queue"
+  printf '%s\n' "$CALLER_ACTIVE" > "$q"
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 STUB_ZELLIJ_TABS_JSON_QUEUE="$q" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  assert_output --partial "Could not confirm focus on your tab"
+  run _focus_log
+  assert_output --partial 'tab-focus: list-tabs unusable after 1 check(s), 1 go-to-tab(s) slug=new-worker'
+}
+
+@test "snap-back: a stalled list-tabs is bounded, logged as zellij-timeout and as unusable (#384)" {
+  # The stub hangs every list-tabs, the pre-lookup's included, so this runs
+  # the snap-back directly, as aw_launch_tab would once it has the position.
+  local start=$SECONDS
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 TASK_FORCE_ZELLIJ_TIMEOUT=1 \
+    STUB_ZELLIJ_HANG=list-tabs STUB_ZELLIJ_HANG_SECS=20 \
+    aw_snap_back_to_tab "new-worker" 0 >"$BATS_TEST_TMPDIR/out" 2>&1
+  assert [ $((SECONDS - start)) -le 4 ]
+  run cat "$BATS_TEST_TMPDIR/out"
+  assert_output --partial "Could not confirm focus on your tab"
+  run grep -F 'zellij-timeout: list-tabs 1s caller=snap-back slug=new-worker' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+  run _focus_log
+  assert_output --partial 'tab-focus: list-tabs unusable after 1 check(s)'
+}
+
+@test "snap-back: a stalled go-to-tab is bounded and logged; the launch goes on (#384)" {
+  local start=$SECONDS
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 TASK_FORCE_ZELLIJ_TIMEOUT=1 \
+    STUB_ZELLIJ_HANG=go-to-tab STUB_ZELLIJ_HANG_SECS=20 STUB_ZELLIJ_TABS_JSON="$CALLER_ACTIVE" \
+    aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1" >"$BATS_TEST_TMPDIR/out" 2>&1
+  assert [ $((SECONDS - start)) -le 4 ]
+  run grep -F 'zellij-timeout: go-to-tab 1s caller=snap-back slug=new-worker' "$TASK_FORCE_HOME/radio/log"
+  assert_success
+}
+
+@test "aw_bounded never fires an inherited ERR trap: task-reviewer's would remove the worktree (#384)" {
+  # task-reviewer runs aw_launch_tab under `set -eE` with a cleanup ERR trap.
+  # aw_bounded runs the command and its watchdog in background subshells,
+  # which inherit that trap: a failing go-to-tab, or the watchdog's sleep
+  # being cancelled, would run the cleanup there.
+  local fired="$BATS_TEST_TMPDIR/err-fired"
+  run bash -c 'set -eEuo pipefail
+    source "$1"
+    trap "echo fired >> \"$2\"" ERR
+    aw_bounded 5 false || true
+    aw_bounded 0.2 sleep 5 || true
+    aw_bounded 5 true
+    sleep 0.3
+    echo done' _ "$ZELLIJ_TAB_LIB" "$fired"
+  assert_success
+  assert_output --partial done
+  assert [ ! -e "$fired" ]
+}
+
+@test "snap-back: a steal after focus settled is caught by the late look (#384)" {
+  # Pre-lookup, two settled checks, then the steal lands: before #384 the
+  # loop had already returned. The late look sees it and snaps back.
+  local q="$BATS_TEST_TMPDIR/tabs.queue"
+  printf '%s\n%s\n%s\n%s\n' "$CALLER_ACTIVE" "$CALLER_ACTIVE" "$CALLER_ACTIVE" "$NEW_ACTIVE" > "$q"
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 AW_TAB_FOCUS_LATE=0.01 STUB_ZELLIJ_TABS_JSON_QUEUE="$q" \
+    STUB_ZELLIJ_TABS_JSON="$CALLER_ACTIVE" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  refute_output --partial "Could not"
+  assert_equal "$(_goto_count)" 2
+  # pre-lookup + 2 settled + the late steal + 2 settled again.
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 6
+  run _focus_log
+  assert_output --partial 'tab-focus: snap-back needed 2 go-to-tab(s) slug=new-worker caller_position=0 late_steal=1'
+}
+
+@test "snap-back: the late look finds the caller still focused → one go-to-tab, no log line (#384)" {
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 AW_TAB_FOCUS_LATE=0.01 STUB_ZELLIJ_TABS_JSON="$CALLER_ACTIVE" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  assert_equal "$(_goto_count)" 1
+  # pre-lookup + 2 settled + the late look.
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 4
+  run _focus_log
   assert_output ''
+}
+
+@test "snap-back: the late look is on by default (#384)" {
+  unset AW_TAB_FOCUS_LATE
+  ZELLIJ=1 AW_TAB_FOCUS_INTERVAL=0 STUB_ZELLIJ_TABS_JSON="$CALLER_ACTIVE" \
+    run aw_launch_tab "new-worker" "$MAIN_REPO" "echo hi" "1"
+  assert_success
+  assert_equal "$(grep -c 'list-tabs --json' "$STUB_CALLS_DIR/zellij.calls")" 4
 }
 
 # A list-tabs answered before zellij has processed the new-tab: the caller is

@@ -122,10 +122,12 @@ the **worktree's own role** and no other (#377): `worker-<repo>-<slug>`, or
 into a worker's worktree, or from a resumed session with no `$TASK_FORCE_ROLE`
 (#232), it derives that role from the worktree's `.<slug>.info`, says so on
 stderr and leaves the caller's own role alone. It refuses a derived role whose
-session file names another worktree, or whose heartbeat is under an hour old
-(`radio orphans` does not list it): that session belongs to a live process, and
-this one is not it. With no `.<slug>.info` to derive from, it says so and points
-at `radio orphans`. The worktree and the tab go either way. Each decision is
+session file names another worktree, or that is still alive: agent processes
+are running in the worktree, by the same scan as the warning above (the
+caller's own agent is never counted). With `TASK_FORCE_NO_PROC_SCAN=1` it falls
+back to the heartbeat, refusing one under an hour old (`radio orphans` does not
+list it). With no `.<slug>.info` to derive from, it says so and points at
+`radio orphans`. The worktree and the tab go either way. Each decision is
 logged: `grep 'task-done-role:' ~/.task-force/radio/log`.
 
 **Agent profiles** — `--profile <name>` on `task-work`, `task-reviewer`, `task-recreate-worker` and `task-pm` (#355)

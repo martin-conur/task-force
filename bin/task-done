@@ -288,6 +288,23 @@ if [[ -z "$_WORKER_TAB_ID" ]]; then
   fi
 fi
 
+# Agent processes still running in the worktree (#305), looked for while its
+# path still resolves. The agent running this command is not one of them: the
+# helper leaves out the caller's own agent tree, which goes with the tab. What
+# is left is an agent from an earlier tab that closed without taking it along.
+# Warned about, never stopped: whether they are stray is the PM's call. Logged
+# as well, because this tab is about to close and take this output with it.
+# Scanned once, here: the role decision below reads the same answer (#377).
+_STRAY_PROCS=$(aw_worktree_agent_procs "$WORKTREE_DIR")
+if [[ -n "$_STRAY_PROCS" ]]; then
+  _STRAY_PIDS=$(cut -f1 <<<"$_STRAY_PROCS" | tr '\n' ' ')
+  echo "⚠ Agent processes are still running in this worktree, and removing it will not stop them:"
+  aw_print_worktree_procs "    " "$_STRAY_PROCS"
+  echo "  They outlived the tab that started them. Check they are stray, then: kill ${_STRAY_PIDS% }"
+  echo ""
+  aw_radio_log "stray-procs: task-done left ${_STRAY_PIDS}running in $WORKTREE_DIR slug=$SLUG"
+fi
+
 # Which role's radio state this cleanup takes down (#377, #232). Always the
 # worktree's own, never whatever $TASK_FORCE_ROLE says: a task-done typed in the
 # PM's tab after a `cd` into a worker's worktree used to unregister the PM and
@@ -297,12 +314,16 @@ fi
 # When the caller IS the worktree's role, that is the worker retiring itself and
 # nothing needs checking. Otherwise the role is derived, as radio's recovery
 # derives it (#229): from the .<slug>.info task-work wrote for this slug. Taking
-# down an inferred identity is destructive, so two refusals guard it, both
-# #229's own reasoning applied to a wipe: a session file that names another
-# worktree is another checkout's role of the same name, and a heartbeat under an
-# hour old belongs to a process that holds the role env, which this one does
-# not. Staleness is radio orphans' call, not re-derived here, as in
-# task-recreate-worker. Sets $RADIO_ROLE, empty when nothing is to be touched.
+# down an inferred identity is destructive, so two refusals guard it. A session
+# file that names another worktree is another checkout's role of the same name.
+# And a role that is still alive is not ours to wipe: alive means an agent
+# process is still running in this worktree, by the #305 scan above, which
+# leaves out the caller's own agent (so a roleless worker retiring itself is
+# not alive to itself). The heartbeat is only a guess at that, fresh for a tab
+# closed ten minutes ago and stale for an agent alive after a machine sleep, so
+# it decides only when the scan is off (TASK_FORCE_NO_PROC_SCAN=1), and then
+# staleness is radio orphans' call, as in task-recreate-worker. Sets
+# $RADIO_ROLE, empty when nothing is to be touched.
 _phys_path() {
   local d
   d=$(cd -P "$(dirname "$1")" 2>/dev/null && pwd) || { printf '%s' "$1"; return; }
@@ -342,11 +363,20 @@ _resolve_radio_role() {
       aw_radio_log "task-done-role: refused $OWN_ROLE, its session names $repo not $WORKTREE_DIR (caller=${caller:-<unset>})"
       return
     fi
+  fi
+  if [[ "${TASK_FORCE_NO_PROC_SCAN:-}" != 1 ]]; then
+    if [[ -n "$_STRAY_PROCS" ]]; then
+      echo "task-done: $who, and $OWN_ROLE is still alive: agent processes are running in this worktree (listed above)." >&2
+      echo "  Leaving its session, mailbox and sidecars alone. Once they are stopped: TASK_FORCE_ROLE=$OWN_ROLE radio unregister --manual${caller:+. $caller is left alone.}" >&2
+      aw_radio_log "task-done-role: refused $OWN_ROLE, agent processes running in $WORKTREE_DIR (caller=${caller:-<unset>})"
+      return
+    fi
+  elif [[ -f "$sf" ]]; then
     orphans=$(radio orphans 2>/dev/null || true)
     if ! grep -q "^${OWN_ROLE}[[:space:]]" <<<"$orphans"; then
-      echo "task-done: $who, and $OWN_ROLE still has a live session (a heartbeat under 1h, radio orphans does not list it)." >&2
+      echo "task-done: $who, and $OWN_ROLE still has a live session (process scan off, and a heartbeat under 1h: radio orphans does not list it)." >&2
       echo "  Leaving its session, mailbox and sidecars alone: if it is really gone, \`radio orphans\` lists it within the hour, and then: TASK_FORCE_ROLE=$OWN_ROLE radio unregister --manual${caller:+. $caller is left alone.}" >&2
-      aw_radio_log "task-done-role: refused $OWN_ROLE, live session (caller=${caller:-<unset>})"
+      aw_radio_log "task-done-role: refused $OWN_ROLE, live session by heartbeat, process scan off (caller=${caller:-<unset>})"
       return
     fi
   fi
@@ -385,22 +415,6 @@ if [[ -n "$RADIO_ROLE" ]]; then
   # is a PM's and never ours.
   rm -f "$RADIO_DIR/sessions/$RADIO_ROLE.loadout" "$RADIO_DIR/sessions/$RADIO_ROLE.agent" \
         "$RADIO_DIR/sessions/$RADIO_ROLE.auto-submit" "$RADIO_DIR/sessions/$RADIO_ROLE.profile"
-fi
-
-# Agent processes still running in the worktree (#305), looked for while its
-# path still resolves. The agent running this command is not one of them: the
-# helper leaves out the caller's own agent tree, which goes with the tab. What
-# is left is an agent from an earlier tab that closed without taking it along.
-# Warned about, never stopped: whether they are stray is the PM's call. Logged
-# as well, because this tab is about to close and take this output with it.
-_STRAY_PROCS=$(aw_worktree_agent_procs "$WORKTREE_DIR")
-if [[ -n "$_STRAY_PROCS" ]]; then
-  _STRAY_PIDS=$(cut -f1 <<<"$_STRAY_PROCS" | tr '\n' ' ')
-  echo "⚠ Agent processes are still running in this worktree, and removing it will not stop them:"
-  aw_print_worktree_procs "    " "$_STRAY_PROCS"
-  echo "  They outlived the tab that started them. Check they are stray, then: kill ${_STRAY_PIDS% }"
-  echo ""
-  aw_radio_log "stray-procs: task-done left ${_STRAY_PIDS}running in $WORKTREE_DIR slug=$SLUG"
 fi
 
 # Move out of worktree before removing it

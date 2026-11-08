@@ -393,3 +393,90 @@ _recreate_on_pty() {
   run grep -qs stray-procs "$TASK_FORCE_HOME/radio/log"
   assert_failure
 }
+
+# ---------------------------------------------------------------------------
+# task-done: whether a derived role is alive is the scan's call (#377)
+# Run from the PM's tab, task-done derives the worktree's worker role. The
+# agent processes in the worktree, not the heartbeat, say whether that worker
+# is alive; the heartbeat decides only with the scan off.
+# ---------------------------------------------------------------------------
+
+# Seed the worker role for <slug>: a session file naming its worktree with
+# heartbeat <hb>, an unread message and a sidecar. Prints the role.
+seed_worker_role() {
+  local slug="$1" hb="$2" role r="$TASK_FORCE_HOME/radio"
+  role=$(expected_worker_role "$slug")
+  mkdir -p "$r/sessions" "$r/mailbox/$role/inbox"
+  printf 'ROLE=%s\nTAB=%s\nTAB_ID=\nREPO=%s\nSTATE=idle\nLAST_HEARTBEAT=%s\nAGENT=claude\n' \
+    "$role" "$slug" "$WT_PHYS/$slug" "$hb" > "$r/sessions/$role.info"
+  printf 'unread\n' > "$r/mailbox/$role/inbox/msg.md"
+  printf 'claude' > "$r/sessions/$role.agent"
+  printf '%s' "$role"
+}
+
+task_done_from_pm_tab() {
+  cp "$RADIO" "$STUB_BIN/radio"; chmod +x "$STUB_BIN/radio"
+  cd "$WORKTREE_BASE/$1"
+  run env AW_IMPL=claude-gh TASK_FORCE_ROLE="$(expected_pm_role)" "$TASK_DONE" --remove-worktree --force
+  assert_success
+}
+
+assert_worker_role_kept() {
+  local r="$TASK_FORCE_HOME/radio"
+  assert [ -f "$r/sessions/$1.info" ]
+  assert [ -f "$r/mailbox/$1/inbox/msg.md" ]
+  assert [ -f "$r/sessions/$1.agent" ]
+}
+
+assert_worker_role_gone() {
+  local r="$TASK_FORCE_HOME/radio"
+  assert [ ! -f "$r/sessions/$1.info" ]
+  assert [ ! -d "$r/mailbox/$1" ]
+  assert [ ! -f "$r/sessions/$1.agent" ]
+}
+
+@test "task-done: no agent process in the worktree wipes the derived role, fresh heartbeat or not (#377)" {
+  setup_worktree issue-42
+  proc 5000004 1 "$WT_PHYS/other-slug" claude /worker
+  local role
+  role=$(seed_worker_role issue-42 "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  task_done_from_pm_tab issue-42
+  assert_worker_role_gone "$role"
+  assert_output --partial "cleaning up $role"
+  [[ ! -d "$WT_PHYS/issue-42" ]]
+}
+
+@test "task-done: an agent process in the worktree keeps the derived role, stale heartbeat or not (#377)" {
+  # The machine-sleep case: the agent is alive, its heartbeat went stale.
+  setup_worktree issue-42
+  proc 5000021 1 "$WT_PHYS/issue-42" claude /worker
+  local role
+  role=$(seed_worker_role issue-42 "2020-01-01T00:00:00Z")
+  task_done_from_pm_tab issue-42
+  assert_worker_role_kept "$role"
+  assert_output --partial "$role is still alive: agent processes are running in this worktree"
+  assert_output --partial "5000021 "
+  run grep "task-done-role: refused $role, agent processes running" "$TASK_FORCE_HOME/radio/log"
+  assert_success
+  assert_equal "$(kill_calls)" ""
+}
+
+@test "task-done: with the scan off, a fresh heartbeat keeps the derived role (#377)" {
+  export TASK_FORCE_NO_PROC_SCAN=1
+  setup_worktree issue-42
+  local role
+  role=$(seed_worker_role issue-42 "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  task_done_from_pm_tab issue-42
+  assert_worker_role_kept "$role"
+  assert_output --partial "$role still has a live session (process scan off"
+}
+
+@test "task-done: with the scan off, a stale heartbeat wipes the derived role, agent process or not (#377)" {
+  export TASK_FORCE_NO_PROC_SCAN=1
+  setup_worktree issue-42
+  proc 5000021 1 "$WT_PHYS/issue-42" claude /worker
+  local role
+  role=$(seed_worker_role issue-42 "2020-01-01T00:00:00Z")
+  task_done_from_pm_tab issue-42
+  assert_worker_role_gone "$role"
+}

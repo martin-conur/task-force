@@ -62,6 +62,7 @@ DOCUMENTED_GREPS=(
   'register: no-op'
   'waking anyway'
   'hook-noop:'
+  'zellij-timeout:'
 )
 
 # Print the runbook block of a workflow doc: the heading through the end of the
@@ -337,6 +338,23 @@ runbook_block() {
   for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
            "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
     run grep -cF -- "grep 'tab-id:'" "$f"
+    assert_success
+    refute_output "0"
+  done
+}
+
+@test "the zellij-stall row is in the README and every workflow doc (#384)" {
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
+           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    for s in 'zellij-timeout:' 'TASK_FORCE_ZELLIJ_TIMEOUT' 'list-tabs unusable after' 'late_steal=1'; do
+      run grep -cF -- "$s" "$f"
+      assert_success
+      refute_output "0"
+    done
+  done
+  # The snap-back's own log strings live in lib/zellij-tab.sh, not bin/radio.
+  for s in 'list-tabs unusable after' 'late_steal=1' 'zellij-timeout:'; do
+    run grep -cF -- "$s" "$REPO_ROOT_REAL/lib/zellij-tab.sh"
     assert_success
     refute_output "0"
   done

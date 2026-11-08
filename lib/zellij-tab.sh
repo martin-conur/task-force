@@ -6,6 +6,7 @@
 #   aw_radio_home_env_prefix   (TASK_FORCE_HOME for a launcher's env prefix, #262)
 #   aw_zellij_session_running <session>   (#291)
 #   aw_zellij_own_tab_id   (#358)
+#   aw_bounded <secs> <cmd...>, aw_zellij_bounded   (#384)
 #
 # Every zellij call here goes through aw_zellij, so a launcher that sets
 # AW_ZELLIJ_SESSION drives that session instead of the one it runs in (#291).
@@ -39,6 +40,66 @@ aw_zellij() {
   else
     zellij "$@"
   fi
+}
+
+# region:zellij-deadline
+# aw_bounded <secs> <cmd> [args...] — run <cmd>, stopping it once <secs> (a
+# fraction is fine) have passed (#384). Its stdout and stderr pass through. rc
+# 124 when the deadline stopped it, else <cmd>'s own. Portable: macOS has no
+# timeout(1). A watchdog sleeps beside <cmd> and is cancelled as soon as <cmd>
+# ends, so a quick call pays no polling delay; it marks the deadline only while
+# <cmd> is still running, so a cancel racing the deadline cannot pass for one.
+# Both run in background subshells, which inherit the caller's ERR trap under
+# `set -E`: task-reviewer's removes the worktree. Each drops it, and `set -e`,
+# first, so a failing <cmd> or a cancelled sleep stays a return code.
+aw_bounded() {
+  local secs="$1"; shift
+  local mark pid wd rc=0
+  mark=$(mktemp "${TMPDIR:-/tmp}/aw-bounded.XXXXXX" 2>/dev/null) || { "$@"; return; }
+  rm -f "$mark"
+  { trap - ERR; set +e; "$@"; } &
+  pid=$!
+  {
+    trap - ERR; set +e
+    sleep "$secs"
+    kill -0 "$pid" 2>/dev/null || exit 0
+    : >"$mark"
+    pkill -TERM -P "$pid" 2>/dev/null || true
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+    exit 0
+  } </dev/null >/dev/null 2>&1 &
+  wd=$!
+  wait "$pid" || rc=$?
+  # Its sleep first: the watchdog then finds <cmd> gone and exits unmarked.
+  pkill -P "$wd" 2>/dev/null || kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
+  if [[ -e "$mark" ]]; then
+    rm -f "$mark"
+    return 124
+  fi
+  return "$rc"
+}
+# endregion:zellij-deadline
+
+# aw_zellij, bounded (#384): the snap-back's list-tabs and go-to-tab, and the
+# caller-position lookup before it. A stalled zellij server used to hold the
+# launch there indefinitely, and a list-tabs that answered late or not at all
+# ended the snap-back with no log line. Each call gets TASK_FORCE_ZELLIJ_TIMEOUT
+# seconds (default 3, as radio's); one that runs out logs `zellij-timeout:`
+# with $AW_ZELLIJ_CTX and answers nothing, rc 124. new-tab is not bounded: it
+# is the launch itself, and stopping it halfway would leave a tab with no
+# record of it.
+aw_zellij_bounded() {
+  local secs="${TASK_FORCE_ZELLIJ_TIMEOUT:-3}" rc=0 what="${1:-}"
+  [[ "$what" != action ]] || what="${2:-}"
+  aw_bounded "$secs" aw_zellij "$@" || rc=$?
+  if (( rc == 124 )); then
+    aw_radio_log "$(printf 'zellij-timeout: %s %ss %s' "$what" "$secs" "${AW_ZELLIJ_CTX:-}")"
+  fi
+  return "$rc"
 }
 
 # True when there is a zellij session to talk to: the one we run in, or the
@@ -263,7 +324,8 @@ aw_launch_tab() {
   local caller_pos=""
   if [[ "$stay_on_caller_tab" == "1" ]] && aw_zellij_reachable \
      && command -v jq >/dev/null 2>&1; then
-    caller_pos=$(aw_zellij action list-tabs --json 2>/dev/null \
+    caller_pos=$(AW_ZELLIJ_CTX="caller=pre-launch slug=$slug" \
+        aw_zellij_bounded action list-tabs --json 2>/dev/null \
       | jq -r '.[] | select(.active) | .position' 2>/dev/null) || caller_pos=""
   fi
 
@@ -294,39 +356,62 @@ aw_launch_tab() {
 # "Caller active" counts only once list-tabs shows the new tab <slug> (#343):
 # a list-tabs answered before zellij has processed the new-tab reports the
 # caller active with no new tab yet, and the new tab steals focus right after.
-# Even then it takes two consecutive caller-active checks to return, so a
+# Even then it takes two consecutive caller-active checks to settle, so a
 # steal landing just after the tab appears is still caught.
 #
-# A list-tabs that answers nothing usable ends the loop quietly: it cannot
-# tell, and a launch never fails over focus. A retry or a final failure
-# writes one `tab-focus:` line to radio's log, to count how often the race
-# actually happens; a budget spent without the new tab ever being listed
-# says so.
+# Once settled it looks once more, AW_TAB_FOCUS_LATE seconds later (default
+# 1, 0 skips it, #384): on a loaded server the steal can land after both
+# checks, and nothing looked again. A late steal is retried like any other,
+# on a budget of its own.
+#
+# Every exit that leaves focus in doubt writes one `tab-focus:` line to
+# radio's log and warns on stderr, so a lost focus always leaves a trace
+# (#384): before, a list-tabs that answered nothing usable (empty, slow,
+# failed) ended the loop silently. A launch never fails over focus. A retry
+# that worked is logged too, to count how often the race actually happens.
+# Every list-tabs and go-to-tab is bounded (aw_zellij_bounded).
 aw_snap_back_to_tab() {
   local slug="$1" caller_pos="$2"
   local checks="${AW_TAB_FOCUS_CHECKS:-7}" interval="${AW_TAB_FOCUS_INTERVAL:-0.25}"
+  local late="${AW_TAB_FOCUS_LATE:-1}"
   local target=$((caller_pos + 1)) gotos=1 i state active="" listed=""
-  local seen_new=0 streak=0
+  local seen_new=0 streak=0 late_done=0 late_steal=0 tail=""
+  local AW_ZELLIJ_CTX="caller=snap-back slug=$slug"
+  # 0 (or 0.0) skips the late look: count it as done already.
+  [[ "$late" =~ ^0*\.?0*$ ]] && late_done=2
 
-  aw_zellij action go-to-tab "$target" 2>/dev/null || true
+  aw_zellij_bounded action go-to-tab "$target" 2>/dev/null || true
   for (( i = 1; i <= checks; i++ )); do
     # "<active position> <slug listed?>"; the paint prefixes are stripped as
     # in aw_zellij_tab_id_by_name, since radio may rename the tab already.
-    state=$(aw_zellij action list-tabs --json 2>/dev/null \
+    state=$(aw_zellij_bounded action list-tabs --json 2>/dev/null \
       | jq -r --arg n "$slug" \
           '([.[] | select(.active) | .position] | .[0] // empty | tostring)
            + " "
            + (any(.[]; (.name // "" | sub("^⏸️ "; "") | sub("^▶️ "; "")
                         | sub("^❓︎ "; "")) == $n) | tostring)' 2>/dev/null) || state=""
     active="${state%% *}" listed="${state#* }"
-    [[ -n "$active" ]] || return 0
+    if [[ -z "$active" ]]; then
+      aw_radio_log "$(printf 'tab-focus: list-tabs unusable after %d check(s), %d go-to-tab(s) slug=%s caller_position=%s' \
+        "$i" "$gotos" "$slug" "$caller_pos")"
+      echo "⚠ Could not confirm focus on your tab: zellij's tab list did not answer, so '$slug' may have taken it (logged, grep 'tab-focus:')." >&2
+      return 0
+    fi
     [[ "$listed" == true ]] && seen_new=1
     if [[ "$active" == "$caller_pos" ]]; then
       (( seen_new )) && streak=$((streak + 1))
       if (( streak >= 2 )); then
+        if (( late_done == 0 )); then
+          # Settled: one more look, later. The caller still active then
+          # settles it again, so streak stays at 1.
+          late_done=1 streak=1 checks=$((checks + 1))
+          sleep "$late" 2>/dev/null || true
+          continue
+        fi
         if (( gotos > 1 )); then
-          aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s' \
-            "$gotos" "$slug" "$caller_pos")"
+          (( late_steal == 0 )) || tail=" late_steal=1"
+          aw_radio_log "$(printf 'tab-focus: snap-back needed %d go-to-tab(s) slug=%s caller_position=%s%s' \
+            "$gotos" "$slug" "$caller_pos" "$tail")"
         fi
         return 0
       fi
@@ -334,10 +419,14 @@ aw_snap_back_to_tab() {
       sleep "$interval" 2>/dev/null || true
       continue
     fi
+    # A steal the late look saw gets a budget of its own: the first is spent.
+    if (( late_done == 1 && late_steal == 0 )); then
+      late_steal=1 checks=$((i + ${AW_TAB_FOCUS_CHECKS:-7}))
+    fi
     streak=0
     (( i < checks )) || break
     sleep "$interval" 2>/dev/null || true
-    aw_zellij action go-to-tab "$target" 2>/dev/null || true
+    aw_zellij_bounded action go-to-tab "$target" 2>/dev/null || true
     gotos=$((gotos + 1))
   done
   if (( ! seen_new )); then

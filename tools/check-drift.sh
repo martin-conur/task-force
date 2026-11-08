@@ -39,6 +39,7 @@ GROUPS_DEFAULT=(
   "tracker-settings-gh|tracker-preserve-gh|claude-gh/bin/task-init kiro-gh/bin/task-init"
   "install-shared-symlinks|install-shared-symlinks|claude-gh/install.sh claude-jira/install.sh claude-local/install.sh claude-notion/install.sh kiro-gh/install.sh kiro-local/install.sh kiro-notion/install.sh"
   "agent-proc-match|agent-proc-match|lib/worktree-procs.sh bin/radio"
+  "zellij-deadline|zellij-deadline|lib/zellij-tab.sh bin/radio"
   "reviewer-contract|reviewer-destruct-summary|.claude/commands/reviewer.md claude-gh/commands/reviewer.md claude-jira/commands/reviewer.md claude-local/commands/reviewer.md claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json"
   "reviewer-contract|reviewer-pin-sha|.claude/commands/reviewer.md claude-gh/commands/reviewer.md claude-jira/commands/reviewer.md claude-local/commands/reviewer.md claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json"
   "reviewer-contract|reviewer-post-radio-destruct|.claude/commands/reviewer.md claude-gh/commands/reviewer.md claude-jira/commands/reviewer.md claude-local/commands/reviewer.md claude-notion/commands/reviewer.md kiro-gh/agents/reviewer.json kiro-local/agents/reviewer.json kiro-notion/agents/reviewer.json"

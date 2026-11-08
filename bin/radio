@@ -78,6 +78,75 @@ _log() {
 
 _now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# region:zellij-deadline
+# aw_bounded <secs> <cmd> [args...] — run <cmd>, stopping it once <secs> (a
+# fraction is fine) have passed (#384). Its stdout and stderr pass through. rc
+# 124 when the deadline stopped it, else <cmd>'s own. Portable: macOS has no
+# timeout(1). A watchdog sleeps beside <cmd> and is cancelled as soon as <cmd>
+# ends, so a quick call pays no polling delay; it marks the deadline only while
+# <cmd> is still running, so a cancel racing the deadline cannot pass for one.
+# Both run in background subshells, which inherit the caller's ERR trap under
+# `set -E`: task-reviewer's removes the worktree. Each drops it, and `set -e`,
+# first, so a failing <cmd> or a cancelled sleep stays a return code.
+aw_bounded() {
+  local secs="$1"; shift
+  local mark pid wd rc=0
+  mark=$(mktemp "${TMPDIR:-/tmp}/aw-bounded.XXXXXX" 2>/dev/null) || { "$@"; return; }
+  rm -f "$mark"
+  { trap - ERR; set +e; "$@"; } &
+  pid=$!
+  {
+    trap - ERR; set +e
+    sleep "$secs"
+    kill -0 "$pid" 2>/dev/null || exit 0
+    : >"$mark"
+    pkill -TERM -P "$pid" 2>/dev/null || true
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+    exit 0
+  } </dev/null >/dev/null 2>&1 &
+  wd=$!
+  wait "$pid" || rc=$?
+  # Its sleep first: the watchdog then finds <cmd> gone and exits unmarked.
+  pkill -P "$wd" 2>/dev/null || kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
+  if [[ -e "$mark" ]]; then
+    rm -f "$mark"
+    return 124
+  fi
+  return "$rc"
+}
+# endregion:zellij-deadline
+
+# Every zellij call radio makes goes through _zj (#384). A zellij server that
+# stalls — busy opening a tab, or loaded with agents across sessions — used to
+# hold whatever radio was doing with it, and on a hook path that is fatal:
+# Claude Code kills a hook at 30s and discards its output, so prompt-hook lost
+# its unread summary along with the busy flip. Each call now gets
+# TASK_FORCE_ZELLIJ_TIMEOUT seconds (default 3). The first that runs out is
+# logged as `zellij-timeout:` and turns zellij off for the rest of this run, so
+# a hook waits on a stalled server once, not once per lookup. A timed-out
+# lookup answers nothing, which every caller already reads as "could not
+# tell, skip": the tab repaint or the wake is lost, the state write is not.
+# The flag is a file because most callers run in $(…), whose variables die
+# with the subshell; it is keyed by this process and removed at its exit.
+ZJ_STALL_FILE="$RADIO_HOME/.zellij-stalled.$$"
+trap 'rm -f "$ZJ_STALL_FILE" 2>/dev/null || true' EXIT
+
+_zj() {
+  local secs="${TASK_FORCE_ZELLIJ_TIMEOUT:-3}" rc=0 what="${1:-}"
+  [[ "$what" != action ]] || what="${2:-}"
+  [[ ! -e "$ZJ_STALL_FILE" ]] || return 124
+  aw_bounded "$secs" zellij "$@" || rc=$?
+  if (( rc == 124 )); then
+    _log "zellij-timeout: $what ${secs}s role=${TASK_FORCE_ROLE:-?} — zellij stalled; skipping the rest of this run's zellij calls"
+    : >"$ZJ_STALL_FILE" 2>/dev/null || true
+  fi
+  return "$rc"
+}
+
 _compact_now() { date -u +%Y%m%d-%H%M%S; }
 
 # Parse a UTC ISO-8601 timestamp (YYYY-MM-DDTHH:MM:SSZ, as _now emits) into
@@ -605,7 +674,7 @@ _zellij_tab_id_by_name() {
   local target="$1"
   [[ -n "$target" ]] || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  zellij action list-tabs --json 2>/dev/null \
+  _zj action list-tabs --json 2>/dev/null \
     | jq -r --arg n "$target" '
         [.[] | select(
           .name == $n
@@ -632,7 +701,7 @@ _zellij_pane_in_tab() {
   case "$target" in *[!0-9]*|"") return 0 ;; esac
   case "$want" in *[!0-9]*|"") want=-1 ;; esac
   command -v jq >/dev/null 2>&1 || return 0
-  zellij action list-panes --json --tab 2>/dev/null \
+  _zj action list-panes --json --tab 2>/dev/null \
     | jq -r --argjson t "$target" --argjson w "$want" '
         [.[] | select(.tab_id == $t and (.is_plugin // false) == false)] as $p
         | ($p | map(select(.id == $w))[0]) as $r
@@ -703,7 +772,7 @@ _zellij_tab_name_by_id() {
   local target="$1"
   case "$target" in *[!0-9]*|"") return 0 ;; esac
   command -v jq >/dev/null 2>&1 || return 0
-  zellij action list-tabs --json 2>/dev/null \
+  _zj action list-tabs --json 2>/dev/null \
     | jq -r --argjson t "$target" \
         '[.[] | select(.tab_id == $t) | .name] | .[0] // empty' 2>/dev/null
 }
@@ -724,7 +793,7 @@ _zellij_session_alive() {
   [[ -n "$name" ]] || return 1
   [[ -n "${ZELLIJ:-}" ]] || return 1
   command -v zellij >/dev/null 2>&1 || return 1
-  zellij list-sessions --no-formatting 2>/dev/null \
+  _zj list-sessions --no-formatting 2>/dev/null \
     | awk -v n="$name" '!/EXITED/ && $1 == n { f = 1 } END { exit(f ? 0 : 1) }'
 }
 
@@ -1196,7 +1265,7 @@ _rename_tab() {
     return 0
   fi
 
-  zellij action rename-tab-by-id "$tab_id" "$new_name" >/dev/null 2>&1 || return 0
+  _zj action rename-tab-by-id "$tab_id" "$new_name" >/dev/null 2>&1 || return 0
 
   # Recovered a fresh id by name (recorded id was stale/gone) — restamp the
   # binding so the next op is id-driven again (#167).
@@ -2380,7 +2449,7 @@ _inbox_summary_joined() {
 # Fail open on EVERY path (#164 notes / #173 review): a nonzero exit here
 # blocks and erases the user's typed prompt, which is strictly worse than
 # any radio bookkeeping we could lose. Hence the _hook_role_gate and the
-# `|| true` on _update_state.
+# `|| true` on the state write and the repaint.
 cmd_prompt_hook() {
   _hook_role_gate prompt-hook
 
@@ -2389,11 +2458,22 @@ cmd_prompt_hook() {
   # file still says idle is a window for cmd_send to write-chars into the
   # running pane. The `|| true` alone provides the fail-open behavior;
   # deferring the flip would buy nothing (#173 supplemental).
-  _update_state busy || true
+  #
+  # Only the state write goes first, though, not the tab repaint (#384): the
+  # repaint talks to zellij, and the summary must never wait on zellij. It is
+  # printed before the repaint, which comes last and is bounded like every
+  # zellij call.
+  local touched=0
+  if _touch_session "STATE=busy"; then touched=1; fi
+  _prompt_hook_summary || true
+  (( touched == 0 )) || _rename_tab busy || true
+}
 
-  # Count next, pure bash — this hook fires on every user prompt (the
+# The unread summary prompt-hook injects into the agent's context.
+_prompt_hook_summary() {
+  # Count first, pure bash — this hook fires on every user prompt (the
   # hottest path in the system) and the common case is an empty inbox:
-  # nothing spawned beyond _update_state, zero stdout.
+  # nothing spawned beyond the state write, zero stdout.
   local inbox n=0
   inbox=$(_inbox_dir "$TASK_FORCE_ROLE")
   if [[ -d "$inbox" ]]; then
@@ -2849,7 +2929,7 @@ _send_wake() {
   if [[ "$(_session_field "$rs" AUTO_SUBMIT || true)" == "1" ]]; then
     wake_term=$'\r'
   fi
-  zellij action write-chars --pane-id "$rpane_id" "radio check${wake_term}" >/dev/null 2>&1 || {
+  _zj action write-chars --pane-id "$rpane_id" "radio check${wake_term}" >/dev/null 2>&1 || {
     _log "send: write-chars failed for $to (pane=$rpane_id) — queued (id=$id)"
     return 1; }
   _log "send: woke $to via tab_id=$rtab_id pane=$rpane_id (src=$rpane_src)${note:+ ($note)} (id=$id)"
@@ -2986,7 +3066,7 @@ cmd_clear() {
   local marker
   marker=$(_rotate_marker "$to")
   printf 'CREATED=%s\nEXPIRES=%s\n' "$(_now)" "$(( $(date -u +%s) + ttl * 60 ))" | _atomic_write "$marker"
-  if ! zellij action write-chars --pane-id "$WAKE_PANE_ID" $'/clear\r' >/dev/null 2>&1; then
+  if ! _zj action write-chars --pane-id "$WAKE_PANE_ID" $'/clear\r' >/dev/null 2>&1; then
     rm -f "$marker"
     _log "clear: write-chars failed for $to (pane=$WAKE_PANE_ID)"
     printf 'radio: not clearing %s: write-chars failed\n' "$to" >&2

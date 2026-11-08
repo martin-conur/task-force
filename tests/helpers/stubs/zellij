@@ -7,6 +7,16 @@
 # treat as "lookup failed — skip" (mirrors the real behaviour when zellij
 # isn't running). Mutating actions stay no-ops; we just record the call.
 echo "zellij $*" >> "${STUB_CALLS_DIR}/zellij.calls"
+# A stalled zellij server (#384): when the action word (`list-tabs`,
+# `rename-tab-by-id`, `go-to-tab`, …) is in $STUB_ZELLIJ_HANG (space-separated),
+# the call blocks for $STUB_ZELLIJ_HANG_SECS (default 30) and answers nothing.
+# `exec`, so the stalled process is the one a deadline stops.
+if [[ -n "${STUB_ZELLIJ_HANG:-}" ]]; then
+  _act="${1:-}"; [[ "$_act" == action ]] && _act="${2:-}"
+  case " $STUB_ZELLIJ_HANG " in
+    *" $_act "*) exec sleep "${STUB_ZELLIJ_HANG_SECS:-30}" ;;
+  esac
+fi
 # `-s <session>` targets another session (#291). Only the sessions listed in
 # $STUB_ZELLIJ_LIVE_SESSIONS (space-separated) answer, from the same fixtures;
 # any other prints zellij's plain-text "not found" list and exits 0, as the

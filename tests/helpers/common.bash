@@ -321,6 +321,9 @@ setup_stubs() {
   # A stubbed agent never registers, so task-recreate-worker's wait for the
   # register (#304) would run out its full default on every launch.
   export TASK_RECREATE_WORKER_REGISTER_WAIT=0
+  # The snap-back's late focus look (#384) would add a second to every launch
+  # that keeps the caller's focus. The tests of that look set it themselves.
+  export AW_TAB_FOCUS_LATE=0
 
   reset_radio_env
 }

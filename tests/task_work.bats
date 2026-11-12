@@ -23,6 +23,7 @@ load helpers/common
 
 setup() {
   setup_repo
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   cd "$MAIN_REPO"
   export AW_IMPL=claude-gh

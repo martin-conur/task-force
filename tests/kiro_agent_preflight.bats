@@ -95,6 +95,7 @@ teardown() {
 
 @test "kiro task-work proceeds once the agent resolves" {
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   run env AW_IMPL=kiro-gh "$TASK_WORK" probe --no-task
   assert_success
   assert [ -d "$WORKTREE_BASE/probe" ]

@@ -26,7 +26,7 @@
 #     `task-config set` cannot drift back to writing tracked files.
 #
 # Untracked files do not follow `git worktree add`, so the launchers
-# (task-work, task-reviewer, task-recreate-worker) call tf_local_only_sync to
+# (task-work, task-reviewer, task-recreate-worker) call tf_worktree_sync to
 # copy the set from the main checkout into the worktree before the agent starts.
 #
 # kiro is refused: its hooks live in `.kiro/agents/<role>.json`, which has no
@@ -39,7 +39,9 @@
 #   tf_local_only_patterns <loadout>     the exclude patterns that loadout writes
 #   tf_local_only_tracked <repo> <pat>.. print the patterns that git tracks a file under
 #   tf_local_only_record <repo> <pat>..  write the exclude block + the git config
-#   tf_local_only_sync <repo> <worktree> copy the set into a worktree (missing files only)
+#   tf_worktree_sync <repo> <wt> <loadout>  copy what a worktree lacks into it (missing
+#                                        files only): the local-only set, and on every
+#                                        install the loadout's files (#393)
 #   tf_local_only_refuse_kiro <repo> <requested>  the kiro installers' refusal
 #   tf_local_only_plan|remove <repo>     what task-remove does to the block + config
 
@@ -144,28 +146,122 @@ _tf_exclude_files() {
   ' "$f"
 }
 
-# tf_local_only_sync <repo> <worktree>
-# Copy the local-only set from the main checkout into <worktree>. A no-op on a
-# normal install. Only missing files are copied: a recovered worktree's
-# settings.local.json may already hold permissions approved during the session,
-# and those are the user's.
-tf_local_only_sync() {
-  local repo="$1" wt="$2" main f rel n=0
-  tf_local_only "$repo" || return 0
+# tf_worktree_sync <repo> <worktree> <loadout>
+# Copy the task-force files <worktree> lacks from the main checkout, before its
+# agent starts. Only missing files are copied, never over one the worktree has:
+# a recovered worktree's settings.local.json may hold permissions approved
+# during the session, and those are the user's.
+#
+# Two passes. A local-only install (#327) copies its exclude block's files, as
+# it always has; the block in the common info/exclude already keeps them out of
+# every commit. Then, on every install (#393), the files la_sync_paths names for
+# <loadout>: a worktree forked from a ref without the install (a base the
+# install was never pushed to, `origin/<base>` after task-work's auto-refresh, a
+# reviewer's PR head) boots otherwise with no role command, no radio hooks and
+# no tracker MCP. Those copies go in a per-worktree exclude, see below.
+tf_worktree_sync() {
+  local repo="$1" wt="$2" loadout="${3:-}" main f rel n=0 copied=()
   main=$(_tf_main_worktree "$repo")
-  [[ -n "$main" && -d "$main" ]] || return 0
-  f=$(_tf_exclude_file "$repo") || return 0
+  [[ -n "$main" && -d "$main" && -d "$wt" ]] || return 0
   [[ "$(cd "$main" && pwd -P)" != "$(cd "$wt" && pwd -P)" ]] || return 0
+  if tf_local_only "$repo" && f=$(_tf_exclude_file "$repo"); then
+    while IFS= read -r rel; do
+      [[ -n "$rel" && -f "$main/$rel" && ! -e "$wt/$rel" ]] || continue
+      mkdir -p "$(dirname "$wt/$rel")"
+      cp -p "$main/$rel" "$wt/$rel"
+      n=$((n + 1))
+    done < <(_tf_exclude_files "$f")
+    if ((n > 0)); then
+      echo "Local-only install: copied $n untracked task-force file(s) from $main"
+    fi
+  fi
+  [[ -n "$loadout" ]] || return 0
+  _tf_source_loadout_artifacts || return 0
   while IFS= read -r rel; do
-    [[ -n "$rel" && -f "$main/$rel" && ! -e "$wt/$rel" ]] || continue
+    [[ -n "$rel" && ! -e "$wt/$rel" ]] || continue
+    # A file the branch tracks but the checkout lacks was deleted on purpose.
+    # `|| true` inside every substitution here, for task-reviewer's `set -E`
+    # (see tf_local_only).
+    [[ -z "$(git -C "$wt" ls-files -- "$rel" 2>/dev/null || true)" ]] || continue
     mkdir -p "$(dirname "$wt/$rel")"
     cp -p "$main/$rel" "$wt/$rel"
-    n=$((n + 1))
-  done < <(_tf_exclude_files "$f")
-  if ((n > 0)); then
-    echo "Local-only install: copied $n untracked task-force file(s) from $main"
+    copied+=("$rel")
+  done < <(la_sync_paths "$main" "$loadout")
+  rel=$(_tf_sync_import "$main" "$wt" "$loadout")
+  if [[ -n "$rel" ]]; then copied+=("$rel"); fi
+  ((${#copied[@]} > 0)) || return 0
+  _tf_worktree_exclude "$wt" "${copied[@]}"
+  echo "Copied ${#copied[@]} task-force file(s) this worktree's branch lacks from $main"
+  echo "  (kept out of its commits by a per-worktree exclude): ${copied[*]}"
+  if declare -F aw_radio_log >/dev/null; then
+    aw_radio_log "worktree-sync: copied ${#copied[@]} file(s) into $wt from $main: ${copied[*]}"
   fi
   return 0
+}
+
+# loadout-artifacts.sh sources this file, so it is sourced here only on first
+# use, never at load.
+_tf_source_loadout_artifacts() {
+  declare -F la_sync_paths >/dev/null && return 0
+  # shellcheck source=lib/loadout-artifacts.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/loadout-artifacts.sh"
+}
+
+# _tf_sync_import <main> <worktree> <loadout>
+# The workflow-doc import a branch's own CLAUDE.md lacks. The sync never
+# overwrites that file, so the import goes in CLAUDE.local.md, which Claude Code
+# reads beside it; written only when the worktree has no CLAUDE.local.md of its
+# own. Prints the path it wrote, or nothing; always succeeds, since it runs in a
+# command substitution, where task-reviewer's ERR trap would fire on a non-zero
+# return.
+_tf_sync_import() {
+  local main="$1" wt="$2" loadout="$3" line
+  [[ "${loadout%%-*}" == claude ]] || return 0
+  line="@.claude/${loadout##*-}-workflow.md"
+  [[ -f "$wt/CLAUDE.md" && ! -e "$wt/CLAUDE.local.md" ]] || return 0
+  if grep -qxF -- "$line" "$wt/CLAUDE.md"; then return 0; fi
+  grep -qxF -- "$line" "$main/CLAUDE.md" 2>/dev/null || return 0
+  printf '%s\n' "$line" > "$wt/CLAUDE.local.md"
+  printf 'CLAUDE.local.md'
+}
+
+# _tf_worktree_exclude <worktree> <rel>...
+# Keep the copies out of every commit made in <worktree>, and only there: the
+# main checkout tracks these very files, so they cannot go in the common
+# info/exclude, which would also hide a new file of the same name in every other
+# worktree. Git reads a per-worktree core.excludesFile once
+# extensions.worktreeConfig is on, so the paths go in a file in the worktree's
+# own git dir, removed with the worktree. That setting replaces the user's global
+# excludes file for this worktree, so the file starts with a copy of it.
+#
+# An ignored file is one git may overwrite: a later merge or checkout that brings
+# the same path in tracked replaces the copy without the "untracked working tree
+# file would be overwritten" refusal, and from then on the tracked file wins.
+_tf_worktree_exclude() {
+  local wt="$1" gitdir file global rel; shift
+  gitdir=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null || true)
+  [[ -n "$gitdir" ]] || return 0
+  file="$gitdir/task-force-exclude"
+  if [[ ! -f "$file" ]]; then
+    global=$(git -C "$wt" config --get core.excludesFile 2>/dev/null || true)
+    global="${global/#\~/$HOME}"
+    [[ -n "$global" ]] || global="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
+    {
+      if [[ -f "$global" ]]; then
+        printf '# copied from %s\n' "$global"
+        cat "$global"
+      fi
+      printf '# task-force (#393): files copied in from the main checkout\n'
+    } > "$file"
+  fi
+  for rel in "$@"; do
+    grep -qxF -- "/$rel" "$file" || printf '/%s\n' "$rel" >> "$file"
+  done
+  if ! git -C "$wt" config extensions.worktreeConfig true \
+     || ! git -C "$wt" config --worktree core.excludesFile "$file"; then
+    echo "Warning: could not set a per-worktree exclude in $wt: the copied task-force" >&2
+    echo "         files are untracked there, keep them out of commits by hand." >&2
+  fi
 }
 
 # tf_local_only_refuse_kiro <repo> <requested:true|false>

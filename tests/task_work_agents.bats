@@ -33,6 +33,7 @@ DETECT="$REPO_ROOT_REAL/lib/detect-impl.sh"
 setup() {
   setup_repo
   setup_kiro_agents   # kiro launchers preflight the agent (#218)
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   cd "$MAIN_REPO"
   mkdir -p "$MAIN_REPO/tasks"   # the local tracker regenerates its board

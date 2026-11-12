@@ -13,6 +13,7 @@ SNAP="$REPO_ROOT_REAL/bin/task-monitor-snapshot"
 
 setup() {
   setup_repo
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_task_force_home
   unset TASK_FORCE_ROLE
   NAME=$(basename "$MAIN_REPO" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')

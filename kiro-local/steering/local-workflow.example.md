@@ -109,6 +109,36 @@ V3 also asks "Trust this workspace?" the first time it opens a folder, and every
 
 If local `<base>` is strictly behind `origin/<base>`, `task-work` auto-refreshes and forks the new worktree from `origin/<base>` instead of the stale local tip. Pass `--from` to override.
 
+**Every launch brings the task-force files, and confirms the register** (#393).
+A worktree holds what its fork point committed, so one forked from a ref
+without the install (an install committed only on a local branch,
+`origin/<base>` after that auto-refresh, a reviewer's PR head) would boot with
+no role command, no radio hooks and no tracker MCP. `task-work`,
+`task-reviewer` and `task-recreate-worker` copy in, from the main checkout,
+each task-force file the worktree lacks: the workflow doc and the role files,
+plus `CLAUDE.md`, `CLAUDE.local.md`, `.claude/settings.json`,
+`.claude/settings.local.json` and `.mcp.json` on claude (kiro's role files are
+its `.kiro/agents/*.json`). Missing files only, never over one the worktree
+has; a branch whose own `CLAUDE.md` lacks the workflow import gets it in
+`CLAUDE.local.md`. The copies are listed in a per-worktree exclude
+(`extensions.worktreeConfig`, with `core.excludesFile` pointing into the
+worktree's own git dir and seeded with your global excludes), so `git add -A`
+stages none of them and the shared `info/exclude` is left alone. A later merge
+that brings the same files in tracked overwrites the ignored copies, without
+the "untracked working tree file would be overwritten" refusal. The launch
+says what it copied and logs it: `grep 'worktree-sync:' ~/.task-force/radio/log`.
+
+Before the agent starts, the launcher then checks the worktree for the role's
+file (`.claude/commands/<role>.md`, or kiro's `.kiro/agents/<role>.json`) and a
+`radio register` hook, and refuses without either, naming which one and the
+fix. `task-work` leaves the worktree in place for `task-recreate-worker <slug>`;
+`task-reviewer` unwinds its own. After the launch all three wait up to 30s
+(`TASK_FORCE_REGISTER_WAIT`; `TASK_RECREATE_WORKER_REGISTER_WAIT` still wins
+for a recovery) for the register. On a miss they warn, exit 0, and say which
+case it is: no role file (the role never started: retry), no radio hook (it
+runs but cannot be woken: do not retype its prompt), or both there (still
+starting, or a startup prompt is waiting in the tab).
+
 Examples:
 ```bash
 task-work tasks/001-add-login-flow.md
@@ -298,7 +328,8 @@ started there runs and never registers. The refusal names the fix,
 base does not carry the hooks either.
 
 And it prints `Recovered` only once the register has landed: after the launch
-it waits up to 30s (`TASK_RECREATE_WORKER_REGISTER_WAIT`) for the role's
+it waits up to 30s (`TASK_RECREATE_WORKER_REGISTER_WAIT`, else the shared
+`TASK_FORCE_REGISTER_WAIT`) for the role's
 session file to show a register newer than the launch, by the expected
 `AGENT`, with a `TAB_ID`. Otherwise it warns that the agent started but has not
 registered, with the likely causes (a startup prompt waiting in the tab, an
@@ -403,7 +434,8 @@ worktree shares and nothing commits. `git config task-force.install local-only`
 records the mode, and every later `task-init` (a re-run, a `task-config set`)
 honours it without the flag. `task-work`, `task-reviewer` and
 `task-recreate-worker` copy the set from the main checkout into each worktree
-before the agent starts, missing files only, and #304's hook check accepts a
+before the agent starts, missing files only (as for every install since #393,
+but kept out of commits by this block), and #304's hook check accepts a
 `radio register` hook in `settings.local.json`. A worker's PR carries none of
 it. `task-remove` takes it back out, exclude block and git config included.
 claude only: kiro has no untracked hook location, so a kiro install is refused

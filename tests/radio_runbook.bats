@@ -271,6 +271,7 @@ runbook_block() {
   # must turn it off.
   setup_repo
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   mkdir -p "$MAIN_REPO/tasks"
   local impl SUPERVISE

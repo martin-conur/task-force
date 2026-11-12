@@ -57,6 +57,8 @@
 #   la_owned_paths <root> <loadout>   -> existing task-init-written files, repo-relative
 #                                        (inventory only — #220's task-remove asks
 #                                        this without removing anything)
+#   la_sync_paths <root> <loadout>    -> what a new worktree copies from the main
+#                                        checkout (#393): owned + edited files
 #   la_seeded_allow <loadout>         -> the permission literals task-init seeds
 #   la_plan <root> <loadout>          -> what removal would do; touches nothing
 #   la_remove <root> <loadout>        -> does it, printing the same lines
@@ -253,6 +255,29 @@ la_owned_paths() {
     [[ "$action" == absent ]] || printf '%s\n' "$rel"
   done
   _la_other_owned_paths "$root" "$loadout"
+  return 0
+}
+
+# la_sync_paths <root> <loadout>
+# The files a new worktree needs from the main checkout before its agent starts
+# (#393), one repo-relative path per line, existing under <root> only. Built on
+# the same inventory as the removal walk, so the two cannot drift: the owned
+# files (workflow doc, role files) plus the files the walk *edits*, which carry
+# our entries (CLAUDE.md's import, settings.json's hooks), and the two files a
+# local-only install writes. The tasks/ backlog and the inert pre-#218 kiro
+# hooks are left out: the backlog is read from the main checkout only, and the
+# hooks never run. `.mcp.json` rides along because the tracker MCP lives there.
+la_sync_paths() {
+  local root="$1" loadout="$2" rel
+  while IFS= read -r rel; do
+    case "$rel" in tasks/*|.kiro/hooks/*) continue ;; esac
+    printf '%s\n' "$rel"
+  done < <(la_owned_paths "$root" "$loadout")
+  if [[ "$(la_assistant "$loadout")" == claude ]]; then
+    for rel in CLAUDE.md CLAUDE.local.md .claude/settings.json .claude/settings.local.json .mcp.json; do
+      if [[ -f "$root/$rel" ]]; then printf '%s\n' "$rel"; fi
+    done
+  fi
   return 0
 }
 

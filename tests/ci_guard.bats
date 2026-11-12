@@ -321,6 +321,7 @@ msg() { printf '%s\n' "$@" > "$TMP/msg"; }
 
   setup_repo
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   local impl hooks
   hooks="$(git -C "$MAIN_REPO" rev-parse --git-common-dir)/hooks"

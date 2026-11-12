@@ -28,6 +28,7 @@ DETECT="$REPO_ROOT_REAL/lib/detect-impl.sh"
 setup() {
   setup_repo
   setup_kiro_agents   # kiro launchers preflight the agent (#218)
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   cd "$MAIN_REPO"
   mkdir -p "$MAIN_REPO/tasks"   # the local tracker regenerates its board
@@ -44,6 +45,7 @@ _impls() { bash -c "source '$DETECT'; aw_all_impls"; }
 _seed_impl() {
   local impl="$1" doc
   rm -rf "$MAIN_REPO/.claude" "$MAIN_REPO/.kiro/steering"
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   doc=$(bash -c "source '$DETECT'; aw_impl_workflow_doc '$MAIN_REPO' '$impl'")
   mkdir -p "$(dirname "$doc")"
   : > "$doc"

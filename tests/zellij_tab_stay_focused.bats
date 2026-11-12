@@ -21,6 +21,7 @@ ZELLIJ_TAB_LIB="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)/lib/zellij-ta
 setup() {
   setup_repo
   setup_kiro_agents   # kiro launchers preflight the agent (#218)
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   setup_task_force_home   # a private radio log for the tab-focus: lines (#311)
   cd "$MAIN_REPO"

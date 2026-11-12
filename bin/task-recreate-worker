@@ -49,6 +49,8 @@ source "$AW_ROOT/lib/repo-name.sh"
 source "$AW_ROOT/lib/ci-guard.sh"
 # shellcheck source=lib/hook-carrier.sh
 source "$AW_ROOT/lib/hook-carrier.sh"
+# shellcheck source=lib/register-wait.sh
+source "$AW_ROOT/lib/register-wait.sh"
 # shellcheck source=lib/worktree-procs.sh
 source "$AW_ROOT/lib/worktree-procs.sh"
 # shellcheck source=lib/profile.sh
@@ -480,12 +482,13 @@ _resume_session_id() {
   printf '%s' "$id"
 }
 
-# A local-only install (#327) is untracked, so the worktree carries only the
-# copy task-work made when it opened it. Fill in whatever is missing from the
-# main checkout, before the #304 check below asks whether the hooks are there;
+# The task-force files the worktree lacks (a local-only install, #327; an
+# install committed only on a local branch, #393) carry only the copy task-work
+# made when it opened it. Fill in whatever is missing from the main checkout,
+# before the checks below ask whether the role file and the hooks are there;
 # files already present are left alone, since settings.local.json may hold
 # permissions approved during the lost session.
-tf_local_only_sync "$MAIN_WORKTREE" "$WORKTREE_DIR"
+tf_worktree_sync "$MAIN_WORKTREE" "$WORKTREE_DIR" "$IMPL"
 
 # Resolve the launch line now, before the report and the sidecar rewrite, so a
 # refusal (kiro's --resume, kiro's agent preflight) leaves everything as it was.
@@ -518,6 +521,19 @@ if [[ -z "$NO_LAUNCH" ]]; then
   # this check and block the recovery — and a false refusal here is worse than
   # the conservative pass the guard's own docs describe.
   aw_agent_preflight "$MAIN_WORKTREE" "$IMPL" || exit 1
+
+  # The worker's own prompt file (#393): without it claude takes `/worker …` as
+  # plain text and the role never starts.
+  if ! aw_dir_has_role_file "$AGENT" "$WORKTREE_DIR" worker; then
+    {
+      echo "Error: worktree '$SLUG' has no $(aw_role_file_rel "$AGENT" worker) — refusing to launch $AGENT there."
+      echo "       The worker would start with no role prompt, and the main checkout has"
+      echo "       none to copy either. Install the loadout there, then re-run:"
+      echo "         (cd $MAIN_WORKTREE && task-init $IMPL)"
+      echo "         task-recreate-worker ${ORIG_ARGS[*]}"
+    } >&2
+    exit 1
+  fi
 
   # The check above asks whether the repo is installed for this agent; this one
   # asks whether THE WORKTREE is (#304). It holds what was committed when it was
@@ -722,59 +738,25 @@ fi
 # register has landed — a session file written since the launch, by this agent,
 # bound to a tab (#304). Before this the line was printed on faith, and a
 # hookless agent got it as readily as a working one.
-REGISTER_WAIT="${TASK_RECREATE_WORKER_REGISTER_WAIT:-30}"
-[[ "$REGISTER_WAIT" =~ ^[0-9]+$ ]] || REGISTER_WAIT=30
-NEW_TAB_ID=$(_info_field TAB_ID "$INFO_FILE")
-
-# Prints nothing and succeeds once the register is in; otherwise prints why not.
-_register_status() {
-  local hb agent tab_id
-  [[ -f "$SESSION_FILE" ]] || { echo "no session file was written"; return 1; }
-  hb=$(_info_field LAST_HEARTBEAT "$SESSION_FILE")
-  # ISO-8601 UTC at one-second resolution, so a string compare orders them.
-  if [[ -z "$hb" || "$hb" < "$LAUNCHED_AT" ]]; then
-    echo "the session file is left over from before the launch (heartbeat ${hb:-none})"
-    return 1
-  fi
-  agent=$(_info_field AGENT "$SESSION_FILE")
-  if [[ "$agent" != "$AGENT" ]]; then
-    echo "the session file says AGENT=${agent:-<none>}, not $AGENT"
-    return 1
-  fi
-  tab_id=$(_info_field TAB_ID "$SESSION_FILE")
-  if [[ -z "$tab_id" ]]; then
-    echo "it registered with an empty TAB_ID, so no wake can reach it"
-    return 1
-  fi
-  if [[ -n "$NEW_TAB_ID" && "$tab_id" != "$NEW_TAB_ID" ]]; then
-    echo "it registered TAB_ID=$tab_id, but the new tab is $NEW_TAB_ID"
-    return 1
-  fi
-  return 0
-}
-
+# The wait is shared with task-work and task-reviewer (lib/register-wait.sh,
+# #393); this command's own variable still wins over TASK_FORCE_REGISTER_WAIT.
+REGISTER_WAIT=$(aw_register_wait_secs "${TASK_RECREATE_WORKER_REGISTER_WAIT:-}")
 REGISTER_WHY=""
-_waited=0
-while ! REGISTER_WHY=$(_register_status); do
-  (( _waited >= REGISTER_WAIT )) && break
-  sleep 1
-  _waited=$(( _waited + 1 ))
-done
+aw_register_wait "$SESSION_FILE" "$AGENT" "$LAUNCHED_AT" "$(_info_field TAB_ID "$INFO_FILE")" "$REGISTER_WAIT" \
+  || REGISTER_WHY="$AW_REGISTER_WHY"
 
 if [[ -n "$REGISTER_WHY" ]]; then
   {
     echo "Warning: $ROLE was launched in tab '$SLUG' but has NOT registered with radio"
     echo "         after ${REGISTER_WAIT}s: $REGISTER_WHY."
     echo "         It is not recovered yet — radio cannot reach it, and its $INBOX_N queued"
-    echo "         message(s) stay unread until it registers. Look at the tab. Likely causes:"
+    echo "         message(s) stay unread until it registers. Look at the tab."
     if [[ -n "$RESUME" && -z "$RESUME_SESSION_ID" ]]; then
-      echo "           - claude's session picker is waiting for you to pick: the register"
-      echo "             follows the pick;"
+      echo "         claude's session picker may be waiting for you to pick: the register"
+      echo "         follows the pick."
     fi
-    echo "           - a startup prompt is waiting for input (claude's folder-trust question,"
-    echo "             kiro's upgrade dialog): answer it and the register follows;"
-    echo "           - the agent failed to start, or exited;"
-    echo "           - $(aw_hook_carrier_rel "$AGENT") in the worktree lost its radio hooks."
+    aw_register_case "$AGENT" worker "$WORKTREE_DIR"
+    echo "         Or the agent failed to start, or exited."
     echo "         Check: cat $SESSION_FILE"
     echo "                grep 'register' ${RADIO_HOME}/log | tail -5"
   } >&2

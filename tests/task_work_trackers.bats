@@ -19,6 +19,7 @@ load helpers/common
 setup() {
   setup_repo
   setup_kiro_agents   # kiro launchers preflight the agent (#218)
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   cd "$MAIN_REPO"
   unset AW_IMPL
@@ -234,6 +235,7 @@ NOTION_TITLED="https://www.notion.so/My-Feature-abc123def456abc123def456abc123de
 _seed_local() {
   local impl="$1"
   mkdir -p "$MAIN_REPO/tasks"
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   case "$impl" in
     claude-local) mkdir -p "$MAIN_REPO/.claude"; touch "$MAIN_REPO/.claude/local-workflow.md" ;;
     kiro-local)   mkdir -p "$MAIN_REPO/.kiro/steering"; touch "$MAIN_REPO/.kiro/steering/local-workflow.md" ;;
@@ -577,8 +579,8 @@ _assert_nothing_created() {
   local impl
   for impl in claude-local kiro-local; do
     rm -rf "$MAIN_REPO/.claude" "$MAIN_REPO/.kiro"
-    _seed_local "$impl"
     [[ "$impl" == kiro-* ]] && setup_kiro_agents
+    _seed_local "$impl"
     run env AW_IMPL="$impl" "$TASK_WORK" "free-${impl}"
     assert_success
     assert [ -d "$WORKTREE_BASE/free-${impl}" ]

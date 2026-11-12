@@ -657,6 +657,8 @@ _assert_untouched() {
 
 @test "task-work --agent kiro launches kiro in a claude-active repo and records AGENT=kiro" {
   _dual_docs
+  seed_hook_carriers "$MAIN_REPO"   # the role files + hooks both launches check for (#393)
+  _commit_all hooks
   git config task-force.assistant claude
   run "$TASK_WORK" probe-kiro --agent kiro --no-task
   assert_success
@@ -684,6 +686,8 @@ _assert_untouched() {
 
 @test "task-reviewer --agent kiro reviews on kiro in a claude-active repo" {
   _dual_docs
+  seed_hook_carriers "$MAIN_REPO"   # the role files + hooks both launches check for (#393)
+  _commit_all hooks
   git config task-force.assistant claude
   export GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
   run "$TASK_REVIEWER" 42 --agent kiro

@@ -15,6 +15,9 @@ for _v in TASK_FORCE_PROFILE ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_AUTH
           CLAUDE_CODE_MAX_CONTEXT_TOKENS ENABLE_TOOL_SEARCH; do
   echo "$_v=${!_v-<unset>}"
 done > "${STUB_CALLS_DIR}/claude.profile-env"
+# Opt-in: remove a file from the agent's cwd as it starts, as a checkout that
+# loses its role command or hooks after the launcher checked them would (#393).
+[[ -n "${STUB_CLAUDE_RM:-}" ]] && rm -f "$STUB_CLAUDE_RM"
 # Opt-in: play the SessionStart hook a hooked install would run, registering
 # with the radio at $STUB_CLAUDE_RADIO as $STUB_CLAUDE_AGENT (default claude).
 # $STUB_CLAUDE_REGISTER_DELAY seconds later, in the background, when set: an

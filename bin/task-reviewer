@@ -43,8 +43,8 @@ source "$AW_ROOT/lib/detect-impl.sh"
 source "$AW_ROOT/lib/zellij-tab.sh"
 # shellcheck source=lib/worktree-create.sh
 source "$AW_ROOT/lib/worktree-create.sh"
-# shellcheck source=lib/local-only.sh
-source "$AW_ROOT/lib/local-only.sh"
+# shellcheck source=lib/register-wait.sh
+source "$AW_ROOT/lib/register-wait.sh"
 # shellcheck source=lib/repo-name.sh
 source "$AW_ROOT/lib/repo-name.sh"
 # shellcheck source=lib/profile.sh
@@ -410,9 +410,10 @@ trap _reviewer_cleanup_partial ERR
 
 echo "Creating branch $BRANCH and worktree at $WORKTREE_DIR..."
 aw_create_worktree "$WORKTREE_DIR" "$BRANCH" "$FROM_REF"
-# A local-only install (#327) is untracked, so it did not come with the
-# worktree: copy it in, or the reviewer has no /reviewer command and no hooks.
-tf_local_only_sync "$REPO_ROOT" "$WORKTREE_DIR"
+# A PR's head never carries a local install: not a local-only one (#327), and
+# not one committed only on a local branch (#393). Copy what it lacks, or the
+# reviewer has no /reviewer command and no hooks.
+tf_worktree_sync "$REPO_ROOT" "$WORKTREE_DIR" "$IMPL"
 
 # Write info file so task-done can clean up the worktree when the user
 # decides to (the reviewer never auto-removes — the tab stays open showing
@@ -426,6 +427,17 @@ BASE_BRANCH="${PR_BASE_REF:-main}"
   printf 'ISSUE_NUMBER=%s\n' "$ISSUE_NUMBER"
   [[ -z "${AW_PROFILE_NAME:-}" ]] || printf 'PROFILE=%s\n' "$AW_PROFILE_NAME"
 } > "$INFO_FILE"
+
+# The role's prompt file and a radio register hook, after the sync and before
+# the agent starts (#393). A refusal unwinds the worktree, as any failed
+# dispatch does, so the re-run is not blocked by the concurrent-reviews guard.
+if [[ -z "$NO_LAUNCH" ]] \
+   && ! aw_launch_preflight "$AGENT" reviewer "$WORKTREE_DIR" "$BASE_BRANCH" \
+          "$REPO_ROOT" "$IMPL" "the review worktree for PR #$PR_NUMBER"; then
+  echo "       The review worktree was removed again; re-run task-reviewer once it is fixed." >&2
+  _reviewer_cleanup_partial
+  exit 1
+fi
 
 # ---------------- claude command builder ----------------
 build_claude_cmd() {
@@ -548,6 +560,8 @@ else
   else
     LAUNCH_CMD=$(build_claude_cmd)
   fi
+  # The register waited for below must be newer than this.
+  LAUNCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   aw_launch_tab "$SLUG" "$WORKTREE_DIR" "set +H; ${RADIO_ENV_PREFIX}${LAUNCH_CMD}" "1"
   started="Started reviewer in $WORKTREE_DIR for PR #$PR_NUMBER (issue: ${ISSUE_NUMBER:-none}, model: ${RESOLVED_MODEL:-kiro default}"
   [[ -n "$TRUST_ALL" ]] && started+=", trust-all"
@@ -563,3 +577,24 @@ trap - ERR
 # Persist the zellij tab_id so task-done can scope close-tab-by-id to this
 # reviewer's tab (same pattern task-work uses for workers).
 aw_record_tab_id "$SLUG" "$INFO_FILE" task-reviewer
+
+[[ -n "$NO_LAUNCH" ]] && exit 0
+
+# ---------------- verify the register ----------------
+# "Started reviewer" is about zellij (#393). A PM that reads a missing register
+# as "the review never started" retypes /reviewer into a review already under
+# way, so say which it is. A miss warns and exits 0: the tab and agent are up.
+REGISTER_WAIT=$(aw_register_wait_secs)
+SESSION_FILE=$(aw_radio_session_file "$TASK_FORCE_ROLE_VALUE")
+if aw_register_wait "$SESSION_FILE" "$AGENT" "$LAUNCHED_AT" \
+     "$(aw_info_field TAB_ID "$INFO_FILE")" "$REGISTER_WAIT"; then
+  echo "It registered with radio as $TASK_FORCE_ROLE_VALUE."
+else
+  {
+    echo "Warning: $TASK_FORCE_ROLE_VALUE was launched in tab '$SLUG' but has NOT registered"
+    echo "         with radio after ${REGISTER_WAIT}s: $AW_REGISTER_WHY."
+    aw_register_case "$AGENT" reviewer "$WORKTREE_DIR"
+    echo "         Check: cat $SESSION_FILE"
+    echo "                grep 'register' ${TASK_FORCE_HOME:-$HOME/.task-force}/radio/log | tail -5"
+  } >&2
+fi

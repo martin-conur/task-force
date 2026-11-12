@@ -33,14 +33,36 @@
 # reads that file beside settings.json, so a hook found there counts for any
 # checkout; a worktree whose copy is missing still has neither, and is refused.
 
-# aw_hook_carrier_rel <agent>
-# The carrier's path relative to the checkout root.
+# aw_hook_carrier_rel <agent> [<role>]
+# The carrier's path relative to the checkout root. On kiro the carrier is the
+# role's own agent config (worker by default); claude's is one file for all.
 aw_hook_carrier_rel() {
   case "$1" in
     claude) echo ".claude/settings.json" ;;
-    kiro)   echo ".kiro/agents/worker.json" ;;
+    kiro)   echo ".kiro/agents/${2:-worker}.json" ;;
     *)      return 1 ;;
   esac
+}
+
+# aw_role_file_rel <agent> <role>
+# The file that makes the role's prompt exist (#393): claude's slash command,
+# kiro's agent config. Without it claude takes `/worker …` as plain text and
+# kiro falls back to a built-in agent.
+aw_role_file_rel() {
+  case "$1" in
+    claude) echo ".claude/commands/$2.md" ;;
+    kiro)   echo ".kiro/agents/$2.json" ;;
+    *)      return 1 ;;
+  esac
+}
+
+# aw_dir_has_role_file <agent> <dir> <role>
+# kiro-cli also resolves an agent from the user's global dir (lib/kiro-agent.sh).
+aw_dir_has_role_file() {
+  local agent="$1" dir="$2" role="$3" rel
+  rel=$(aw_role_file_rel "$agent" "$role") || return 1
+  [[ -r "$dir/$rel" ]] && return 0
+  [[ "$agent" == kiro && -r "$HOME/$rel" ]]
 }
 
 # Reads stdin. Captured rather than piped into `grep -q`: under `pipefail` the
@@ -54,15 +76,16 @@ _aw_carries_radio_register() {
 # kiro-cli falls back to the user's global agent dir when the workspace has no
 # `worker.json` (see lib/kiro-agent.sh), so a global carrier counts too.
 _aw_global_hook_carrier() {
-  [[ "$1" == kiro && -r "$HOME/.kiro/agents/worker.json" ]] || return 1
-  _aw_carries_radio_register < "$HOME/.kiro/agents/worker.json"
+  local global="$HOME/.kiro/agents/${2:-worker}.json"
+  [[ "$1" == kiro && -r "$global" ]] || return 1
+  _aw_carries_radio_register < "$global"
 }
 
-# aw_dir_has_hook_carrier <agent> <dir>
+# aw_dir_has_hook_carrier <agent> <dir> [<role>]
 # True when an agent started in <dir> would run task-force's radio hooks.
 aw_dir_has_hook_carrier() {
-  local agent="$1" dir="$2" rel
-  rel=$(aw_hook_carrier_rel "$agent") || return 1
+  local agent="$1" dir="$2" role="${3:-worker}" rel
+  rel=$(aw_hook_carrier_rel "$agent" "$role") || return 1
   if [[ -r "$dir/$rel" ]] && _aw_carries_radio_register < "$dir/$rel"; then
     return 0
   fi
@@ -70,7 +93,7 @@ aw_dir_has_hook_carrier() {
      && _aw_carries_radio_register < "$dir/.claude/settings.local.json"; then
     return 0
   fi
-  _aw_global_hook_carrier "$agent"
+  _aw_global_hook_carrier "$agent" "$role"
 }
 
 # aw_ref_has_hook_carrier <agent> <repo> <ref>
@@ -130,4 +153,40 @@ aw_hook_carrier_remedy() {
     echo "       (task-init / task-config add assistant $agent writes it), then:"
     echo "         git -C $dir merge $base"
   fi
+}
+
+# aw_launch_preflight <agent> <role> <dir> <base> <repo> <loadout> <what>
+# The check every launcher runs after the worktree sync and before the agent
+# starts (#393): the role's prompt file and a radio register hook. A miss on
+# either starts an agent that looks, from outside, exactly like one still
+# booting: no role prompt, or no register. So it is refused here, naming which
+# file is missing and the fix, on stderr. <what> names the checkout in the
+# message ("worktree 'issue-42'"); the caller prints its own retry line.
+aw_launch_preflight() {
+  local agent="$1" role="$2" dir="$3" base="$4" repo="$5" loadout="$6" what="$7"
+  local rel ok=0
+  if ! aw_dir_has_role_file "$agent" "$dir" "$role"; then
+    ok=1
+    rel=$(aw_role_file_rel "$agent" "$role")
+    {
+      echo "Error: $what has no $rel — refusing to launch $agent there."
+      echo "       The $role would start with no role prompt."
+      echo "       The main checkout has none to copy either ($repo/$rel)."
+      echo "       Install the loadout there, then re-run:"
+      echo "         (cd $repo && task-init $loadout)"
+    } >&2
+  fi
+  if ! aw_dir_has_hook_carrier "$agent" "$dir" "$role"; then
+    ok=1
+    rel=$(aw_hook_carrier_rel "$agent" "$role")
+    {
+      echo "Error: $what has no $agent radio hooks — refusing to launch $agent there."
+      echo "       $dir/$rel is missing, or carries no 'radio register' hook"
+      echo "       (the launch copies a missing one from the main checkout, never over one"
+      echo "       the worktree has): $agent would start, never register, and radio could"
+      echo "       not reach it."
+      aw_hook_carrier_remedy "$agent" "$dir" "$base" "$repo"
+    } >&2
+  fi
+  return "$ok"
 }

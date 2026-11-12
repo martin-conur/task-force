@@ -12,6 +12,7 @@ load helpers/common
 setup() {
   setup_repo
   setup_kiro_agents   # kiro launchers preflight the agent (#218)
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   cd "$MAIN_REPO"
 }

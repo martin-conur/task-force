@@ -950,13 +950,18 @@ dead_worker_symlinked_base() {
   assert_output --partial "'main' does not have it either: commit .claude/settings.json on main first"
 
   # Committed on main after the fork — the case in #304: merging main fixes it.
+  # A missing file is now copied in from the main checkout (#393), so the
+  # remedy is for a worktree whose own settings.json has no hooks: the copy
+  # never goes over it.
   seed_hook_carriers "$MAIN_REPO"
   git -C "$MAIN_REPO" add .claude/settings.json
   git -C "$MAIN_REPO" commit -q -m "claude loadout"
+  printf '{"permissions":{"allow":[]}}\n' > "$WORKTREE_BASE/issue-42/.claude/settings.json"
   AW_IMPL=claude-gh run "$TASK_RECREATE_WORKER" issue-42
   assert_failure
   assert_output --partial "'main' has it. Bring it in, then re-run:"
   refute_output --partial "does not have it either"
+  rm "$WORKTREE_BASE/issue-42/.claude/settings.json"
 
   # And the remedy it names works.
   git -C "$WORKTREE_BASE/issue-42" merge -q main

@@ -15,6 +15,7 @@ load helpers/common
 
 setup() {
   setup_repo
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   setup_task_force_home
   cd "$MAIN_REPO"
@@ -151,15 +152,21 @@ miss_reason() {
   source "$WORKTREE_BASE/.my-feature.info"
   assert_equal "${TAB_ID:-}" "12"
   refute_output --partial "tab id"
-  assert [ ! -e "$LOG" ]
-  # Byte-for-byte: the output is exactly the pre-#242 sequence of lines, with
-  # nothing appended after the launch line.
-  run tail -n 1 <<<"$hit_output"
-  assert_output --regexp '^Started worker in .*/my-feature \(branch: task/my-feature, base: main\)$'
+  # The launch logs its worktree sync (#393), never a tab-id line here.
+  if [[ -e "$LOG" ]]; then
+    run grep -c 'tab-id:' "$LOG"
+    assert_output "0"
+  fi
+  # Nothing about the tab after the launch line: the next line is the register
+  # wait's (#393), which a stubbed agent never satisfies.
+  run grep -A1 '^Started worker in ' <<<"$hit_output"
+  assert_line --index 0 --regexp '^Started worker in .*/my-feature \(branch: task/my-feature, base: main\)$'
+  assert_line --index 1 --partial "has NOT registered"
 }
 
 @test "task-work (kiro-gh): the shared region reports a miss in the kiro loadout too" {
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"
   export ZELLIJ=fake-session
   run env AW_IMPL=kiro-gh "$TASK_WORK" my-feature --no-task
   assert_success
@@ -175,6 +182,7 @@ miss_reason() {
 
 @test "task-reviewer (claude): a missed capture is reported and logged as task-reviewer" {
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"
   export ZELLIJ=fake-session GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
   AW_IMPL=claude-gh run "$TASK_REVIEWER" 42
   assert_success
@@ -185,6 +193,7 @@ miss_reason() {
 
 @test "task-reviewer (kiro-gh): a missed capture is reported and logged as task-reviewer" {
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"
   export ZELLIJ=fake-session GH_STUB_PR_URL="https://github.com/owner/repo/pull/42"
   AW_IMPL=kiro-gh run "$TASK_REVIEWER" 42
   assert_success

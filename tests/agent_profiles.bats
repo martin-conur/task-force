@@ -23,6 +23,7 @@ SENTINEL="sk-sentinel-355-do-not-write"
 setup() {
   setup_repo
   setup_kiro_agents
+  seed_hook_carriers "$MAIN_REPO"   # role files + hooks the launch copies in (#393)
   setup_stubs
   setup_task_force_home
   cd "$MAIN_REPO"

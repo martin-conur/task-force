@@ -240,20 +240,27 @@ setup_kiro_agents() {
 }
 
 # Seeds both assistants' radio hook carriers (#304) into <dir>: the
-# `.claude/settings.json` and `.kiro/agents/worker.json` an installed loadout
-# leaves there, each with a `radio register` hook. task-recreate-worker refuses a
-# worktree without the one for its agent, since an agent started there would
-# never register. Written untracked, straight into the worktree, so the fixture
-# repo's history and loadout detection stay as each suite set them up.
+# `.claude/settings.json` and `.kiro/agents/<role>.json` an installed loadout
+# leaves there, each with a `radio register` hook, and claude's role commands
+# `.claude/commands/<role>.md`. The launchers refuse to start an agent without
+# its role file or hooks (#304, #393), since it would start with no prompt or
+# never register. kiro's in the universal shape kiro-cli's V3 engine keeps
+# (#267), so no launch warns about object-shaped hooks (#370). Written
+# untracked, so the fixture repo's history and loadout
+# detection stay as each suite set them up. Seeded into the main checkout, the
+# launchers copy them into each new worktree (#393).
 # Usage: seed_hook_carriers <dir>
 # shellcheck disable=SC2016  # the hook commands are literal: the agent expands them, not this
 seed_hook_carriers() {
-  local dir="$1"
-  mkdir -p "$dir/.claude" "$dir/.kiro/agents"
+  local dir="$1" role
+  mkdir -p "$dir/.claude/commands" "$dir/.kiro/agents"
   printf '%s\n' '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --agent claude"}]}]}}' \
     > "$dir/.claude/settings.json"
-  printf '%s\n' '{"name":"worker","hooks":{"agentSpawn":[{"command":"radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --agent kiro"}]}}' \
-    > "$dir/.kiro/agents/worker.json"
+  for role in worker pm planner reviewer; do
+    printf '# /%s (test fixture)\n' "$role" > "$dir/.claude/commands/$role.md"
+    printf '{"name":"%s","hooks":[{"trigger":"agentSpawn","action":{"type":"command","command":"radio register --role $TASK_FORCE_ROLE --tab $ZELLIJ_TAB --agent kiro"}}]}\n' \
+      "$role" > "$dir/.kiro/agents/$role.json"
+  done
 }
 
 # Creates a git worktree + .info file, simulating what task-work would do.
@@ -321,6 +328,8 @@ setup_stubs() {
   # A stubbed agent never registers, so task-recreate-worker's wait for the
   # register (#304) would run out its full default on every launch.
   export TASK_RECREATE_WORKER_REGISTER_WAIT=0
+  # task-work and task-reviewer wait for it too (#393).
+  export TASK_FORCE_REGISTER_WAIT=0
   # The snap-back's late focus look (#384) would add a second to every launch
   # that keeps the caller's focus. The tests of that look set it themselves.
   export AW_TAB_FOCUS_LATE=0

@@ -48,7 +48,15 @@ gone tab says `tab gone · R to recreate`. Reviewers are not recreated.
 
 Local changes (radio mail, worker state, worktree sidecars) refresh at once
 from disk; forge state refreshes every --poll seconds. The data comes from
-task-monitor-snapshot ($TASK_MONITOR_SNAPSHOT overrides which one).
+task-monitor-snapshot ($TASK_MONITOR_SNAPSHOT overrides which one). A failed
+or slow refresh never blanks the screen: the last good snapshot stays up,
+marked `stale`.
+
+t goes to a tab only while the tab at the recorded id still bears the item's
+name (#260); a failed check switches nothing and says why. A loadout's
+install.sh builds this binary when cargo is on PATH (#277).
+
+Background and history: docs/shell-commands.md in the task-force repo.
 ";
 
 struct Args {

@@ -66,6 +66,23 @@ work and its attention signals. See docs/task-monitor-schema.md.
 
 Reads ${TASK_FORCE_HOME:-~/.task-force}. Writes only its own cache, under
 ${TASK_FORCE_HOME}/monitor/<repo>/.
+
+Every value comes from disk, the tracker or the forge; no model writes any.
+  in flight  every worktree with a .<slug>.info sidecar, still live (its
+             directory exists and git worktree list has it), joined to its
+             radio session, PR and latest review intent. A sidecar whose
+             worktree is gone is listed under orphans (#286)
+  next       the PM's task-monitor-queue, else the tracker's backlog (gh items
+             in none of the three statuses, or local tasks/ files; none on
+             jira or notion)
+  done       PRs that delivered an item in the last 24 hours, or the last 10,
+             whichever is more
+  attention  exactly three signals: an unread PM inbox, a finished review on a
+             still-open PR the PM has not answered, a worker in `awaiting`
+             (claude-only: kiro-cli, checked on 2.32.0, has no hook that fires
+             while it waits on the user, #278)
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit "${1:-0}"
 }

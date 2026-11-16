@@ -405,3 +405,39 @@ assert_stub_called() {
     return 1
   fi
 }
+
+# The installed dogfood doc and the seven loadout templates (#397): every one
+# carries the Shell Commands index.
+WORKFLOW_DOCS=(
+  "$REPO_ROOT_REAL/.claude/gh-workflow.md"
+  "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
+  "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
+  "$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
+  "$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
+  "$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
+  "$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
+  "$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
+)
+SHELL_COMMANDS_DOC="$REPO_ROOT_REAL/docs/shell-commands.md"
+
+# shell_commands_section <doc>: the `### Shell Commands` section, heading
+# included, up to the next heading of level 2 or 3.
+shell_commands_section() {
+  awk '/^### Shell Commands$/{p=1; print; next} p&&/^##+ /{exit} p{print}' "$1"
+}
+
+# assert_indexed_everywhere <command>: every workflow doc's Shell Commands
+# section has an index line for <command>, and in the dogfood doc that line
+# sits inside task-init's managed region, so an upgrade refreshes it (#212).
+assert_indexed_everywhere() {
+  local cmd="$1" doc line end
+  for doc in "${WORKFLOW_DOCS[@]}"; do
+    shell_commands_section "$doc" | grep -q "^- .*\`${cmd}[ \`]" \
+      || { echo "no index line for $cmd in $doc"; return 1; }
+  done
+  doc="${WORKFLOW_DOCS[0]}"
+  line=$(grep -n "^- .*\`${cmd}[ \`]" "$doc" | head -1 | cut -d: -f1)
+  end=$(grep -n '^<!-- task-init:managed:end -->$' "$doc" | cut -d: -f1)
+  [ -n "$line" ] && [ -n "$end" ] && [ "$line" -lt "$end" ] \
+    || { echo "$cmd's index line is not inside the managed region of $doc"; return 1; }
+}

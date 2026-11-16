@@ -1067,39 +1067,18 @@ dead_worker_symlinked_base() {
 
 # The task-recreate-worker block of a workflow doc: from its heading line up to
 # the task-config block that follows it.
-recreate_block() {
-  awk '/^`task-recreate-worker <slug>/{p=1} p&&/^`task-config show`/{exit} p{print}' "$1"
+@test "every workflow doc indexes task-recreate-worker inside the managed region (#212, #397)" {
+  # A recovery command missing from one loadout's index is a recovery command
+  # that loadout's users never learn exists.
+  assert_indexed_everywhere task-recreate-worker
 }
 
-@test "the task-recreate-worker section is byte-identical across all 8 workflow docs" {
-  # A recovery command documented in six of seven loadouts is a recovery command
-  # the seventh's users never learn exists — the "fix lands in 6 of 7" failure
-  # mode tools/check-drift.sh guards for shell, applied to the prose.
-  local docs=(
-    "$REPO_ROOT_REAL/.claude/gh-workflow.md"
-    "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
-    "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
-    "$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
-    "$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
-    "$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
-    "$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
-    "$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
-  )
-  local ref other
-  ref=$(recreate_block "${docs[0]}")
-  [ -n "$ref" ] || { echo "no task-recreate-worker block in ${docs[0]}"; return 1; }
-  for doc in "${docs[@]:1}"; do
-    other=$(recreate_block "$doc")
-    [ "$ref" = "$other" ] || { echo "task-recreate-worker block diverges in $doc"; return 1; }
-  done
-}
-
-@test "the task-recreate-worker section lives inside task-init's managed region (#212)" {
-  # Below the end marker it would be repo-specific content task-init never
-  # refreshes, so it would go stale on every upgrade.
-  local doc="$REPO_ROOT_REAL/.claude/gh-workflow.md" sec_line end_line
-  sec_line=$(grep -n '^`task-recreate-worker <slug>' "$doc" | cut -d: -f1)
-  end_line=$(grep -n '^<!-- task-init:managed:end -->$' "$doc" | cut -d: -f1)
-  [ -n "$sec_line" ] && [ -n "$end_line" ] || { echo "marker or section missing"; return 1; }
-  [ "$sec_line" -lt "$end_line" ] || { echo "section is below the end marker"; return 1; }
+@test "task-recreate-worker's reference is its --help and docs/shell-commands.md (#397)" {
+  run "$REPO_ROOT_REAL/bin/task-recreate-worker" --help
+  assert_output --partial 'TAB_ID is stripped before the tab opens'
+  assert_output --partial 'heartbeat is under an hour old'
+  assert_output --partial 'TASK_FORCE_NO_PROC_SCAN=1'
+  assert_output --partial 'docs/shell-commands.md'
+  run grep -qx '## task-recreate-worker' "$SHELL_COMMANDS_DOC"
+  assert_success
 }

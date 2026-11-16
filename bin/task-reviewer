@@ -136,6 +136,18 @@ Examples:
 EOF
   [[ "${AGENT:-}" != kiro ]] && echo "  task-reviewer https://github.com/owner/repo/pull/42 38 --no-auto"
   [[ "${AGENT:-}" != claude ]] && echo "  task-reviewer 42 --no-trust-all --no-auto-submit"
+  cat <<'EOF'
+
+The reviewer pins the PR's head SHA before reading the diff and names it
+(`reviewed <sha>`) in its verdict line and radio body; a head that moved
+during the review is never clean (#348). It never approves, merges or edits
+Status. When done it runs task-done --remove-worktree, removing its worktree
+and closing its tab; the analysis lives in the PR comment
+(gh pr view <N> --comments). It holds its tab open only when the verdict
+never reached the PM. A kiro reviewer runs under agent-supervise (#388).
+
+Background and history: docs/shell-commands.md in the task-force repo.
+EOF
   exit "${1:-1}"
 }
 

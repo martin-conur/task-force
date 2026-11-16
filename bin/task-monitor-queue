@@ -89,6 +89,15 @@ and fragment are ignored. Put `--` before a ref that starts with `-`.
 
 Writes ${TASK_FORCE_HOME:-~/.task-force}/monitor/<repo>/queue, and the note
 to handoff.md beside it.
+
+Each call answers with one line and the PM never reads the queue back.
+task-work drops the ref it dispatches, so nobody removes a dispatched item.
+--title is for trackers the shell cannot read (jira, notion); the PM passes a
+name it already knows and fetches nothing to find it. gh and local keep their
+own titles. A fresh PM start (TASK_FORCE_NO_PM_DIGEST=1 turns it off) prints
+the board digest and then the handoff note with its age.
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit "${1:-0}"
 }

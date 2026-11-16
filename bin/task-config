@@ -76,7 +76,29 @@ set
   Settings carry across a `set assistant` because claude and kiro render the
   same template shape per tracker. A `set tracker` has nothing to carry —
   different trackers have entirely different fields — so task-init prompts for
-  the new ones exactly as it does on a first install.
+  the new ones exactly as it does on a first install. kiro-jira is refused by
+  name: no such loadout exists (#92). An --impl or $AW_IMPL naming a loadout
+  that is not configured here is refused rather than installed beside the old
+  one (#227); show annotates it instead and exits 1.
+
+  Removal takes out only task-init's own entries: your CLAUDE.md sections lose
+  just the import line, your hooks and allow-list entries in settings.json stay,
+  an edited role file (.claude/commands/<role>.md, or a kiro agent config with
+  its radio hooks stripped) is kept, your tasks/ backlog stays, and a directory
+  goes only once removal has emptied it. The workflow doc goes, but sections
+  below its managed-region end marker are copied to <doc>.bak first.
+
+Both assistants on one tracker (#293)
+  claude's files live under .claude/ and kiro's under .kiro/, so both can be
+  committed once; which one runs is local (git config task-force.assistant).
+  add keeps the current one active. add and use change only the main checkout
+  and warn, per live worker worktree with no radio hooks for the new assistant,
+  with the git -C <worktree> merge <base> that fixes it (#304). With both
+  installed and none active, every dispatcher refuses and names `use`. On a
+  dual repo `set assistant` and `set loadout` onto the same tracker are refused
+  and change nothing (#303): the switch is `use`, dropping one is `remove
+  assistant`. `set loadout` onto another tracker replaces both; `set tracker`
+  is refused with the two steps that do it. task-remove removes both.
 
 Options
   --dry-run   Print the plan and change nothing.
@@ -97,6 +119,8 @@ Examples
   task-config sync --from claude
   task-config profile add fw --preset fireworks --model <id> --key-env FIREWORKS_API_KEY
   task-config profile test fw
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit 0
 }

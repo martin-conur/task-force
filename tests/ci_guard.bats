@@ -350,44 +350,28 @@ msg() { printf '%s\n' "$@" > "$TMP/msg"; }
 # before the radio section that follows it. Same shape as radio_runbook's
 # runbook_block(), and it works unchanged on the dogfood copy because the
 # section sits inside task-init's managed region.
-ci_guard_block() {
-  awk '/^`ci-guard` — the commit-msg guard/{p=1} p&&/^### PM ↔ worker messaging/{exit} p{print}' "$1"
+@test "every workflow doc indexes ci-guard inside the managed region (#212, #397)" {
+  # The reference moved out of the always-loaded docs; the index line is what
+  # tells an agent the hook exists, so a loadout without it never learns.
+  assert_indexed_everywhere ci-guard
 }
 
-@test "the ci-guard section is byte-identical across all 8 workflow docs" {
-  # The section documents a hook that installs itself into the user's repo, so
-  # a loadout whose copy drifts is a loadout whose users are told something
-  # untrue about their own git hooks.
-  local docs=(
-    "$REPO_ROOT_REAL/.claude/gh-workflow.md"
-    "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
-    "$REPO_ROOT_REAL/claude-jira/steering/jira-workflow.example.md"
-    "$REPO_ROOT_REAL/claude-local/steering/local-workflow.example.md"
-    "$REPO_ROOT_REAL/claude-notion/steering/notion-workflow.example.md"
-    "$REPO_ROOT_REAL/kiro-gh/steering/gh-workflow.example.md"
-    "$REPO_ROOT_REAL/kiro-local/steering/local-workflow.example.md"
-    "$REPO_ROOT_REAL/kiro-notion/steering/notion-workflow.example.md"
-  )
-  local ref other
-  ref=$(ci_guard_block "${docs[0]}")
-  [ -n "$ref" ] || { echo "no ci-guard block in ${docs[0]}"; return 1; }
-  for doc in "${docs[@]:1}"; do
-    other=$(ci_guard_block "$doc")
-    [ "$ref" = "$other" ] || { echo "ci-guard block diverges in $doc"; return 1; }
-  done
-}
-
-@test "the ci-guard section lives inside task-init's managed region (#212)" {
-  # Below the end marker it would be repo-specific content task-init never
-  # refreshes — the section would then go stale on every upgrade.
-  local doc="$REPO_ROOT_REAL/.claude/gh-workflow.md"
-  local sec_line end_line
-  sec_line=$(grep -n '^`ci-guard` — the commit-msg guard' "$doc" | cut -d: -f1)
-  # The intro paragraph names the marker in prose too — match the real one,
-  # which is a standalone line.
-  end_line=$(grep -n '^<!-- task-init:managed:end -->$' "$doc" | cut -d: -f1)
-  [ -n "$sec_line" ] && [ -n "$end_line" ] || { echo "marker or section missing"; return 1; }
-  [ "$sec_line" -lt "$end_line" ] || { echo "ci-guard section is below the end marker"; return 1; }
+@test "ci-guard's reference is its --help and docs/shell-commands.md (#397)" {
+  # The workflow docs used to carry this; with one copy in --help it cannot
+  # drift across loadouts the way seven copies could.
+  run "$CI_GUARD" --help
+  assert_failure 2
+  assert_output --partial '[skip ci]'
+  assert_output --partial '[actions skip]'
+  assert_output --partial 'commit-msg.local'
+  assert_output --partial 'git commit --no-verify'
+  assert_output --partial 'TASK_FORCE_NO_CI_GUARD=1'
+  assert_output --partial "gh run list -c"
+  assert_output --partial 'docs/shell-commands.md'
+  run grep -qx '## ci-guard' "$SHELL_COMMANDS_DOC"
+  assert_success
+  run grep -qF '`ci-guard` — the commit-msg guard `task-work` installs (#194)' "$SHELL_COMMANDS_DOC"
+  assert_success
 }
 
 @test "this repo's pre-PR checklist carries the CI-markers gate" {

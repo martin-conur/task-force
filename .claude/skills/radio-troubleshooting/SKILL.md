@@ -6,7 +6,8 @@ description: Diagnose a radio (task-force PM/worker messaging) failure. Load it 
 # Radio troubleshooting
 
 The symptom → cause → check table for radio, the log greps that tell its
-failure modes apart, and where undelivered mail goes. The workflow doc's
+failure modes apart, where undelivered mail goes, and how radio keeps, recovers
+and cleans up sessions. The workflow doc's
 `### Radio troubleshooting` rule says when to load this.
 
 <!-- region:radio-troubleshooting-body -->
@@ -80,3 +81,120 @@ the agent drain a queued message at the end of its current turn, the
 `UserPromptSubmit` hook puts the unread summary in front of it at the next
 prompt, and a fresh `SessionStart` register reports whatever queued while the
 role was offline. A failed wake is a latency problem here, not a lost message.
+
+<!-- region:radio-internals -->
+## How radio keeps, recovers and cleans up sessions
+
+The workflow doc keeps only what each role sends. This is how radio keeps a role
+addressable, for when that breaks.
+
+**What the hooks do.** A fresh register (claude's `SessionStart`, kiro's
+`agentSpawn`) prints a summary of any inbox that queued while the role was
+offline, and that stdout reaches the model, so the backlog surfaces on the
+role's very first turn. The re-registers a `/compact` or `/clear` triggers in the
+same process are not fresh starts. On claude, the `Stop` hook (`radio
+stop-hook`) blocks a stop while mail is unread, so the agent drains it; a
+message that lands during that forced drain turn earns one more block of its own
+(#197), because `BLOCKED_IDS=` records which ids each block was about, and an
+agent that ignores the same ids twice is allowed to stop. `UserPromptSubmit`
+(`radio prompt-hook`) injects the `[radio] N unread message(s): …` line. kiro
+has neither of those two yet (#221).
+
+**Literal-`pm` adoption (#182, #210).** Since #165 nothing registers as the bare
+`pm`, so its inbox is write-only. A fresh `pm-<reponame>` with no live `pm`
+session migrates that backlog into its own inbox, each message stamped with an
+`adopted-from:` header, and flags it as adopted in the same summary. Only mail
+whose `from:` names this repo — `worker-<reponame>-<slug>`,
+`reviewer-<reponame>-pr<N>`, `pm-<reponame>` — is adopted; another repo's stays
+in `mailbox/pm/inbox` for its own PM, and the log counts what was left behind.
+Mail no name can attribute (`from: unknown`) is adopted first-come, and the log
+says so.
+
+**A resumed session registers nothing (#229).** The hook does fire on a resume —
+verified against all four sources, `startup` / `resume` / `compact` / `clear` —
+but a resume is a new process, and the identity env was a command prefix on the
+one `task-work` launched (`bash -ic "TASK_FORCE_ROLE=… ZELLIJ_TAB=… claude …"`),
+living in no shell. The hook runs with an empty environment, the unquoted
+`--role $TASK_FORCE_ROLE` collapses to nothing, and register no-ops, logging
+`register: no-op`. `/compact` and `/clear` keep the process, so their
+re-registers really happen.
+
+So `radio` **derives the role from disk** instead of acting anonymously. In a
+worktree, `<worktree-base>/.<slug>.info` plus the main repo name rebuild
+`worker-<reponame>-<slug>` (or `reviewer-<reponame>-pr<N>`, whose tab slug is
+`review-pr<N>`) exactly as `task-work` / `task-reviewer` built them. In a main
+checkout the repo name gives `pm-<reponame>`, only when that role has radio
+state on disk, so a plain session in the repo root never claims the PM's
+address; and no candidate is claimed while its session file carries a fresh
+heartbeat. `check` / `read` / `ack` / `send` announce a recovered role on stderr
+and **refuse loudly** when nothing is derivable (`recover-role:` in the log).
+Hook entrypoints stay silent (#93).
+
+Recovery does not register, because a register whose tab lookup misses writes an
+empty `TAB_ID`, which is worse than no session at all. The lookup is by tab
+name, and the only place it is guaranteed to resolve is the role's own tab. Run
+the repair **there**, in the agent's own pane (claude's `!` prefix): register
+also records `$ZELLIJ_PANE_ID` as the pane wakes go to (#336), and from any other
+pane it keeps the pane already on file and logs `is not the agent's pane`:
+
+```bash
+radio register --role <role> --tab <tabname> \
+  --repo "$(git rev-parse --show-toplevel)" --agent <claude|kiro> --loadout <loadout>
+```
+
+It needs no `$TASK_FORCE_ROLE`, says on stderr whether the role came back
+wakeable (warning when `TAB_ID` ended up empty), and keeps the role's
+auto-submit setting (#246). That repairs a **resumed** session, whose tab ids
+are still the live server's. After a zellij **restart** every tab was
+renumbered, and `<worktree-base>/.<slug>.info` — the record `task-done` closes
+the tab by — still names the old id, which may now belong to another worker's
+tab. Use `task-recreate-worker`, which rewrites it (#218). A hand `register`
+that resolves the tab live from zellij also rewrites a stale sidecar `TAB_ID`
+(#260), and `task-done` closes a tab only while it still bears its slug.
+
+**The session file is a soft cache (#188).** Three sidecars sit beside it —
+`<role>.loadout`, `<role>.agent` and `<role>.auto-submit` (#246) — holding what
+a re-seed cannot read out of the `.info` file it replaces. They survive
+`unregister`, `task-done`'s `--manual` one included, and only a genuine
+`register` overwrites them. `task-done --remove-worktree` removes its own role's
+set (#375), and `radio gc` reclaims those of any role with no session file. So a
+wipe followed by a `busy` / `ready` self-heal keeps the real `LOADOUT` / `AGENT`
+instead of `unknown` / `claude`, and recovers `TAB_ID` from the task-work-owned
+`<worktree-base>/.<slug>.info` when the zellij lookup misses. An empty `TAB_ID`
+makes a role unwakeable — `radio send` then queues with no wake attempt — and is
+written only when there is no binding anywhere (non-zellij, CI), which the log
+says distinctly.
+
+**Auto-submit is tri-state at register.** `TASK_FORCE_AUTO_SUBMIT=1` is on, any
+other non-empty value is an explicit off (launchers say `0`), and **unset**
+restores what the sidecar recorded. Every launcher states its choice, so only a
+hand `radio register` from a plain shell inherits. A runtime `radio auto-submit
+on|off` (#385) rewrites the session file and the sidecar and outranks the launch
+setting on every re-register: `on` holds through a `/compact`, a `/clear` and a
+fresh PM start until its expiry or an `off`; an `off` gives way to a fresh
+launch that states its own setting. An expiry is stored as
+`AUTO_SUBMIT_UNTIL=`, and the first send after it types LF again, logs
+`auto-submit: expired role=…` and clears the setting.
+
+**Cleanup.** A tab that died, or a session resumed without re-registering,
+leaves its session file's `LAST_HEARTBEAT` stale. `radio orphans` lists every
+session over an hour stale; delete those
+(`rm ~/.task-force/radio/sessions/<role>.info`) or leave them for the next
+legitimate `radio register` to overwrite. `radio unregister` on its own is not
+a cleanup command (#198): with no `SessionEnd` payload naming a real exit on
+stdin it refuses on stderr, whatever shape that stdin has. `--manual` tears the
+session down, which is what `task-done` does. A fresh register runs a quiet
+`radio gc` (14-day default, #169): it dead-letters a gone role's aged mail and
+reclaims the mailbox (above), expires old `processed/` messages on live roles,
+and rotates the top-level `log` once it passes ~1MB, so no cron is needed.
+`radio gc --dry-run` previews a sweep, and `radio gc --max-age-days N` sets the
+window. `task-done --remove-worktree` also sweeps its own role's mailbox.
+
+**`$TASK_FORCE_HOME`** (default `~/.task-force`) holds all of radio's state:
+sessions, mailboxes, the log. Point it at a scratch directory to probe or test
+without touching live roles. `task-work`, `task-reviewer` and
+`task-recreate-worker` pass a set value into the tab they open, because a new
+zellij tab starts from the zellij server's environment and not yours (#262);
+`task-pm` runs in place and inherits it. When it is unset nothing is passed, and
+the default applies.
+<!-- endregion:radio-internals -->

@@ -914,6 +914,8 @@ Once you've installed a Claude loadout, `task-init` auto-installs **radio** — 
 
 Radio is the **canonical** coordination channel between the planner, PM, and workers — every role transition in the workflow runs through it. The PM / planner / worker prompts shell out to `radio send` at every documented handoff point.
 
+**What each agent carries** (#399). This section is the long form. The installed workflow doc, which every role loads on every turn, keeps only the core: the intents each role sends, the `radio send` form and the stdin rule. The PM's side — reviewer dispatch, `task-pm --also`, auto-submit and the `reviewed <sha>` verdict — is in the PM prompt, under a `pm-radio-protocol` region shared by all eight PM prompts. The reviewer's contract was already in the reviewer prompt. How radio keeps, recovers and cleans up sessions (resumed sessions, the register repair, sidecars, `gc`, `$TASK_FORCE_HOME`) is in the `radio-troubleshooting` skill, under a shared `radio-internals` region.
+
 ### The handoff cycle
 
 These are the five transitions that make up a full PR cycle. Each one is a single `radio send` call, baked into the corresponding agent's prompt:

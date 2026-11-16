@@ -68,6 +68,15 @@
             "command": "radio awaiting"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "radio bash-guard"
+          }
+        ]
       }
     ],
     "PostToolUse": [

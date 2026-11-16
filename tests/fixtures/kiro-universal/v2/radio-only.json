@@ -28,6 +28,12 @@
       {
         "command": "radio heartbeat"
       }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "shell",
+        "command": "radio bash-guard"
+      }
     ]
   }
 }

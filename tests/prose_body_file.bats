@@ -15,8 +15,9 @@
 # Two layers here. The behavioural tests pin *why* `--body-file -` off a
 # quote-delimited heredoc is the fix and the alternatives are not — they would
 # have failed against the old pattern. The prompt-contract tests pin that every
-# shipped prompt actually says so, in every loadout, since the fix lives in
-# prose the model reads rather than in code anyone can call.
+# shipped prompt actually says so, in every loadout. Since #400 a hook enforces
+# the rule (`radio bash-guard`, tests/bash_guard.bats), so the prompts carry it
+# in one line that names the hook rather than a paragraph explaining it.
 
 bats_load_library bats-support
 bats_load_library bats-assert
@@ -252,15 +253,30 @@ all_prompts() {
   done
 }
 
-@test "every reviewer prompt explains the substituted-to-empty case, not just the noisy one" {
-  # The silent failure is the one worth the words: a noisy substitution is
-  # visible in the posted comment, a deleted identifier is not.
-  for f in "${ALL_REVIEWER_PROMPTS[@]}"; do
+@test "every reviewer, PM and worker prompt names the hook that enforces the rule (#400)" {
+  # The one line that replaced each paragraph points at the hook, so an agent
+  # that hits the refusal recognises it, and the rule is not restated in prose.
+  local f
+  for f in "${ALL_REVIEWER_PROMPTS[@]}" "${ALL_PM_PROMPTS[@]}" \
+           "$REPO_ROOT_REAL"/.claude/commands/worker.md \
+           "$REPO_ROOT_REAL"/claude-{gh,jira,notion,local}/commands/worker.md \
+           "$REPO_ROOT_REAL"/kiro-{gh,local,notion}/agents/worker.json; do
     run prompt_text "$f"
     assert_success
-    assert_output --partial 'nothing at all'
-    assert_output --partial '_some_helper()'
+    [[ "$output" == *'`radio bash-guard` hook refuses'* ]] || fail "no hook line in $f"
   done
+}
+
+@test "the long-form explanation is gone from every shipped prompt (#400)" {
+  # The paragraph's tell. The behavioural proof of it lives in the tests above.
+  local f bad=0
+  while read -r f; do
+    if prompt_text "$f" | grep -nF 'nothing at all'; then
+      echo "^^^ $f still carries the long-form #234 explanation"
+      bad=1
+    fi
+  done < <(all_prompts)
+  [ "$bad" -eq 0 ]
 }
 
 # The posting steps are identical prose in all five claude reviewer prompts —
@@ -303,6 +319,8 @@ posting_block() {
            "$REPO_ROOT_REAL"/kiro-local/steering/local-workflow.example.md; do
     run grep -qF 'never through a double-quoted shell' "$f"
     assert_success
+    run grep -cF 'radio bash-guard' "$f"
+    assert_output 1
   done
 }
 

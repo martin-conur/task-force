@@ -14,14 +14,14 @@ Workflow:
 4. Implement the solution following the spec.
 5. Write tests for new features or bug fixes.
 6. Run tests to verify.
-7. Commit with the issue title as a prefix: `<Issue title>: <short description>`. **The message goes in on stdin, never through a double-quoted shell string** — `git commit -F -` off a quote-delimited heredoc (`<<'MSG'` … `MSG`), never `-m "..."`. A commit body names files and symbols in backticks, and inside a double-quoted string the shell command-substitutes every one of them: `pwd -P` commits its own output, and a backticked identifier that names no command commits as nothing at all — the word is gone from the permanent record with no sign it was ever there.
+7. Commit with the issue title as a prefix: `<Issue title>: <short description>`. **The message goes in on stdin**: `git commit -F -` off a quote-delimited heredoc (`<<'MSG'` … `MSG`); the `radio bash-guard` hook refuses `-m "…"` when it holds a backtick.
 
 **Pre-PR checklist** — before opening the PR and radioing `review-requested`, walk these (see the workflow doc for this repo's specifics):
 - **Changelog**: if the repo keeps a changelog, add an entry for this change — and note any upgrade/migration step it requires.
 - **Docs**: if model-facing or user-visible behavior changed, update the docs that describe it (README section, workflow/steering docs, etc.).
 - **Reuse**: grep for an existing helper before writing scaffolding; if a second copy of ~10+ lines appears, extract and share it instead of re-implementing.
 - **Spec comments**: re-read the spec in full, including any comments or notes added after the original body — implementation addenda often live there.
-- **CI markers**: never let a CI-skip marker — `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]` — appear literally anywhere in a commit message. Forges read the *whole* message, not just the subject, so even quoting one while describing another commit suppresses your own run. Write it broken (`skip-ci`) or drop the brackets.
+- **CI markers**: the `commit-msg` guard refuses a literal CI-skip marker anywhere in a commit message; write it broken (`skip-ci`) rather than reach for `--no-verify`.
 - **Green**: run the repo's test suite, linters, and any consistency/drift checks; after pushing, confirm CI **ran and passed**. An empty check list is not a pass — it is the signature of a suppressed run, and it looks identical to "not started yet". Prove a run exists for the exact SHA before claiming green:
   ```bash
   gh run list -c "$(git rev-parse HEAD)" --limit 1 --json databaseId --jq 'length'   # 0 => no run; not green

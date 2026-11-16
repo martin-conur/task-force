@@ -436,7 +436,11 @@ teardown() {
   assert_output "array"
   run jq -r '[.hooks[] | "\(.name)=\(.action.command | split(" ")[0:2] | join(" "))"] | join(",")' \
     "$TARGET_DIR/.kiro/agents/reviewer.json"
-  assert_output "radio-agentSpawn=radio register,radio-userPromptSubmit=radio busy,radio-stop=radio ready,radio-postToolUse=radio heartbeat"
+  assert_output "radio-agentSpawn=radio register,radio-userPromptSubmit=radio busy,radio-stop=radio ready,radio-postToolUse=radio heartbeat,radio-preToolUse=radio bash-guard"
+  # The guard carries its tool matcher at the top of the entry, beside
+  # `trigger`, where `kiro-cli agent upgrade` puts one (3.3.0, #400).
+  run jq -r '.hooks[] | select(.trigger == "preToolUse") | .matcher' "$TARGET_DIR/.kiro/agents/reviewer.json"
+  assert_output "shell"
   run bash -c "diff <(jq -S . '$KIRO_UNIVERSAL/no-hooks.json') <(jq -S 'del(.hooks)' '$TARGET_DIR/.kiro/agents/reviewer.json')"
   assert_success
 }
@@ -467,7 +471,7 @@ teardown() {
   assert_success
   run jq -r '[.hooks[] | .trigger] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' \
     "$TARGET_DIR/.kiro/agents/planner.json"
-  assert_output "agentSpawn=2 postToolUse=1 stop=2 userPromptSubmit=1"
+  assert_output "agentSpawn=2 postToolUse=1 preToolUse=1 stop=2 userPromptSubmit=1"
 }
 
 @test "universal format: object-shaped configs beside it stay objects (#267)" {

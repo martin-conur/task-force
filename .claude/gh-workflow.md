@@ -134,21 +134,7 @@ radio send --to <role> --intent <kind> [--pr N] [--issue N] [--body TEXT]
 The body comes from `--body` or stdin. PR review *content* still lives in
 `gh pr comment`s — `radio` only carries the routing ping.
 
-**Agent-authored prose goes in on stdin, never through a double-quoted shell
-string** (#234). Inside `"…"` the shell command-substitutes every backticked
-token, so a review quoting `pwd -P` posts that command's *output*, and a
-backticked identifier naming no command — `$WORKTREE_DIR`, `_helper()` — posts
-as **nothing at all**, deleting the finding's subject with no sign a word is
-gone. Reviews, specs and commit bodies here are backtick-dense, so the rule is
-absolute: feed `gh` its body with `--body-file -`, `radio send` its body on
-stdin, and `git commit` its message with `-F -`, all from a **quote-delimited**
-heredoc (`<<'BODY'` … `BODY`, never `<<BODY`).
-Single-quoting `-b '…'` is not a fix — prose contains apostrophes, and the
-first one ends the string. It also means every backticked token in a review is
-*executed* in the reviewer's worktree, and review prose routinely quotes `rm`,
-`git reset` and `gh pr merge` while discussing a diff. The reviewer's PR comment
-is the failure that named this: its tab self-destructs by design, so a mangled
-comment is an unrecoverable loss of the analysis.
+**Agent-authored prose goes in on stdin, never through a double-quoted shell string** (#234): `gh … --body-file -`, `git commit -F -` and `radio send` with no `--body`, each off a quote-delimited heredoc (`<<'BODY'` … `BODY`). The `radio bash-guard` hook refuses the double-quoted form when it holds a backtick (#400).
 
 The PM's side of radio — reviewer dispatch, `task-pm --also`, auto-submit — is
 in the PM prompt, and the reviewer's contract in the reviewer prompt. How radio
@@ -200,11 +186,7 @@ verbatim via `task-init`). In **this** repo it resolves to:
 - **Reuse / drift** — logic shared across loadouts lives behind `# region:`
   sentinels guarded by `tools/check-drift.sh`; extract rather than copy a second
   time, and add a sentinel + manifest entry when you do.
-- **CI markers** — the `commit-msg` guard `task-work` installs refuses a literal
-  CI-skip marker in a commit message, and this repo is the one most likely to
-  need one: half the open radio tickets are *about* the commit that carried one.
-  Write it broken (`skip-ci`). If you hit the refusal, reword — don't reach for
-  `--no-verify`.
+- **CI markers** — this repo's commits are the likeliest to quote one; the `commit-msg` guard refuses it, so write it broken (`skip-ci`), never `--no-verify`.
 - **Green** — run `./run_tests.sh`, `tools/check-drift.sh`, and `shellcheck -x`
   on changed shell files. After pushing, confirm CI **ran and passed**: an
   empty `gh pr checks` list is not a pass, it's the signature of a suppressed

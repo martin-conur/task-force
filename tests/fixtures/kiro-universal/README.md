@@ -18,7 +18,11 @@ Each file at the top level is the unedited output of
 on **kiro-cli 2.32.0**, run over the matching input in `v2/`. The two radio
 fixtures were regenerated on **kiro-cli 3.1.0** when task-init gained the
 `postToolUse` hook (#322); 3.1.0 reproduced the four 2.32.0 files byte for
-byte first, so only that hook differs. The inputs are
+byte first, so only that hook differs. All four were regenerated on **kiro-cli
+3.3.0** when task-init gained the `preToolUse` guard (#400). 3.3.0 reproduced
+the 3.1.0 files except for `kiroUpgrade.revision`, which it writes as 3, so
+that field and the new hook (with its `matcher`, which the upgrade keeps at the
+top of the entry) are the only changes. The inputs are
 minimal configs in task-init's own shape, with the radio commands copied
 verbatim from what `kiro-gh/bin/task-init` installs. They are kept small on
 purpose so the fixtures do not go stale whenever a shipped prompt changes. To

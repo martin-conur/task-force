@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# The "When radio misbehaves" runbook (#191).
+# The "When radio misbehaves" runbook (#191), an on-demand skill since #398.
 #
 # The runbook's whole value is that its greps and field names match what
 # `bin/radio` actually logs. That correspondence is invisible to every other
@@ -17,6 +17,18 @@ load helpers/common
 teardown() {
   teardown_all
 }
+
+# Since #398 the runbook is the radio-troubleshooting skill, not a section of
+# the workflow doc: one shipped copy per assistant, plus this repo's installed
+# (dogfood) copy of the claude one.
+CLAUDE_SKILLS=(
+  "$REPO_ROOT_REAL/skills/claude/radio-troubleshooting/SKILL.md"
+  "$REPO_ROOT_REAL/.claude/skills/radio-troubleshooting/SKILL.md"
+)
+
+KIRO_SKILLS=(
+  "$REPO_ROOT_REAL/skills/kiro/radio-troubleshooting/SKILL.md"
+)
 
 CLAUDE_TEMPLATES=(
   "$REPO_ROOT_REAL/claude-gh/steering/gh-workflow.example.md"
@@ -65,15 +77,20 @@ DOCUMENTED_GREPS=(
   'zellij-timeout:'
 )
 
-# Print the runbook block of a workflow doc: the heading through the end of the
-# template. In a template that is EOF; in an installed doc (the dogfood copy)
-# the template ends at the task-init managed-region marker, and everything after
-# it is the repo's own content (#183) — which must not be compared against a
-# template that by definition has none.
+# Print the runbook block of a skill: everything below its frontmatter.
 runbook_block() {
-  sed -n '/^### When radio misbehaves$/,$p' "$1" \
-    | sed '/^<!-- task-init:managed:end -->$/,$d'
+  awk 'n >= 2 { print } /^---$/ { n++ }' "$1"
 }
+
+# The strings an agent sees that the skill's description is keyed to (#398),
+# so the skill loads on the output itself rather than on a paraphrase of it.
+DESCRIPTION_KEYS=(
+  'WARNING — no session for'
+  'wake failed'
+  'looks dead'
+  'no tab id captured'
+  'timed out after 30s'
+)
 
 @test "the README carries the runbook with all seven symptoms" {
   run cat "$REPO_ROOT_REAL/README.md"
@@ -94,34 +111,92 @@ runbook_block() {
   assert_output --partial "#### Undelivered mail is never deleted"
 }
 
-@test "every workflow doc carries the runbook section" {
+@test "no workflow doc carries the runbook any more (#398)" {
+  # The point of the move: ~15 KB nobody needs until radio breaks, out of the
+  # doc every role loads on every turn.
   for f in "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}" "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
     assert [ -f "$f" ]
-    run grep -qFx '### When radio misbehaves' "$f"
-    assert_success
+    run grep -cF 'When radio misbehaves' "$f"
+    assert_output "0"
+    # A sample from each part of the old section, so a partial paste-back fails too.
+    for s in '| Symptom | Cause and check |' 'grep -c '"'"'send id='"'"' "$L"' 'archive, not a delete'; do
+      run grep -cF -- "$s" "$f"
+      assert_output "0"
+    done
   done
 }
 
-@test "the runbook block is byte-identical across the claude templates and the dogfood copy" {
-  local ref
-  ref=$(runbook_block "${CLAUDE_TEMPLATES[0]}")
-  assert [ -n "$ref" ]
+@test "every workflow doc keeps the rule that says when to load the skill (#398)" {
+  local f
+  for f in "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}" "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+    run grep -qFx '### Radio troubleshooting' "$f"
+    assert_success
+    for s in "Read \`radio send\`'s stdout every time" '`delivered`' 'is awaiting' \
+             'radio-troubleshooting' "${DESCRIPTION_KEYS[@]}"; do
+      # Joined to one line: the rule is wrapped prose, and a key can straddle a break.
+      run grep -cF -- "$s" <<<"$(sed -n '/^### Radio troubleshooting$/,/^#\{1,3\} /p' "$f" \
+                                  | sed '/<!-- task-init:managed:end -->/,$d' | tr '\n' ' ')"
+      refute_output "0"
+    done
+  done
+  # Each points at its own assistant's install path.
   for f in "${CLAUDE_TEMPLATES[@]}" "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
-    run runbook_block "$f"
-    assert_success
-    assert_output "$ref"
+    run grep -cF '.claude/skills/radio-troubleshooting/SKILL.md' "$f"
+    refute_output "0"
+  done
+  for f in "${KIRO_TEMPLATES[@]}"; do
+    run grep -cF '.kiro/skills/radio-troubleshooting/SKILL.md' "$f"
+    refute_output "0"
   done
 }
 
-@test "the runbook block is byte-identical across the kiro templates" {
-  local ref
-  ref=$(runbook_block "${KIRO_TEMPLATES[0]}")
-  assert [ -n "$ref" ]
-  for f in "${KIRO_TEMPLATES[@]}"; do
-    run runbook_block "$f"
-    assert_success
-    assert_output "$ref"
+@test "the skill's frontmatter names it and keys its description to radio's output (#398)" {
+  local f desc
+  for f in "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
+    run sed -n '1p' "$f"
+    assert_output "---"
+    run grep -cFx 'name: radio-troubleshooting' "$f"
+    assert_output "1"
+    desc=$(grep '^description: ' "$f")
+    assert [ -n "$desc" ]
+    for s in "${DESCRIPTION_KEYS[@]}"; do
+      run grep -cF -- "$s" <<<"$desc"
+      assert_output "1"
+    done
   done
+}
+
+@test "the description keys are strings radio, task-done or Claude Code actually print (#398)" {
+  run grep -cF 'radio: WARNING — no session for' "$REPO_ROOT_REAL/bin/radio"
+  refute_output "0"
+  run grep -cF 'is idle but wake failed' "$REPO_ROOT_REAL/bin/radio"
+  refute_output "0"
+  run grep -cF 'radio: WARNING — %s looks dead' "$REPO_ROOT_REAL/bin/radio"
+  refute_output "0"
+  run grep -cF '(no tab id captured;' "$REPO_ROOT_REAL/bin/task-done"
+  refute_output "0"
+  # `timed out after 30s` is Claude Code's hook-timeout message, quoted in the
+  # runbook's own zellij-stall row.
+  run grep -cF 'timed out after 30s — output discarded' "${CLAUDE_SKILLS[0]}"
+  refute_output "0"
+}
+
+@test "the claude skill is byte-identical in its shipped and dogfood copies" {
+  run cmp "${CLAUDE_SKILLS[0]}" "${CLAUDE_SKILLS[1]}"
+  assert_success
+}
+
+@test "the runbook body is shared by the claude and kiro skills (#398)" {
+  # Only the closing paragraphs differ; everything inside the drift region is
+  # one text, so a row fixed for one assistant is fixed for both.
+  run "$REPO_ROOT_REAL/tools/check-drift.sh"
+  assert_success
+  local region='/^<!-- region:radio-troubleshooting-body -->$/,/^<!-- endregion:radio-troubleshooting-body -->$/p'
+  local ref
+  ref=$(sed -n "$region" "${CLAUDE_SKILLS[0]}")
+  assert [ -n "$ref" ]
+  run sed -n "$region" "${KIRO_SKILLS[0]}"
+  assert_output "$ref"
 }
 
 @test "every log string the runbook greps for exists in bin/radio" {
@@ -137,7 +212,7 @@ runbook_block() {
 @test "the documented log greps are the ones the README and templates actually print" {
   # Each fragment must also appear in the docs — otherwise DOCUMENTED_GREPS
   # drifts into a list of strings nobody is told to search for.
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     for s in 'unregister role=' 'unregister: proceeding' 'unregister: skipping' \
              'tab_id_src=' 'no tab binding for' 'arrived during the drain turn' \
              'BLOCKED_IDS' 'AUTO_SUBMIT=1' 'gc: dead-lettered'; do
@@ -149,11 +224,7 @@ runbook_block() {
 }
 
 @test "the roleless-session row is in the README and every workflow doc (#229)" {
-  # The runbook block is byte-identical across each family (asserted above), so
-  # pinning the row in one template per family plus the README is enough to catch
-  # a doc that lost it.
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
-           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     run grep -cF -- 'recover-role:' "$f"
     assert_success
     refute_output "0"
@@ -164,8 +235,7 @@ runbook_block() {
 }
 
 @test "the frozen-heartbeat kiro row is in the README and every workflow doc (#370)" {
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
-           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     for s in 'waking anyway' 'hook-noop:' 'ContextualHookInvoked' 'kiro-cli agent upgrade .kiro/agents'; do
       run grep -cF -- "$s" "$f"
       assert_success
@@ -175,8 +245,7 @@ runbook_block() {
 }
 
 @test "the stuck-busy kiro row is in the README and every workflow doc (#322)" {
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}" \
-           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     for s in 'TASK_FORCE_KIRO_BUSY_STALE_SECS' 'radio heartbeat' 'but its tab is still open — kiro, waking anyway' '▶? busy?'; do
       run grep -cF -- "$s" "$f"
       assert_success
@@ -189,8 +258,7 @@ runbook_block() {
 }
 
 @test "the tab-close reap row is in the README and every workflow doc (#388)" {
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}" \
-           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     for s in "grep 'reap:' ~/.task-force/radio/log" 'bin/agent-supervise' 'reap: nothing left' 'reap: failed' 'reap: skipped'; do
       run grep -cF -- "$s" "$f"
       assert_success
@@ -225,7 +293,7 @@ runbook_block() {
   run grep -cE 'if \[\[ "\$manual" != true \]\]' "$REPO_ROOT_REAL/bin/radio"
   assert_success
   refute_output "0"
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     local block
     block=$(runbook_block "$f")
     [[ "$f" == *README.md ]] && block=$(sed -n '/^### When radio misbehaves$/,/^## /p' "$f")
@@ -239,7 +307,7 @@ runbook_block() {
 @test "the runbook stays loadout-generic (#177)" {
   # It ships verbatim into gh / jira / notion / local repos, so it must not
   # name one tracker's tooling.
-  for f in "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}"; do
+  for f in "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     local block
     block=$(runbook_block "$f")
     run grep -icE 'github|notion|jira|gh cli|task-board' <<<"$block"
@@ -248,7 +316,7 @@ runbook_block() {
 }
 
 @test "the kiro runbook promises no claude backstop and names the poll instead" {
-  for f in "${KIRO_TEMPLATES[@]}"; do
+  for f in "${KIRO_SKILLS[@]}"; do
     local block
     block=$(runbook_block "$f")
     # Same promise phrasings #190 banned from kiro docs.
@@ -286,7 +354,7 @@ runbook_block() {
     assert_success
     assert_stub_called zellij "TASK_FORCE_AUTO_SUBMIT=0 $SUPERVISE kiro-cli"
   done
-  for f in "${KIRO_TEMPLATES[@]}"; do
+  for f in "${KIRO_SKILLS[@]}"; do
     run grep -cF 'Relaunch it with plain `task-work`' "$f"
     refute_output "0"
   done
@@ -295,7 +363,7 @@ runbook_block() {
 @test "the kiro runbook keeps auto-submit apart from permissions (#206)" {
   # kiro's permission model is -a/--trust-all and is deliberately separate;
   # a reader must not take auto-submit for a trust-all synonym.
-  for f in "${KIRO_TEMPLATES[@]}"; do
+  for f in "${KIRO_SKILLS[@]}"; do
     local block
     block=$(runbook_block "$f")
     run grep -cF 'independent of the permission model' <<<"$block"
@@ -306,7 +374,7 @@ runbook_block() {
 }
 
 @test "the claude runbook keeps the three backstops it is allowed to promise" {
-  for f in "${CLAUDE_TEMPLATES[@]}"; do
+  for f in "${CLAUDE_SKILLS[@]}"; do
     local block
     block=$(runbook_block "$f")
     assert [ -n "$block" ]
@@ -322,7 +390,7 @@ runbook_block() {
 @test "the runbook states that undelivered mail is never deleted, and names dead-letter/" {
   # #201 replaced the "there is no dead-letter queue" claim with one: the
   # promise that survives is that nothing unread is ever deleted, only moved.
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[@]}" "${KIRO_TEMPLATES[@]}"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     run grep -cF 'Undelivered mail is never deleted' "$f"
     assert_success
     refute_output "0"
@@ -353,8 +421,7 @@ runbook_block() {
   run grep -cF -- "\"\$(printf 'tab-id: " "$REPO_ROOT_REAL/lib/zellij-tab.sh"
   assert_success
   refute_output "0"
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
-           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     run grep -cF -- "grep 'tab-id:'" "$f"
     assert_success
     refute_output "0"
@@ -362,8 +429,7 @@ runbook_block() {
 }
 
 @test "the zellij-stall row is in the README and every workflow doc (#384)" {
-  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_TEMPLATES[0]}" "${KIRO_TEMPLATES[0]}" \
-           "$REPO_ROOT_REAL/.claude/gh-workflow.md"; do
+  for f in "$REPO_ROOT_REAL/README.md" "${CLAUDE_SKILLS[@]}" "${KIRO_SKILLS[@]}"; do
     for s in 'zellij-timeout:' 'TASK_FORCE_ZELLIJ_TIMEOUT' 'list-tabs unusable after' 'late_steal=1'; do
       run grep -cF -- "$s" "$f"
       assert_success

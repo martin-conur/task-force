@@ -65,6 +65,7 @@ _tree_sum() {
   assert_output --partial "project=7"
   assert_output --partial "config    : .claude/gh-workflow.md"
   assert_output --partial ".claude/commands/worker.md"
+  assert_output --partial ".claude/skills/radio-troubleshooting/SKILL.md"
   assert_output --partial "CLAUDE.md"
   assert_output --partial ".claude/settings.json"
 }
@@ -220,6 +221,7 @@ _tree_sum() {
 _refute_claude_artifacts() {
   assert [ ! -f "$MAIN_REPO/.claude/gh-workflow.md" ]
   assert [ ! -d "$MAIN_REPO/.claude/commands" ]
+  assert [ ! -d "$MAIN_REPO/.claude/skills" ]
   assert [ ! -f "$MAIN_REPO/CLAUDE.md" ]
   assert [ ! -f "$MAIN_REPO/.claude/settings.json" ]
 }
@@ -227,6 +229,7 @@ _refute_claude_artifacts() {
 _refute_kiro_artifacts() {
   assert [ ! -f "$MAIN_REPO/.kiro/steering/gh-workflow.md" ]
   assert [ ! -d "$MAIN_REPO/.kiro/agents" ]
+  assert [ ! -d "$MAIN_REPO/.kiro/skills" ]
 }
 
 @test "set assistant: claude-gh → kiro-gh → claude-gh carries settings and strands nothing" {

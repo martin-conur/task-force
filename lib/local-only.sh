@@ -43,6 +43,10 @@
 #   tf_local_only_refuse_kiro <repo> <requested>  the kiro installers' refusal
 #   tf_local_only_plan|remove <repo>     what task-remove does to the block + config
 
+# For tf_skill_names / tf_skill_rel: the skills are task-init-written paths too.
+# shellcheck source=lib/skills.sh
+. "$(dirname "${BASH_SOURCE[0]}")/skills.sh"
+
 TF_INSTALL_KEY="task-force.install"
 TF_EXCLUDE_START="# task-force:local-only:start — written by task-init --local-only; task-remove takes it out"
 TF_EXCLUDE_END="# task-force:local-only:end"
@@ -78,6 +82,13 @@ tf_local_only_patterns() {
   for role in pm planner worker reviewer; do
     printf '/.claude/commands/%s.md\n' "$role"
   done
+  # The on-demand skills (#398), as files rather than their directories so
+  # tf_local_only_sync copies each one into a worktree.
+  local name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    printf '/%s\n' "$(tf_skill_rel claude "$name")"
+  done < <(tf_skill_names claude)
   # The *-local backlog is task-force content as much as the scaffolding is, and
   # it lives only in the main checkout (lib/trackers/local.sh reads it there).
   if [[ "$tracker" == local ]]; then printf '/tasks/\n'; fi

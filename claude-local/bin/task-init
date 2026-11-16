@@ -9,6 +9,7 @@ Set up the current repo for the claude-local workflow:
   - Create .claude/local-workflow.md from the bundled template
   - Add @.claude/local-workflow.md to CLAUDE.md so it auto-loads in every session
   - Install /pm, /planner, /worker slash commands into .claude/commands/
+  - Install the on-demand radio-troubleshooting skill into .claude/skills/
   - Create tasks/{README.md, _board.md} with starter content
   - Append .git/task-force/ to .gitignore (create if missing)
   - Merge radio PM↔worker messaging hooks into .claude/settings.json
@@ -191,6 +192,13 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   INSTALL_POLICY="$POLICY" tf_set_apply "$TMP_RENDERED" "$TEMPLATE" "$TARGET" ${SETS[@]+"${SETS[@]}"}
 # endregion:doc-set-apply
   INSTALL_POLICY="$POLICY" install_managed_file "$TMP_RENDERED" "$TARGET" "local-workflow.md"
+# region:skills-install
+  # The on-demand skills (#398) travel with the doc: the runbook they hold used
+  # to be part of it, and the doc's rule is what says when to load one.
+  # shellcheck source=lib/skills.sh
+  . "$LIB_DIR/skills.sh"
+  INSTALL_POLICY="$POLICY" install_skills "$SCRIPT_DIR/.." "$REPO_ROOT"
+# endregion:skills-install
 
   IMPORT_LINE="@.claude/local-workflow.md"
   if [[ -f "$CLAUDE_MD" ]]; then

@@ -49,6 +49,7 @@ _install() {
   assert [ -f .claude/jira-workflow.md ]
   assert [ -f .claude/commands/worker.md ]
   assert [ -f .claude/commands/reviewer.md ]
+  assert [ -f .claude/skills/radio-troubleshooting/SKILL.md ]
   run git ls-files
   assert_output "README.md"
 }
@@ -76,6 +77,7 @@ _install() {
   assert_output --partial "/.claude/settings.local.json"
   assert_output --partial "/.claude/jira-workflow.md"
   assert_output --partial "/.claude/commands/worker.md"
+  assert_output --partial "/.claude/skills/radio-troubleshooting/SKILL.md"
 }
 
 @test "install: sticky — a re-run without the flag stays local-only" {
@@ -163,10 +165,11 @@ _install() {
   _install
   AW_IMPL=claude-jira run "$TASK_WORK" PROJ-1
   assert_success
-  assert_output --partial "copied 7 untracked task-force file(s)"
+  assert_output --partial "copied 8 untracked task-force file(s)"
   local wt="$WORKTREE_BASE/proj-1"
   assert [ -f "$wt/.claude/settings.local.json" ]
   assert [ -f "$wt/.claude/commands/worker.md" ]
+  assert [ -f "$wt/.claude/skills/radio-troubleshooting/SKILL.md" ]
   assert [ -f "$wt/CLAUDE.local.md" ]
   assert_stub_called zellij "new-tab --name proj-1"
 }

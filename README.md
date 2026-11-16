@@ -288,6 +288,7 @@ $ task-config show
               .claude/commands/planner.md
               .claude/commands/worker.md
               .claude/commands/reviewer.md
+              .claude/skills/radio-troubleshooting/SKILL.md
               CLAUDE.md  (the @.claude/gh-workflow.md import line)
               .claude/settings.json  (radio hooks + seeded allow-list)
 ```
@@ -396,12 +397,13 @@ Removal is the inverse of `task-init`'s idempotent merge (#183, #212): it takes 
 | `.claude/<t>-workflow.md` / `.kiro/steering/<t>-workflow.md` | deleted — it is the detection key, so leaving it is the multi-match state this exists to avoid. Repo-specific sections below the managed-region end marker (#183) are copied to `<doc>.bak` first, the way `task-init`'s own adoption path does it |
 | `.claude/commands/{pm,planner,worker,reviewer}.md` | deleted only where the file still matches the copy your loadout ships. One you have edited is kept — and keeps its directory. A command of your own beside them is never touched |
 | `.kiro/agents/{pm,planner,worker,reviewer}.json` | the radio hooks are stripped first, then the file is deleted only if what remains matches the shipped agent config. A customized one keeps your edits and loses only our hooks |
+| `.claude/skills/<name>/SKILL.md` / `.kiro/skills/<name>/SKILL.md` | the on-demand skills (#398), handled like the role files: deleted only while the file matches the shipped copy; one you have edited is kept |
 | `.kiro/hooks/radio-*.json` (inert, pre-#218) | deleted, and only the ones recognisably radio's |
 | `CLAUDE.md` | the `@.claude/<t>-workflow.md` line is stripped; the file survives with your own content, and is deleted only if that line was all it held |
 | `.claude/settings.json` | the radio hook entries (matched as `(.command // "") \| startswith("radio ")`, the same test task-init's merge uses on itself) and the seeded allow-list literals are stripped; your own hooks, allow entries, `deny`, `model` and everything else stay |
 | `tasks/` (local loadouts) | the `README.md` / `_board.md` scaffolding goes; **your backlog stays**, and the run says how many files it kept |
 | `.gitignore` (local loadouts) | only the `.git/task-force/` line is removed |
-| `.claude/`, `.kiro/`, `.claude/commands/`, … | reclaimed only once removal has actually emptied them |
+| `.claude/`, `.kiro/`, `.claude/commands/`, `.claude/skills/`, … | reclaimed only once removal has actually emptied them |
 
 The role files get the most care because they are the likeliest place a switch could destroy work. `task-init` installs them through `install_file`, whose `keep` / `prompt` policies let an existing file survive a re-run — and on kiro it then merges the radio hooks *into* whatever survived (#218, #222), so an agent config can be your work carrying our entries. So removal never deletes a role file it cannot prove is `task-init`'s own, and errs toward keeping: a file that doesn't match the shipped copy — because you edited it, or because the checkout has moved on since you installed — is kept, with a line saying so rather than silently.
 
@@ -1183,6 +1185,17 @@ If a tab dies unexpectedly (or Claude resumes — the hook fires, but a resumed 
 On kiro this is the *routine* cleanup step, not just the crash path: `agentStop` fires per turn, not on session close, so there is no kiro analogue of claude's `SessionEnd` → `radio unregister`. `task-done` covers the worker happy path (it unregisters before removing the worktree), but any kiro tab closed without it leaves a session file still advertising `STATE=idle` — which makes `radio send` try to wake a tab that's gone. Run `radio orphans` periodically and delete what it lists. Heartbeat-driven auto-unregister is #127.
 
 ### When radio misbehaves
+
+Agents don't carry this section: since #398 it ships as the on-demand
+`radio-troubleshooting` skill, which `task-init` installs at
+`.claude/skills/radio-troubleshooting/SKILL.md` (claude) or
+`.kiro/skills/radio-troubleshooting/SKILL.md` (kiro; kiro-cli's V3 engine lists
+`.kiro/skills/` the same way). The workflow doc keeps one rule, under
+`### Radio troubleshooting`: read `radio send`'s stdout, and anything but
+`delivered` or `queued — … busy` / `awaiting` means load the skill. The skill's
+description is keyed to the strings an agent actually sees
+(`WARNING — no session for`, `wake failed`, `looks dead`, `no tab id captured`,
+`timed out after 30s`).
 
 Every radio defect found so far has been a **notification** failure, not a delivery
 failure: a session file wiped out from under a live role, a wake-up that typed text

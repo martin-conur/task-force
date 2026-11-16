@@ -30,7 +30,8 @@ usage() {
 Usage: task-remove [--dry-run] [--yes] [--purge] [--impl <loadout>]
 
 Strip the artifacts task-init wrote into *this* repo: the workflow doc (the
-detection key), the role commands / agent configs, the tasks/ scaffolding on the
+detection key), the role commands / agent configs, the on-demand skills under
+.claude/skills/ or .kiro/skills/, the tasks/ scaffolding on the
 *-local loadouts, the @.claude/<t>-workflow.md import line in CLAUDE.md, the
 radio hooks and seeded allow-list inside .claude/settings.json, the
 .git/task-force/ entry in .gitignore, and the commit-msg ci-guard hook task-work

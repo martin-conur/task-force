@@ -127,12 +127,12 @@ teardown() {
   run "$CLAUDE_LOCAL_TASK_INIT"
   assert_success
   local doc="$TARGET_DIR/.claude/local-workflow.md"
-  grep -v '^### When radio misbehaves$' "$doc" > "$doc.x"
+  grep -v '^### Radio troubleshooting$' "$doc" > "$doc.x"
   mv "$doc.x" "$doc"
   run "$CLAUDE_LOCAL_TASK_INIT" --force
   assert_success
   run cat "$doc"
-  assert_output --partial "### When radio misbehaves"
+  assert_output --partial "### Radio troubleshooting"
 }
 
 @test "--force leaves content below the end marker alone (#183)" {

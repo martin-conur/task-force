@@ -147,6 +147,29 @@ prompt_text() {
   done
 }
 
+@test "every PM prompt says a surviving reviewer tab is a verdict that never reached it" {
+  # The old `### Reviewer role` told the PM this. A failed radio delivery is the
+  # one outcome the reviewer's PR comment does not record, so the open tab is
+  # the PM's only sign of it. Each prompt says it once, in its dispatch text.
+  local f
+  for f in "${PM_PROMPTS[@]}"; do
+    run grep -cF 'verdict never reached you' <<<"$(prompt_text "$f")"
+    assert_output "1"
+  done
+}
+
+@test "every claude PM prompt carries the task-reviewer allowlist hint once" {
+  # Hands-off dispatch needs `Bash(task-reviewer *)` in permissions.allow, and
+  # the PM prompt's dispatch paragraph is the one place that says so. kiro has
+  # no Bash allowlist: its reviewer runs with --trust-all-tools.
+  local f
+  for f in "${PM_PROMPTS[@]}"; do
+    case "$f" in *.json) continue ;; esac
+    run grep -cF 'Bash(task-reviewer *)' "$f"
+    assert_output "1"
+  done
+}
+
 @test "the skill carries the session internals that left the workflow doc" {
   local f s
   for f in "${SKILLS[@]}"; do

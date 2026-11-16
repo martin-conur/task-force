@@ -115,6 +115,26 @@ EOF
   aw_agent_usage_options
   echo "  -h, --help          Show this help."
   aw_agent_usage_env
+  cat <<'EOF'
+
+Before anything is created:
+  - The slug is checked (#371): one holding whitespace, `://` or a URL this
+    tracker does not read is refused, and `"<slug> <url>"` passed as one
+    argument names the split (did you mean: task-work <slug> <url>?). A slug
+    over 50 characters is truncated with a warning.
+  - --from REF is refused when REF lacks the radio hooks HEAD carries for the
+    agent (#304): the agent would never register. Merge the base into REF.
+  - A --profile that does not resolve is refused (#355; claude only).
+
+Also:
+  - If local <base> is strictly behind origin/<base>, the worktree forks from
+    origin/<base> instead of the stale local tip. --from overrides.
+  - Every run installs the ci-guard commit-msg hook (see ci-guard --help).
+  - The dispatched ref is dropped from task-monitor-queue.
+  - A set TASK_FORCE_HOME is passed into the new tab (#262).
+
+Background and history: docs/shell-commands.md in the task-force repo.
+EOF
   echo ""
   echo "Examples:"
   aw_tracker_usage_examples

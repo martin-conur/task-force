@@ -51,8 +51,16 @@ Any workflow-doc setting (#346):
                    value already in the doc. Rewriting an existing doc needs
                    --force (or a prompt run), as for every other value. Tracker
                    flags (--owner, --site, --tasks, ...) are shorthands for it.
+                   Values land inside the managed region; a bullet below the
+                   end marker is never touched and still wins for readers
+                   that take the last one (task-watch, task-merge-gate).
+                   task-config set / add assistant / sync carry every bullet
+                   that differs from the template default as a --set.
+                   An unknown label exits 2 before anything is written.
 
 --force and --restore are mutually exclusive.
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit 1
 }

@@ -113,6 +113,32 @@ usage() {
   echo "  --force            Skip confirmation prompts"
   echo "  --remove-worktree  Skip PR section — just clean up the worktree and tab."
   echo "                     Use after the worker has already created the PR."
+  cat <<'EOF'
+
+A worktree already gone (gh pr merge --delete-branch removes it, #271) is still
+cleaned up: radio session, mailbox, sidecar, git's worktree registration and
+the tab. Run it from the vanished directory, or from the main checkout in the
+worker's own tab. The PM avoids the case by deleting only the remote branch
+after a merge: git push origin --delete task/<slug>.
+
+The radio state it takes down belongs to the worktree's own role and no other
+(#377): worker-<repo>-<slug>, or reviewer-<repo>-pr<N> for review-pr<N>. Run
+from another tab, or from a session with no $TASK_FORCE_ROLE (#232), it derives
+that role from the worktree's .<slug>.info and leaves the caller's own alone.
+It refuses a derived role whose session file names another worktree, or that is
+still alive: agent processes running in the worktree (with
+TASK_FORCE_NO_PROC_SCAN=1, a heartbeat under an hour old). The worktree and the
+tab go either way. Logged as task-done-role: in ~/.task-force/radio/log.
+
+Agent processes still running in the worktree are listed, never stopped (#305),
+and logged as stray-procs:. From the worker's own tab the worker itself is not
+listed; from anywhere else a worker still up is, and is not necessarily stray.
+
+The tab is closed only while the tab at the recorded id still bears the slug
+(#260); a mismatch is left open and logged as tab-close:.
+
+Background and history: docs/shell-commands.md in the task-force repo.
+EOF
   exit 1
 }
 

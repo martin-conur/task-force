@@ -104,6 +104,22 @@ Environment:
   TASK_WORK_MODEL   kiro only: the model the PM launches on. Unset means
                     claude-opus-5.5, passed as --model so it wins over your
                     kiro chat.defaultModel setting.
+
+The tab is renamed by its own id, never whichever tab has focus (#358).
+Workers reach this PM with `--to pm`, which radio resolves to pm-<reponame>.
+
+One live PM (#301): task-pm refuses while this repo's PM session has a
+heartbeat under an hour old and a tab that is not this one, naming the agent;
+--force overrides. A session live in this tab is a handoff and goes through.
+Whenever it goes ahead over an earlier session file it retires it with
+radio unregister --manual, so the new register is fresh: it prints the offline
+backlog, the board digest (task-monitor-snapshot --brief) and the previous
+PM's handoff note (task-monitor-queue handoff --help).
+
+Switch a running PM without relaunching (#385): radio auto-submit on|off|status,
+with --for <duration> / --until <time> and --note <away mandate>.
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
       exit 0 ;;
     --also)

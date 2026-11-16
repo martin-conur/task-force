@@ -23,10 +23,22 @@ set -euo pipefail
 #
 # Exit status: 0 clean, 1 marker found, 2 usage/environment error.
 #
+# Refused markers, anywhere in the message and case-insensitively: [skip ci],
+# [ci skip], [no ci], [skip actions], [actions skip]. GitHub honours them in
+# the whole message, so quoting one suppresses the run, and "no checks" then
+# looks like "green" (#194). task-work installs the hook on every run; git
+# shares one hooks directory across worktrees, so it covers the whole repo. A
+# pre-existing commit-msg hook is kept as commit-msg.local and chained.
+#
+# Green means a run exists for the exact SHA:
+#   gh run list -c "$(git rev-parse HEAD)" --limit 1 --json databaseId --jq 'length'
+#
 # Escape hatches, in the order you should reach for them:
 #   * writing *about* a marker  -> break it: skip-ci, or drop the brackets
 #   * genuinely want to skip CI -> git commit --no-verify
 #   * disable the guard wholly  -> TASK_FORCE_NO_CI_GUARD=1
+#
+# Background and history: docs/shell-commands.md in the task-force repo.
 
 # The five markers GitHub honours (docs: "Skipping workflow runs"). Matched
 # case-insensitively: GitHub's own matching is, and a false positive here costs
@@ -40,7 +52,7 @@ CI_GUARD_MARKERS=(
 )
 
 usage() {
-  sed -n '/^# Usage:/,/^# Exit status/p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '/^# Usage:/,/^# Background and history/p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 

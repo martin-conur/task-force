@@ -224,6 +224,8 @@ Each worker has its own checkout of the repo, so 4–8 of them can fly in parall
 
 ## How the dispatchers work
 
+**Where each command is documented** (#397). The installed workflow doc lists the commands one line each, because every agent session loads it and few of them need a command reference. Each command's `--help` is the reference for what it does and which flags it takes, and [`docs/shell-commands.md`](docs/shell-commands.md) keeps the long form: why each behaviour is there, the incidents behind it, the log lines that tell one failure from another, and what differs per loadout.
+
 `task-init` is a **project-aware dispatcher** that lives at the repo root: it detects the loadout and `exec`s that loadout's own copy. After install, they're symlinked into `~/.local/bin` and work the same regardless of which combo was installed last. (`task-board`, `task-pm`, `radio`, `ci-guard`, `task-config`, `task-remove` and `task-recreate-worker` are canonical single copies instead — see [`task-config`](#task-config--which-loadout-is-this-repo-on-and-switching-it) for why `task-config` and `task-remove` in particular cannot be dispatchers.)
 
 **`task-done` and `task-work` are a third thing: they detect like a dispatcher and then compose instead of dispatching** (#236, #237). There is one `bin/task-done` and one `bin/task-work`, and the loadout decides which *modules* they source — a tracker module out of `lib/trackers/` and, for `task-work`, an agent module out of `lib/agents/`.

@@ -129,6 +129,24 @@ Examples:
   task-recreate-worker issue-223
   task-recreate-worker issue-223 --auto
   task-recreate-worker add-auth --resume
+
+What survives a restart and is re-bound: the worktree and branch, task-work's
+.<slug>.info sidecar, radio's <role>.loadout / .agent / .auto-submit sidecars
+and the role's mailbox. The sidecar's TAB_ID is stripped before the tab opens
+and rewritten after it: the old id is stale by definition (#218).
+
+"Looks live" is either signal, and the refusal names which: a zellij tab of
+that name is open, or the session file's heartbeat is under an hour old (as
+radio orphans judges it). The first hour after a reboot looks live; that is
+what --force is for. Agent processes are found by cwd inside the worktree (the
+claude or kiro-cli binary, a bun/node launcher or shell wrapper running one,
+and their children); --kill-stale re-checks each pid's start time before the
+signal, and a re-scan, not kill -0, decides what is still running.
+TASK_FORCE_NO_PROC_SCAN=1 turns the scan off. A kiro relaunch runs under
+agent-supervise, which reaps the worktree's agent processes once the agent
+exits (#388; TASK_FORCE_NO_REAP=1 turns it off).
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit "${1:-1}"
 }

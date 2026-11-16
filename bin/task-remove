@@ -75,6 +75,13 @@ Examples
   task-remove --dry-run
   task-remove --purge --dry-run     # what the override would additionally take
   task-remove --yes
+
+--purge's role-file rule fires on a merely stale install too, not only on a
+real customization. It never widens removal to files only partly ours:
+CLAUDE.md still loses only its import line. The run points at --purge only
+when there is something it would take.
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit 0
 }

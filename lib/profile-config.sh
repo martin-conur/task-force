@@ -55,6 +55,40 @@ test     One short `claude -p` run through the profile, in a throwaway
            --timeout <secs>   stop claude and fail after this long (default 60,
                               or $TASK_CONFIG_PROFILE_TEST_TIMEOUT)
 remove   Delete a profile, leaving the rest of the file as it was.
+
+A profile is one table, written by add or by hand:
+
+  [profiles.fireworks-glm]
+  agent   = "claude"
+  model   = "glm-latest"
+  env     = { ANTHROPIC_BASE_URL = "https://api.fireworks.ai/inference", ENABLE_TOOL_SEARCH = "true" }
+  key_env = { ANTHROPIC_API_KEY = "FIREWORKS_API_KEY" }
+  # pin = { sonnet = "…", haiku = "…", opus = "…", subagent = "…" }   # each defaults to model
+  # max_context_tokens = 200000                                       # CLAUDE_CODE_MAX_CONTEXT_TOKENS
+
+A launch puts env on the tab's command line, pins ANTHROPIC_DEFAULT_SONNET_MODEL,
+_HAIKU_, _OPUS_ and CLAUDE_CODE_SUBAGENT_MODEL to model unless pin names
+another, and sets ANTHROPIC_MODEL as well as --model. The key is never on a
+command line or in a file: the prefix carries ANTHROPIC_API_KEY="${VAR:?…}",
+expanded by the tab's bash -ic from your shell rc. ANTHROPIC_AUTH_TOKEN is
+refused (Claude Code then also sent the machine's saved Console key to the
+gateway), and so is a key in env. task-work, task-reviewer,
+task-recreate-worker and task-pm refuse, before creating anything, an unknown
+profile, one with no model, one whose agent is not the one launched, an unset
+or empty key variable, and a file that does not parse. The profile's name is
+recorded (PROFILE= in .<slug>.info and radio's <role>.profile), so
+task-recreate-worker relaunches on it. Profiles are claude-only.
+
+task-reviewer with no --profile uses the workflow doc's **Reviewer profile**
+bullet (#357); `none` is the Sonnet reviewer. Set it with
+task-init --set "Reviewer profile=<name>".
+
+The first auto-mode session through a gateway on a machine shows Claude Code's
+classifier billing notice and waits for `y`. Claude Code's cost display misses
+the classifier's calls: check routing and cost on the gateway's side.
+OpenRouter and LiteLLM have no preset: both document Claude Code only through
+ANTHROPIC_AUTH_TOKEN. Background: docs/agent-profiles-spike.md and
+docs/shell-commands.md in the task-force repo.
 EOF
   _pc_presets_help
 }

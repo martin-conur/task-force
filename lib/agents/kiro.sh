@@ -51,6 +51,15 @@ Environment:
   TASK_WORK_MODEL         Default model (overridable with --model;
                           unset means claude-opus-5.5)
   TASK_WORK_TRUST_ALL     If set to 1/true, defaults --trust-all on
+  TASK_WORK_NO_TRUST_WORKSPACE
+                          If set to 1, do not pass --trust-workspace: kiro-cli
+                          V3 asks "Trust this workspace?" again (#378)
+
+On kiro-cli's V3 engine, set `kiro-cli settings chat.enableAutoAgentUpgrade
+true` once (never false: V3 then fires none of the radio hooks), then commit
+the upgraded .kiro/agents and merge the base into live worktrees, or a git
+stash / checkout that restores the old shape drops the hooks (#257, #370).
+With -a, set chat.disableTrustAllConfirmation true once (#157).
 ENV
 }
 

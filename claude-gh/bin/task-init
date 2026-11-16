@@ -42,6 +42,9 @@ Local-only install (#327) — nothing task-force reaches the repo's branches:
                    Sticky: once recorded, every re-run installs local-only.
                    task-work / task-reviewer / task-recreate-worker copy the
                    untracked set into each worktree they open.
+                   A worker's PR carries none of it; the hook check (#304)
+                   accepts a radio register hook in settings.local.json;
+                   task-remove takes it all back out. Claude only.
 
 Any workflow-doc setting (#346):
   --set "<setting>=<value>"
@@ -54,8 +57,16 @@ Any workflow-doc setting (#346):
                    value already in the doc. Rewriting an existing doc needs
                    --force (or a prompt run), as for every other value. Tracker
                    flags (--owner, --site, --tasks, ...) are shorthands for it.
+                   Values land inside the managed region; a bullet below the
+                   end marker is never touched and still wins for readers
+                   that take the last one (task-watch, task-merge-gate).
+                   task-config set / add assistant / sync carry every bullet
+                   that differs from the template default as a --set.
+                   An unknown label exits 2 before anything is written.
 
 --force and --restore are mutually exclusive.
+
+Background and history: docs/shell-commands.md in the task-force repo.
 EOF
   exit 1
 }

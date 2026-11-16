@@ -337,6 +337,62 @@ JSON
 }
 
 # ---------------------------------------------------------------------------
+# the on-demand radio-troubleshooting skill (#398)
+# ---------------------------------------------------------------------------
+
+@test "every loadout installs the radio-troubleshooting skill, and removal takes it out" {
+  local loadout assistant rel
+  for loadout in claude-gh claude-jira claude-local claude-notion kiro-gh kiro-local kiro-notion; do
+    assistant=${loadout%%-*}
+    rel=".$assistant/skills/radio-troubleshooting/SKILL.md"
+    case "$loadout" in
+      *-gh)   _init "$loadout" --owner acme --repo widgets --project 7 ;;
+      *-jira) _init "$loadout" --site https://acme.atlassian.net --key PROJ --board "My Board" ;;
+      *)      _init "$loadout" ;;
+    esac
+    run cmp "$REPO_ROOT_REAL/skills/$assistant/radio-troubleshooting/SKILL.md" "$MAIN_REPO/$rel"
+    assert_success
+    run la_owned_paths "$MAIN_REPO" "$loadout"
+    assert_line "$rel"
+
+    run "$TASK_REMOVE" --purge --yes
+    assert_success
+    assert_output --partial "removed $rel"
+    assert [ ! -e "$MAIN_REPO/.$assistant/skills" ]
+  done
+}
+
+@test "a customized skill is kept by default and taken by --purge" {
+  _init claude-gh --owner acme --repo widgets --project 7
+  local rel=.claude/skills/radio-troubleshooting/SKILL.md
+  printf 'my own notes\n' >> "$MAIN_REPO/$rel"
+  printf 'theirs\n' > "$MAIN_REPO/.claude/skills/deploy.md"
+
+  run "$TASK_REMOVE" --dry-run
+  assert_success
+  assert_output --partial "would keep $rel — it differs from the copy claude-gh ships, so it may be yours"
+
+  run "$TASK_REMOVE" --yes
+  assert_success
+  assert_output --partial "kept $rel"
+  assert [ -f "$MAIN_REPO/$rel" ]
+  run grep -F 'my own notes' "$MAIN_REPO/$rel"
+  assert_success
+  # Something of the user's own beside it keeps .claude/skills/ alive.
+  assert [ -f "$MAIN_REPO/.claude/skills/deploy.md" ]
+}
+
+@test "--purge deletes a customized skill" {
+  _init kiro-gh --owner acme --repo widgets --project 7
+  local rel=.kiro/skills/radio-troubleshooting/SKILL.md
+  printf 'my own notes\n' >> "$MAIN_REPO/$rel"
+  run "$TASK_REMOVE" --purge --yes
+  assert_success
+  assert_output --partial "removed $rel — it differs from the copy kiro-gh ships (--purge)"
+  assert [ ! -e "$MAIN_REPO/.kiro" ]
+}
+
+# ---------------------------------------------------------------------------
 # --purge — the override the keep-bias needs for use case 2
 # ---------------------------------------------------------------------------
 

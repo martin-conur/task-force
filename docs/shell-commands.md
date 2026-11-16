@@ -276,7 +276,8 @@ survive with just the `@.claude/<tracker>-workflow.md` import line gone; your ow
 and allow-list entries in `.claude/settings.json` survive with just the
 radio-owned ones gone; a `.claude/commands/<role>.md` you have edited is **kept**
 rather than deleted, because task-init's `keep` policy means that file may be
-yours; on the local loadouts the `tasks/` scaffolding goes but **your backlog does
+yours, and so is an edited `.claude/skills/<name>/SKILL.md` or
+`.kiro/skills/<name>/SKILL.md` (#398); on the local loadouts the `tasks/` scaffolding goes but **your backlog does
 not** (the run says how many files it kept); and a directory is reclaimed only
 once removal has actually emptied it. The workflow doc itself has to go — it is
 the detection key — but repo-specific sections below the managed-region end

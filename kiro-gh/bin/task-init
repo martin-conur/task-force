@@ -12,6 +12,7 @@ Set up the current repo for the kiro-gh workflow:
   - Substitute owner / repo / project number if provided
     (auto-detected from git remote when possible; missing values prompted interactively)
   - Install pm, planner, worker, reviewer agents into .kiro/agents/
+  - Install the on-demand radio-troubleshooting skill into .kiro/skills/
   - Merge radio PM↔worker messaging hooks into .kiro/agents/*.json
 
 Scope (which categories of files to touch):
@@ -253,6 +254,13 @@ if [[ "$SCOPE" != "commands" && "$SCOPE" != "hooks" ]]; then
   INSTALL_POLICY="$POLICY" tf_set_apply "$TMP_RENDERED" "$TEMPLATE" "$TARGET" ${SETS[@]+"${SETS[@]}"}
 # endregion:doc-set-apply
   INSTALL_POLICY="$POLICY" install_managed_file "$TMP_RENDERED" "$TARGET" "gh-workflow.md"
+# region:skills-install
+  # The on-demand skills (#398) travel with the doc: the runbook they hold used
+  # to be part of it, and the doc's rule is what says when to load one.
+  # shellcheck source=lib/skills.sh
+  . "$LIB_DIR/skills.sh"
+  INSTALL_POLICY="$POLICY" install_skills "$SCRIPT_DIR/.." "$REPO_ROOT"
+# endregion:skills-install
 fi
 
 # Project-level agents → <project>/.kiro/agents/

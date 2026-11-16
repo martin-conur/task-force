@@ -91,6 +91,10 @@ LA_AW_ROOT="$(dirname "$_LA_LIB_DIR")"
 # in CLAUDE.local.md / settings.local.json, which the walk then takes out too.
 # shellcheck source=lib/local-only.sh
 . "$_LA_LIB_DIR/local-only.sh"
+# For tf_skill_names / tf_skill_src / tf_skill_rel — the on-demand skills (#398)
+# are removed by the same proof as a role file. (local-only.sh sources it too.)
+# shellcheck source=lib/skills.sh
+. "$_LA_LIB_DIR/skills.sh"
 
 # The role files task-init installs. Enumerated by name rather than globbed:
 # `.claude/commands/` and `.kiro/agents/` are shared directories, and a command
@@ -112,7 +116,16 @@ LA_LOCAL_SCAFFOLD=(README.md _board.md)
 # Directories task-init may create, deepest first. Each is reclaimed only once
 # removal has emptied it — a .claude/ still holding the user's settings, or a
 # second loadout's workflow doc, stays.
-LA_DIRS=(.claude/commands .kiro/agents .kiro/hooks .kiro/steering tasks .claude .kiro)
+LA_DIRS=(.claude/commands .kiro/agents .kiro/hooks .kiro/steering tasks)
+# Each skill's own directory, then the skills/ that held it (#398).
+for _la_assistant in claude kiro; do
+  while IFS= read -r _la_skill; do
+    [[ -n "$_la_skill" ]] && LA_DIRS+=(".$_la_assistant/skills/$_la_skill")
+  done < <(tf_skill_names "$_la_assistant")
+  LA_DIRS+=(".$_la_assistant/skills")
+done
+unset _la_assistant _la_skill
+LA_DIRS+=(.claude .kiro)
 
 # True when the caller has asked for the keep-bias to be overridden. Read as a
 # variable rather than threaded through every signature because it is orthogonal
@@ -244,14 +257,13 @@ _la_other_owned_paths() {
 # CLAUDE.md, .claude/settings.json and .gitignore are *edited* rather than owned,
 # so they are not here; la_plan / la_remove report what comes out of them.
 la_owned_paths() {
-  local root="$1" loadout="$2" role doc action rel
+  local root="$1" loadout="$2" doc action rel
   if doc=$(la_workflow_doc "$root" "$loadout"); then
     if [[ -f "$doc" ]]; then printf '%s\n' "${doc#"$root"/}"; fi
   fi
-  for role in "${LA_ROLES[@]}"; do
-    IFS=$'\t' read -r action rel < <(_la_role_disposition "$root" "$loadout" "$role")
+  while IFS=$'\t' read -r action rel; do
     [[ "$action" == absent ]] || printf '%s\n' "$rel"
-  done
+  done < <(_la_dispositions "$root" "$loadout")
   _la_other_owned_paths "$root" "$loadout"
   return 0
 }
@@ -373,6 +385,39 @@ _la_role_disposition() {
   else
     printf 'keep\t%s\n' "$rel"
   fi
+  return 0
+}
+
+# _la_skill_disposition <root> <loadout> <name>
+#
+# The same three answers as _la_role_disposition, for one on-demand skill
+# (#398). Nothing is ever merged into a skill, so a plain compare against the
+# shipped copy is the whole proof.
+_la_skill_disposition() {
+  local root="$1" loadout="$2" name="$3" assistant rel shipped
+  assistant=$(la_assistant "$loadout")
+  rel=$(tf_skill_rel "$assistant" "$name")
+  shipped=$(tf_skill_src "$assistant" "$name")
+  if [[ ! -f "$root/$rel" ]]; then
+    printf 'absent\t%s\n' "$rel"
+  elif cmp -s "$shipped" "$root/$rel"; then
+    printf 'delete\t%s\n' "$rel"
+  else
+    printf 'keep\t%s\n' "$rel"
+  fi
+}
+
+# _la_dispositions <root> <loadout>
+# Every role file, then every skill, as "<action>\t<repo-relative-path>".
+_la_dispositions() {
+  local root="$1" loadout="$2" role name
+  for role in "${LA_ROLES[@]}"; do
+    _la_role_disposition "$root" "$loadout" "$role"
+  done
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    _la_skill_disposition "$root" "$loadout" "$name"
+  done < <(tf_skill_names "$(la_assistant "$loadout")")
   return 0
 }
 
@@ -550,10 +595,10 @@ _la_walk() {
     done
   fi
 
-  # 2. The role files — deleted only where they can be proven task-init's own.
-  local role action
-  for role in "${LA_ROLES[@]}"; do
-    IFS=$'\t' read -r action rel < <(_la_role_disposition "$root" "$loadout" "$role")
+  # 2. The role files and the skills — deleted only where they can be proven
+  #    task-init's own.
+  local action
+  while IFS=$'\t' read -r action rel; do
     case "$action" in
       delete)
         if [[ "$mode" == apply ]]; then rm -f "$root/$rel"; fi
@@ -567,7 +612,7 @@ _la_walk() {
           if [[ "$mode" == apply ]]; then rm -f "$root/$rel"; fi
           removed+="$rel"$'\n'
           printf '  %s %s — it differs from the copy %s ships (--purge)\n' "$verb" "$rel" "$loadout"
-        elif [[ "$assistant" == kiro ]]; then
+        elif [[ "$rel" == .kiro/agents/* ]]; then
           _la_strip_agent_radio_hooks "$root" "$rel" "$mode"
         else
           if [[ "$mode" == plan ]]; then
@@ -577,7 +622,7 @@ _la_walk() {
           fi
         fi ;;
     esac
-  done
+  done < <(_la_dispositions "$root" "$loadout")
 
   # The *-local tracker artifacts are shared by both assistants on that tracker;
   # see _la_shared_owner for when this walk must leave them alone.

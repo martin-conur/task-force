@@ -34,6 +34,8 @@ GROUPS_DEFAULT=(
   "doc-set|doc-set-source|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
   "doc-set|doc-set-validate|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
   "doc-set|doc-set-apply|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
+  "skills-install|skills-install|claude-gh/bin/task-init claude-jira/bin/task-init claude-local/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-local/bin/task-init kiro-notion/bin/task-init"
+  "radio-troubleshooting|radio-troubleshooting-body|skills/claude/radio-troubleshooting/SKILL.md skills/kiro/radio-troubleshooting/SKILL.md .claude/skills/radio-troubleshooting/SKILL.md"
   "tracker-settings|tracker-settings-source|claude-gh/bin/task-init claude-jira/bin/task-init claude-notion/bin/task-init kiro-gh/bin/task-init kiro-notion/bin/task-init"
   "tracker-settings-notion|notion-settings-render|claude-notion/bin/task-init kiro-notion/bin/task-init"
   "tracker-settings-gh|tracker-preserve-gh|claude-gh/bin/task-init kiro-gh/bin/task-init"

@@ -183,12 +183,12 @@ _ids() { grep -E '^- \*\*(Tasks|Projects|Board page)\*\*' "$TARGET_DIR/.claude/n
   run "$CLAUDE_NOTION_TASK_INIT"
   assert_success
   local doc="$TARGET_DIR/.claude/notion-workflow.md"
-  grep -v '^### When radio misbehaves$' "$doc" > "$doc.x"
+  grep -v '^### Radio troubleshooting$' "$doc" > "$doc.x"
   mv "$doc.x" "$doc"
   run "$CLAUDE_NOTION_TASK_INIT" --force
   assert_success
   run cat "$doc"
-  assert_output --partial "### When radio misbehaves"
+  assert_output --partial "### Radio troubleshooting"
 }
 
 @test "--force leaves content below the end marker alone (#183)" {

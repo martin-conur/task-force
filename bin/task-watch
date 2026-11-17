@@ -138,7 +138,8 @@ the bounce.
 It reads and writes Jira through acli (acli jira auth login --web). Any
 non-zero acli exit stops it and radios the PM: to re-login when acli says it
 is unauthorized, else with acli's error.
-Its log lines go to the radio log with a `watch:` prefix.
+Its log lines go to the radio log with a `watch:` prefix. Its state is one
+ledger file per claimed key under ~/.task-force/watch/<repo>/.
 EOF
   exit "${1:-1}"
 }

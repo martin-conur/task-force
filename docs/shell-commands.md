@@ -666,5 +666,149 @@ task-work {KEY}-99 --from task/{KEY}-46 --base main --auto   # stack on an in-fl
 ```
 
 There is no kiro-jira loadout (#92), so jira cannot be dual-assistant.
-`task-watch` and `task-merge-gate` stay documented in the jira workflow doc,
-because their settings bullets live there.
+Until #401 `task-watch` and `task-merge-gate` were documented in full in the
+jira workflow doc. It now keeps one index line for each and their settings
+bullets; what follows is the long form.
+
+#### task-watch
+
+`task-watch [--once]` — poll Jira for labelled bugs, claim each once, radio the PM (#328)
+
+Run it in a tab of its own, from the repo; it polls until you stop it. It costs
+no model tokens: it is shell, and reads and writes Jira through `acli` (log in
+once with `acli jira auth login --web`). Each poll it searches the watch JQL and,
+while fewer than **Watch max in flight** tickets are claimed and unfinished,
+claims each hit with one label swap (`ai-auto` → `ai-auto:claimed`) and only
+then radios the PM `ticket-filed` with the key and summary. Claim before ping,
+so a crash never dispatches a ticket twice. The PM's intake (in `/pm`) triages
+it: it writes the spec and dispatches `task-work <url> --auto`, or comments on
+what is missing and adds `ai-auto:needs-info`.
+
+- **In flight** is a ticket claimed and not yet bounced, or one a live
+  `task-work` worktree is working on. It stops counting when the worktree is
+  removed, or, for a ticket never seen with a worktree, when Jira shows its
+  status done, `ai-auto:needs-info` or `ai-auto:failed`, or no
+  `ai-auto:claimed`. A ticket still claimed and open after **Watch pending
+  timeout minutes** counts as a failed run and goes back into the queue (or to
+  `ai-auto:failed`, once that makes the cap); the radio log says
+  `watch: pending timeout <KEY>`.
+- **Failure cap.** A ticket that comes back into the queue (`ai-auto` put back,
+  `ai-auto:claimed` removed) after a run was dispatched for it counts as a failed
+  run. After **Watch failure cap** of them it gets `ai-auto:failed` instead of a
+  claim, and is never claimed again. A bounce is not a failed run.
+- **Requeue on a reply** (#338). The reporter only has to answer: when the
+  watcher sees a bounce it records the time and the description's checksum,
+  and each poll it checks tickets on `ai-auto:needs-info` for a comment since
+  by anyone but the account `acli` is logged in as (the PM posts as it too), or
+  an edited description. On one it requeues the ticket in a single edit
+  (`ai-auto` added, `ai-auto:claimed` and `ai-auto:needs-info` removed), logs
+  `watch: requeued <KEY> (reporter replied)`, and claims it again for a fresh
+  triage. A bounced ticket whose `needs-info` was removed while `claimed` stayed
+  on, with no live worktree, is requeued the same way. A requeue is not a
+  failed run. After **Watch bounce cap** bounces the ticket stays on
+  `needs-info`, so a vague ticket cannot loop forever. A comment counts from
+  the PM's bounce comment on, so a quick answer is not missed; a description
+  edit counts once the watcher has seen the bounce. A reporter on the same Jira
+  account as `acli` (a solo user) cannot reply by comment, since it looks like
+  the PM's: edit the description instead.
+- **Failures stop it.** Any non-zero `acli` exit stops the watcher and radios
+  the PM `watch-stopped`. Only an auth failure (`unauthorized` in the error, or
+  `acli jira auth status` failing) asks for a re-login; any other error is
+  passed on as `acli error: <first line>` (#351). Fix it and start the watcher
+  again. It never retries in a loop. A write that fails
+  exits 0 in `acli`, so every claim checks `successCount`, and a failed claim is
+  never followed by a ping.
+- **State** lives outside the repo, in `~/.task-force/watch/<repo>/` (one ledger
+  file per claimed key), so it works on a local-only install. Log lines go to
+  the radio log: `grep 'watch:' ~/.task-force/radio/log`.
+
+Settings are bullets in the jira workflow doc (**Watch label**, **Watch JQL**,
+**Watch poll seconds** and the rest); the last matching bullet wins. The
+default JQL is the project named in the jira workflow doc, the issue type and
+the label, minus claimed and failed tickets, oldest first; a custom one is used
+as written (claimed and failed tickets are skipped either way).
+
+**Profiles for auto tickets** (#357). With **Worker profile for auto tickets**
+naming a profile (#355, a cheaper model through a gateway, say), a ticket's
+first run goes to it: the `ticket-filed` body ends in the exact line to
+dispatch, `Dispatch: task-work <url> --auto --profile <name>`, and the PM runs
+it as written. A manual dispatch is unchanged. When that run fails, the retry
+runs on the **default** (no profile), and the log says
+`watch: retry <KEY> on default profile`. The retry counts toward **Watch
+failure cap** like any run, so the cap holds; without the fallback a model too
+weak for a ticket would spend the cap on retries that cannot succeed. Any
+failed run counts, a pending timeout included. The merge gate is the same for
+both: a cheaper model's PR clears the same bar. `none`, the default, is
+today's behaviour. Reviews take **Reviewer profile** (under Agent profiles).
+
+**PM rotation** (#334). An autonomous PM's context fills with every triage,
+spec and verdict; past a point it is noise. So the watcher recycles the PM,
+in shell, with no model tokens, when one of three caps is crossed (`0` turns
+one off): **Watch rotate context tokens** (the last assistant turn's input +
+cache-read + cache-creation tokens, read from the transcript radio recorded
+at register), **Watch rotate tickets** (`ticket-filed` handed to this PM) and
+**Watch rotate age minutes**. It also rotates before handing over a ticket
+from a different **group** than the PM's: a ticket's group is its parent epic
+(read once per ticket with `acli jira workitem view KEY --fields parent`, since
+search refuses `parent`), else its first label matching **Watch group labels** (globs allowed, `none`
+by default), else none. The PM's group is the group of the first grouped
+ticket it took; an ungrouped ticket never sets or triggers a group rotation.
+
+- **Quiet point only.** The PM idle, its inbox empty, and no merge gate
+  pending (no reviewer of this repo still running). Otherwise the log says
+  `watch: rotation deferred (<why>)`, once per reason.
+- **Groups stay together.** While any ticket handed to this PM is in flight,
+  whatever its group, a tickets, age or group rotation waits, and a ticket
+  from another group waits unclaimed. Groups decide whether to rotate, never
+  whether to wait. The context cap does not wait for them, and a context
+  reading is ignored until the `/clear` re-register lands, so the old
+  transcript never rotates the fresh PM again.
+- **Sequence.** The watcher radios the PM `handoff-requested` and holds the
+  queue. The PM writes `task-monitor-queue handoff write` and replies
+  `handoff-done` to `watch-<reponame>`. Once both are in and the PM is idle,
+  `radio clear` sets a one-shot rotation marker and types `/clear` into the
+  PM's pane, down the path a wake takes; the `/clear` re-register then prints
+  the board digest and the handoff note, which a re-register otherwise never
+  does. The marker expires after **Watch rotation marker minutes**: one the
+  `/clear` never consumed is dropped (`watch: stale rotation marker dropped`)
+  rather than printed at some later `/compact`.
+  Log: `watch: rotate pm-<repo> reason=<context|tickets|age|group> (…)`.
+  A group rotation happens before the new group's `ticket-filed` is sent.
+- **Never without a note.** No `handoff-done` with a note newer than the
+  request within **Watch handoff timeout minutes**: logged, and retried at the
+  next quiet point.
+- **claude, auto-submitting PMs only.** A kiro PM (no `/clear` was checked)
+  or one launched without `task-pm --auto-submit` (its prompt box is yours) is
+  never rotated; the log says so once per PM.
+
+#### task-merge-gate
+
+`task-merge-gate <pr> <JIRA-KEY> [--no-comment]` — may the PM merge an auto
+ticket's PR without asking? (#329)
+
+The PM runs it after every clean review and obeys the first word it prints. It
+is shell, no model, so the rules are never re-derived from memory.
+
+- **`manual: …`** (exit 3): the ticket did not come through `task-watch` — no
+  `ai-auto:claimed` label and no entry in the watch ledger
+  (`~/.task-force/watch/<repo>/<KEY>`). The normal review flow applies.
+- **`merge`** (exit 0): an auto ticket, and all four rules hold: the ticket
+  carries **Merge label** (a label only, never words in a description); the
+  latest review beat for the PR is `review-complete-clean` from its reviewer,
+  newer than the worker's last re-review request and covering the head commit
+  (its body's `reviewed <sha>` is the head SHA; a verdict naming no SHA, from
+  before reviewers pinned one, must be newer than the head commit and logs
+  `merge-gate: verdict names no SHA, using time`; a tie in the same second
+  counts as not reviewed); the PR targets the base `task-work` recorded
+  for the worker (else the default branch); CI **ran and passed** for the
+  PR's exact head SHA (`gh run list -c <sha>` non-empty, every run success,
+  skipped or neutral); and the diff is within **Merge max changed lines**
+  (additions + deletions) and **Merge max files**. The PM merges as usual.
+- **`ask: <reason>`** (exit 1): anything else, every failing rule listed. The PM
+  tells you why and waits. That is the default for every auto ticket without
+  the merge label, and for anything the gate could not read.
+
+For an auto ticket the gate comments its outcome on the Jira ticket through
+`acli`. Log lines go to the radio log: `grep 'merge-gate:' ~/.task-force/radio/log`.
+Its settings, **Merge label**, **Merge max changed lines** and **Merge max
+files**, are bullets in the jira workflow doc.

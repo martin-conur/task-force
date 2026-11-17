@@ -71,7 +71,7 @@ Every shell call starts fresh, so carry the printed value itself forward, not a 
    ```
    - **Unchanged**: the Verdict line carries the full pinned SHA, e.g. `**Verdict:** clean — reviewed <full-sha>`, and the radio body in step 8 starts with `reviewed <full-sha>`. Never shorten or drop it.
    - **Moved**: commits landed while you were reviewing, so what you read is not what would merge. The verdict cannot be clean, whatever you found. The Verdict line says `changes-requested — head moved during review (<old> -> <new>); re-review needed`, naming both full SHAs, and step 8 sends `review-complete-with-findings` with exactly that body: `head moved during review (<old> -> <new>); re-review needed`.
-7. Post the comment — **on stdin, never through a double-quoted shell string.** Inside `"…"` the shell command-substitutes every backticked token in your prose: `` `pwd -P` `` posts as your working directory, `` `radio orphans` `` posts as that command's output, and a backticked identifier that names no command — `` `$SOME_VAR` ``, `` `_some_helper()` `` — posts as **nothing at all**, deleting the finding's subject and leaving a sentence that reads as if a word were missing. Findings here name functions, variables and paths in inline code constantly, and this comment is the only thing that outlives your tab, so feed the body in with `--body-file -` and a **quote-delimited** heredoc:
+7. Post the comment **on stdin**, with `--body-file -` off a quote-delimited heredoc (the `radio bash-guard` hook refuses a double-quoted `--body` that holds a backtick):
    ```bash
    gh pr comment <N> --body-file - <<'REVIEW'
    ## Spec compliance
@@ -79,7 +79,7 @@ Every shell call starts fresh, so carry the printed value itself forward, not a 
    apostrophes all reach GitHub verbatim …
    REVIEW
    ```
-   The quote on the delimiter (`<<'REVIEW'`, not `<<REVIEW`) is what disables substitution. Two things to get right: the terminator sits alone at the start of its own line with nothing before it, and the delimiter has to be a word no line of your body is equal to. Single-quoting `-b '…'` is **not** the fix — review prose contains apostrophes, and the first one would end the string.
+   The quote on the delimiter (`<<'REVIEW'`, not `<<REVIEW`) is what disables substitution; the terminator sits alone at the start of its line, and no line of your body may equal it.
 8. Radio PM back with the matching intent. `radio send` takes its body from stdin when `--body` is omitted, so the same quoted heredoc applies — a one-line summary names symbols and flags too:
    ```bash
    radio send --to pm --intent review-complete-clean --pr <N> <<'SUMMARY'

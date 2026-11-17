@@ -381,6 +381,10 @@ _radio_install_hooks() {
   local stop_cmd="radio stop-hook"
   local end_cmd="radio unregister"
   local awaiting_cmd="radio awaiting"
+  # PreToolUse on Bash (#400): refuses a double-quoted commit message or
+  # --body that holds a backtick, so the #234 rule is a hook, not a paragraph.
+  # Not role-gated, and it exits 2 only on that one shape.
+  local guard_cmd="radio bash-guard"
 
   mkdir -p "$(dirname "$settings_file")"
   [[ -f "$settings_file" ]] || printf '%s\n' '{}' >"$settings_file"
@@ -402,6 +406,7 @@ _radio_install_hooks() {
     --arg stop "$stop_cmd" \
     --arg endcmd  "$end_cmd" \
     --arg awaiting "$awaiting_cmd" \
+    --arg guard "$guard_cmd" \
     '
     def add_radio(arr; cmd):
       if (arr // []) | any((.hooks // []) | any((.command // "") | startswith("radio "))) then arr
@@ -431,6 +436,7 @@ _radio_install_hooks() {
     | .hooks.PermissionRequest = add_radio(.hooks.PermissionRequest; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "AskUserQuestion"; $awaiting)
     | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "ExitPlanMode";    $awaiting)
+    | .hooks.PreToolUse        = add_radio_matcher(.hooks.PreToolUse; "Bash";            $guard)
     | .hooks.PostToolUse       = add_radio(.hooks.PostToolUse;       $post)
 # endregion:radio-hooks-jq-merge
     | .permissions //= {}

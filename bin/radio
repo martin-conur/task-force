@@ -54,6 +54,10 @@ Usage:
                                          the user is away. The note is the away mandate; every
                                          `radio check` repeats it while auto-submit is on
   radio orphans                          list session files with stale (>1h) heartbeat
+  radio bash-guard                       PreToolUse-hook entrypoint on the shell tool: exit 2
+                                         (blocking) when `git commit -m`, `gh --body`/`-b` or
+                                         `radio send --body` gets a double-quoted argument
+                                         holding a backtick (#400); reads hook payload on stdin
   radio gc [--dry-run] [--max-age-days N]  sweep dead mailboxes + expired processed
                                          messages (default N=14) and rotate the log.
                                          A dead role's still-unread mail is archived to
@@ -3831,7 +3835,210 @@ cmd_gc() {
   echo "${pfx}gc: $removed_dirs dead mailbox(es), $removed_msgs processed message(s), $dead_lettered dead-lettered message(s), $removed_sidecars sidecar(s) (max-age ${max_age_days}d)"
 }
 
+# ----- bash-guard (#400) ----------------------------------------------------
+#
+# PreToolUse hook on the shell tool (claude's `Bash`, kiro's `shell`). It
+# refuses a command that hands prose to `git commit -m`, `gh … --body` / `-b`
+# or `radio send --body` inside a double-quoted string carrying a backtick:
+# the shell command-substitutes every backticked token in there before the
+# tool ever sees it, so `pwd -P` posts its own output and an identifier naming
+# no command posts as nothing at all (#234). That rule used to be a paragraph
+# in every prompt; a hook enforces it instead of asking the model to remember.
+#
+# Both assistants block on exit 2 and hand stderr back to the model (claude by
+# contract; kiro-cli 3.3.0 verified by probe, #400), and both send the same
+# payload, `.tool_input.command`. Everything else fails open: no jq, no
+# command in the payload, anything unparseable — exit 0. A guard that blocks a
+# shell call it could not read would be worse than the bug.
+#
+# Not role-gated, unlike the other hook entrypoints: the hazard is the same in
+# a plain session as in a worker's.
+
+# The flags whose double-quoted value is prose, per tool. git's short form
+# includes a cluster ending in m (`-am`).
+_bg_git_msg_re='^(-m|--message|-[A-Za-z]+m)$'
+_bg_git_attached_re='^(-m|--message=|-[A-Za-z]+m)$'
+
+# The command a word list runs, past assignments and the prefixes that only
+# wrap one: "git-commit", "gh", "radio-send", or "" for anything else.
+_bg_kind() {
+  local w i=0 base n=$#
+  local -a ws=("$@")
+  while (( i < n )); do
+    w=${ws[i]}
+    case "$w" in
+      *=*|env|command|exec|nohup|time|sudo|'{'|'!'|then|do|else|elif|if|while|until) i=$((i + 1)); continue ;;
+    esac
+    break
+  done
+  (( i < n )) || return 0
+  base=${ws[i]##*/}
+  case "$base" in
+    git)
+      local j=$((i + 1))
+      while (( j < n )); do
+        [[ "${ws[j]}" == commit ]] && { printf 'git-commit'; return 0; }
+        j=$((j + 1))
+      done ;;
+    gh) printf 'gh' ;;
+    radio)
+      (( i + 1 < n )) && [[ "${ws[i+1]}" == send ]] && printf 'radio-send' ;;
+  esac
+  return 0
+}
+
+# Is the double-quoted string opening now the prose argument of a guarded
+# command? <cur> is the word so far, before the quote (`--body=`, `-m`); the
+# rest of the arguments are the words already complete in this command.
+_bg_prose_arg() {
+  local cur="$1"; shift
+  local n=$# last="" kind
+  (( n == 0 )) || last=${!n}
+  kind=$(_bg_kind "$@")
+  case "$kind" in
+    git-commit)
+      if [[ -z "$cur" ]]; then [[ "$last" =~ $_bg_git_msg_re ]]; else [[ "$cur" =~ $_bg_git_attached_re ]]; fi ;;
+    gh)
+      if [[ -z "$cur" ]]; then [[ "$last" == -b || "$last" == --body ]]; else [[ "$cur" == -b || "$cur" == --body= ]]; fi ;;
+    radio-send)
+      if [[ -z "$cur" ]]; then [[ "$last" == --body ]]; else [[ "$cur" == --body= ]]; fi ;;
+    *) return 1 ;;
+  esac
+}
+
+# Scan <cmd> the way the shell reads it, far enough to tell a backtick inside a
+# guarded double-quoted argument from every safe place one can sit: a
+# single-quoted string, a heredoc body (skipped whole, line by line), a `$(…)`
+# nested in the quotes (`-m "$(cat <<'EOF' … EOF)"` is fine), an escaped
+# `\``, a comment. Returns 1 on a hit, with BG_HIT naming the command. Commands
+# are only tracked at the outermost level: one inside `$(…)` or backticks is
+# not looked at.
+#
+# A context stack, one entry per open construct: top, sub (`$(`), dq, dqp (a
+# guarded dq), sq, bq. `${line:i:1}` under LC_ALL=C indexes bytes, so a long
+# line stays linear.
+_bg_scan() {
+  local LC_ALL=C
+  local -a stk=(top) words=() pending=() bodyq=()
+  local cur="" inword=0 cont=0 line n i c nx ctx d j delim dash kind="" l
+  BG_HIT=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if (( ${#bodyq[@]} > 0 )); then
+      d=${bodyq[0]}
+      l=$line
+      [[ "${d:0:1}" == - ]] && l=${l#"${l%%[!$'\t']*}"}
+      if [[ "$l" == "${d:1}" ]]; then bodyq=("${bodyq[@]:1}"); fi
+      continue
+    fi
+    n=${#line}; i=0; cont=0
+    while (( i < n )); do
+      c=${line:i:1}; nx=${line:i+1:1}
+      ctx=${stk[${#stk[@]}-1]}
+      case "$ctx" in
+        sq)
+          [[ "$c" == "'" ]] && unset 'stk[${#stk[@]}-1]' ;;
+        bq)
+          if [[ "$c" == "\\" ]]; then i=$((i + 1))
+          elif [[ "$c" == '`' ]]; then unset 'stk[${#stk[@]}-1]'; fi ;;
+        dq|dqp)
+          case "$c" in
+            "\\") i=$((i + 1)) ;;
+            '"') unset 'stk[${#stk[@]}-1]' ;;
+            '`')
+              if [[ "$ctx" == dqp ]]; then BG_HIT=$kind; return 1; fi
+              stk+=(bq) ;;
+            '$') [[ "$nx" == '(' ]] && { stk+=(sub); i=$((i + 1)); } ;;
+          esac ;;
+        top|sub)
+          case "$c" in
+            "\\")
+              inword=1
+              if (( i + 1 >= n )); then cont=1; else cur+=$nx; fi
+              i=$((i + 1)) ;;
+            "'") inword=1; stk+=(sq) ;;
+            '"')
+              if [[ "$ctx" == top ]] && _bg_prose_arg "$cur" ${words[@]+"${words[@]}"}; then
+                kind=$(_bg_kind ${words[@]+"${words[@]}"}); stk+=(dqp)
+              else
+                stk+=(dq)
+              fi
+              inword=1 ;;
+            '`') inword=1; stk+=(bq) ;;
+            '$')
+              inword=1
+              if [[ "$nx" == '(' ]]; then stk+=(sub); i=$((i + 1))
+              elif [[ "$nx" == "'" ]]; then stk+=(sq); i=$((i + 1))
+              else cur+=$c; fi ;;
+            '#')
+              if (( inword )); then cur+=$c; else break; fi ;;
+            '<')
+              if (( inword )); then words+=("$cur"); cur=""; inword=0; fi
+              if [[ "$nx" == '<' && "${line:i+2:1}" == '<' ]]; then
+                i=$((i + 2))
+              elif [[ "$nx" == '<' ]]; then
+                j=$((i + 2)); dash=0
+                [[ "${line:j:1}" == - ]] && { dash=1; j=$((j + 1)); }
+                while [[ "${line:j:1}" == ' ' || "${line:j:1}" == $'\t' ]]; do j=$((j + 1)); done
+                delim=""
+                while (( j < n )); do
+                  case "${line:j:1}" in
+                    ' '|$'\t'|';'|'&'|'|'|'<'|'>'|'('|')') break ;;
+                    "'"|'"'|"\\") ;;
+                    *) delim+=${line:j:1} ;;
+                  esac
+                  j=$((j + 1))
+                done
+                if (( dash )); then pending+=("-$delim"); else pending+=("=$delim"); fi
+                i=$((j - 1))
+              fi ;;
+            ' '|$'\t'|'>')
+              if (( inword )); then words+=("$cur"); cur=""; inword=0; fi ;;
+            ';'|'&'|'|'|'(')
+              if [[ "$ctx" == sub && "$c" == '(' ]]; then stk+=(sub)
+              elif [[ "$ctx" == top ]]; then words=(); cur=""; inword=0; fi ;;
+            ')')
+              if [[ "$ctx" == sub ]]; then unset 'stk[${#stk[@]}-1]'
+              else words=(); cur=""; inword=0; fi ;;
+            *) inword=1; [[ "$ctx" == top ]] && cur+=$c ;;
+          esac ;;
+      esac
+      i=$((i + 1))
+    done
+    if (( ! cont )) && [[ "${stk[${#stk[@]}-1]}" == top ]]; then
+      words=(); cur=""; inword=0
+    fi
+    if (( ${#pending[@]} > 0 )); then bodyq=("${pending[@]}"); pending=(); fi
+  done <<<"$1"
+  return 0
+}
+
+cmd_bash_guard() {
+  command -v jq >/dev/null 2>&1 || exit 0
+  local cmd
+  cmd=$(jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
+  # The common case costs one jq: no backtick or no double quote, no hazard.
+  [[ -n "$cmd" && "$cmd" == *'`'* && "$cmd" == *'"'* ]] || exit 0
+  _bg_scan "$cmd" && exit 0
+  local what
+  # The backticks below are literal markdown for the model reading the refusal.
+  # shellcheck disable=SC2016
+  case "$BG_HIT" in
+    git-commit) what='`git commit -m "…"`' ;;
+    gh)         what='`gh … --body "…"`' ;;
+    radio-send) what='`radio send --body "…"`' ;;
+  esac
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    "radio bash-guard: blocked $what — the double-quoted text holds a backtick, and the shell command-substitutes it before the tool sees it (#234, #400)." \
+    "Put the text on stdin from a quote-delimited heredoc instead: \`git commit -F - <<'MSG'\` … \`MSG\`, \`gh … --body-file - <<'BODY'\` … \`BODY\`, or \`radio send …\` with no --body and the body on stdin." >&2
+  exit 2
+}
+
 # ----- dispatch -------------------------------------------------------------
+
+# bash-guard runs on every shell call and touches no radio state, so it goes
+# before the mkdir: a read-only $TASK_FORCE_HOME must not turn into a hook error.
+if [[ "${1:-}" == bash-guard ]]; then cmd_bash_guard; fi
 
 mkdir -p "$SESSIONS_DIR" "$MAILBOX_DIR"
 sub="${1:-}"

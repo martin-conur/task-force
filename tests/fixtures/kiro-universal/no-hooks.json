@@ -21,7 +21,7 @@
     ]
   },
   "kiroUpgrade": {
-    "revision": 2,
+    "revision": 3,
     "fingerprint": "sha256:13ede5f409abc0581e8d935286cc7510d708536e69784bef88a9f4f441413cd3",
     "source": "sha256:43fa375c34dceda7a39f13739996df8a611b1186a75142c816c084ca6fc43dba"
   }

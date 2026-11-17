@@ -37,6 +37,10 @@
         "command": "./guard.sh",
         "matcher": "execute_bash",
         "timeout_ms": 5000
+      },
+      {
+        "matcher": "shell",
+        "command": "radio bash-guard"
       }
     ]
   }

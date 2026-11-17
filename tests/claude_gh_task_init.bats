@@ -539,11 +539,11 @@ EOF
     run jq -r ".hooks.$event | length" "$TARGET_DIR/.claude/settings.json"
     assert_output "1"
   done
-  # PreToolUse has TWO matcher entries (AskUserQuestion + ExitPlanMode) and
-  # `add_radio_matcher` is per-matcher idempotent — re-run must keep both
-  # without doubling them up (#119).
+  # PreToolUse has THREE matcher entries (AskUserQuestion + ExitPlanMode,
+  # #119; Bash → radio bash-guard, #400) and `add_radio_matcher` is
+  # per-matcher idempotent — re-run must keep all three without doubling them.
   run jq -r '.hooks.PreToolUse | length' "$TARGET_DIR/.claude/settings.json"
-  assert_output "2"
+  assert_output "3"
 }
 
 # Positive coverage for the awaiting-state triggers introduced in #119. The

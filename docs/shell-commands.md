@@ -723,9 +723,10 @@ what is missing and adds `ai-auto:needs-info`.
   the radio log: `grep 'watch:' ~/.task-force/radio/log`.
 
 Settings are bullets in the jira workflow doc (**Watch label**, **Watch JQL**,
-**Watch poll seconds** and the rest); the last matching bullet wins. The default JQL is the project above, the issue type and the label,
-minus claimed and failed tickets, oldest first; a custom one is used as written
-(claimed and failed tickets are skipped either way).
+**Watch poll seconds** and the rest); the last matching bullet wins. The
+default JQL is the project named in the jira workflow doc, the issue type and
+the label, minus claimed and failed tickets, oldest first; a custom one is used
+as written (claimed and failed tickets are skipped either way).
 
 **Profiles for auto tickets** (#357). With **Worker profile for auto tickets**
 naming a profile (#355, a cheaper model through a gateway, say), a ticket's
